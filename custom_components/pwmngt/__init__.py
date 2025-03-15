@@ -11,7 +11,10 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Opsæt integrationen via UI."""
     hass.data.setdefault(DOMAIN, {})
-    hass.config_entries.async_setup_platforms(entry, ["sensor"])
+
+    # Brug den korrekte metode til at tilføje platformen
+    await hass.config_entries.async_forward_entry_setups(entry, ["sensor"])
+    
     return True
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
