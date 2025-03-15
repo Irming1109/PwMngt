@@ -1,5 +1,5 @@
 {
   "name": "Energy manager",
-  "domains": ["PwMngt"],
+  "domains": ["pwmngt"],
   "country": "DK"
 }
