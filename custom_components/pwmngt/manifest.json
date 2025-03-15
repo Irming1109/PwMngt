@@ -2,7 +2,7 @@
   "domain": "PwMngt",
   "name": "Energy manager",
   "version": "0.0.1",
-  "documentation": "https://github.com/Irming1109/my_hello_world",
+  "documentation": "https://github.com/Irming1109/PwMngt",
   "dependencies": [],
   "codeowners": ["@Irming1109"],
   "requirements": []
