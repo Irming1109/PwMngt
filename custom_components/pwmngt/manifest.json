@@ -5,5 +5,6 @@
   "documentation": "https://github.com/Irming1109/PwMngt",
   "dependencies": [],
   "codeowners": ["@Irming1109"],
-  "requirements": []
+  "requirements": [],
+  "config_flow": true
 }
