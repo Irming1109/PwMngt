@@ -4,10 +4,6 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN
 
-async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Opsæt integrationen via YAML (valgfrit)."""
-    return True
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Opsæt integrationen via UI."""
     hass.data.setdefault(DOMAIN, {})
