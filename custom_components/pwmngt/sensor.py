@@ -16,9 +16,6 @@ class PwmngtSensor(Entity):
         return DeviceInfo(
             identifiers={(DOMAIN, "pwmngt_device")},  # Unikt ID for enheden
             name="PWMngt Device",
-            manufacturer="Mit Eget Firma",
-            model="PWMngt Model 1",
-            sw_version="1.0.0",
         )
 
     @property
