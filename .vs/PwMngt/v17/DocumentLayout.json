@@ -7,12 +7,12 @@
       "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:custom_components\\pwmngt\\sensor.py||{3B902123-F8A7-4915-9F01-361F908088D0}"
     },
     {
-      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\KasperHolm\\source\\repos\\PwMngt\\custom_components\\pwmngt\\config_flow.py||{3B902123-F8A7-4915-9F01-361F908088D0}",
-      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:custom_components\\pwmngt\\config_flow.py||{3B902123-F8A7-4915-9F01-361F908088D0}"
-    },
-    {
       "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\KasperHolm\\source\\repos\\PwMngt\\custom_components\\pwmngt\\__init__.py||{3B902123-F8A7-4915-9F01-361F908088D0}",
       "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:custom_components\\pwmngt\\__init__.py||{3B902123-F8A7-4915-9F01-361F908088D0}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\KasperHolm\\source\\repos\\PwMngt\\custom_components\\pwmngt\\config_flow.py||{3B902123-F8A7-4915-9F01-361F908088D0}",
+      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:custom_components\\pwmngt\\config_flow.py||{3B902123-F8A7-4915-9F01-361F908088D0}"
     },
     {
       "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Users\\KasperHolm\\source\\repos\\PwMngt\\custom_components\\pwmngt\\const.py||{3B902123-F8A7-4915-9F01-361F908088D0}",
@@ -64,7 +64,7 @@
             },
             {
               "$type": "Document",
-              "DocumentIndex": 1,
+              "DocumentIndex": 2,
               "Title": "config_flow.py",
               "DocumentMoniker": "C:\\Users\\KasperHolm\\source\\repos\\PwMngt\\custom_components\\pwmngt\\config_flow.py",
               "RelativeDocumentMoniker": "custom_components\\pwmngt\\config_flow.py",
@@ -83,20 +83,20 @@
               "RelativeDocumentMoniker": "custom_components\\pwmngt\\sensor.py",
               "ToolTip": "C:\\Users\\KasperHolm\\source\\repos\\PwMngt\\custom_components\\pwmngt\\sensor.py",
               "RelativeToolTip": "custom_components\\pwmngt\\sensor.py",
-              "ViewState": "AgIAADAAAAAAAAAAAAAAAE4AAAAJAAAAAAAAAA==",
+              "ViewState": "AgIAACoAAAAAAAAAAAAqwDsAAAAxAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.002457|",
               "WhenOpened": "2025-03-16T14:44:45.8Z",
               "EditorCaption": ""
             },
             {
               "$type": "Document",
-              "DocumentIndex": 2,
+              "DocumentIndex": 1,
               "Title": "__init__.py",
               "DocumentMoniker": "C:\\Users\\KasperHolm\\source\\repos\\PwMngt\\custom_components\\pwmngt\\__init__.py",
               "RelativeDocumentMoniker": "custom_components\\pwmngt\\__init__.py",
               "ToolTip": "C:\\Users\\KasperHolm\\source\\repos\\PwMngt\\custom_components\\pwmngt\\__init__.py",
               "RelativeToolTip": "custom_components\\pwmngt\\__init__.py",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "ViewState": "AgIAABAAAAAAAAAAAAAAACUAAAAQAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.002457|",
               "WhenOpened": "2025-03-16T14:44:39.561Z",
               "EditorCaption": ""

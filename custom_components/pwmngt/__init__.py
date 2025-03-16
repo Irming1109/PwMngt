@@ -33,7 +33,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     LOGGER.info("Removing entry for %s", DOMAIN)
     unload_ok = await hass.config_entries.async_forward_entry_unload(entry, PLATFORMS)
     if unload_ok:
-        hass.data[DOMAIN].pop(entry.entry_id)
+        hass.data[DOMAIN].pop(API_OBJ, None)  # Ensure API_OBJ is removed
         return True
     return False
 
