@@ -1,2 +1,2 @@
 DOMAIN = "pwmngt"
-DEFAULT_NAME = "Energy manager"
+DEFAULT_NAME = "Power manager"
