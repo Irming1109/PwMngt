@@ -2,7 +2,7 @@
   "domain": "pwmngt",
   "name": "Power manager",
   "version": "1.0.0",
-  "documentation": "https://github.com/Irming1109/pwmngt",
+  "documentation": "https://github.com/Irming1109/PwMngt",
   "dependencies": [],
   "codeowners": ["Irming1109"],
   "config_flow": true,
