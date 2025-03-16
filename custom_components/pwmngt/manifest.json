@@ -1,6 +1,6 @@
 {
   "domain": "pwmngt",
-  "name": "Pwmngt Integration",
+  "name": "Power manager",
   "version": "1.0.0",
   "documentation": "https://github.com/Irming1109/pwmngt",
   "dependencies": [],
