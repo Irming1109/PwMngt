@@ -1,5 +1,10 @@
 {
-  "name": "Energy manager",
-  "domains": ["pwmngt"],
-  "country": "DK"
+  "name": "Pwmngt",
+  "domain": "pwmngt",
+  "homeassistant": "2025.1.0",
+  "country": "DK",
+  "documentation": "https://github.com/Irming1109/Pwmngt",
+  "codeowners": ["@Irming1109"],
+  "requirements": [],
+  "iot_class": "local_polling"
 }
