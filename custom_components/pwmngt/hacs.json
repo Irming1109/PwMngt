@@ -1,5 +1,5 @@
 {
-  "name": "Pwmngt",
+  "name": "Power manager",
   "domain": "pwmngt",
   "homeassistant": "2025.3.0",
   "country": "DK",
