@@ -1,11 +1,11 @@
 {
   "domain": "pwmngt",
-  "name": "Power manager",
-  "documentation": "https://github.com/Irming1109/PwMngt",
+  "name": "Power Management",
+  "version": "0.0.3",
+  "documentation": "https://github.com/Irming1109/PwMngt/blob/main/README.md",
   "dependencies": [],
-  "codeowners": ["@Irming1109"],
-  "requirements": [],
+  "codeowners": [ "@Irming1109" ],
+  "requirements": [ "requests" ],
   "iot_class": "local_polling",
-  "version": "0.0.1",
   "config_flow": true
 }

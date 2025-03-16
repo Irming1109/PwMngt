@@ -1,0 +1,9 @@
+{
+  "country": [
+    "DK"
+  ],
+  "domains": [ "pwmngt" ],
+  "homeassistant": "2025.1.1",
+  "name": "Power Management",
+  "render_readme": true
+}
