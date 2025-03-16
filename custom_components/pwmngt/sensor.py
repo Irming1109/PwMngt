@@ -74,7 +74,7 @@ class PwMngtSensor(SensorEntity):
 
         self.entity_id = sensor.ENTITY_ID_FORMAT.format(
             util_slugify(
-                f"pwmngt3_{self.entity_description.key}"
+                f"{self._config.data.get(CONF_NAME)}_{self.entity_description.key}"
             )
         )
 
