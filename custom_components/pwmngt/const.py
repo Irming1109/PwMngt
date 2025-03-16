@@ -3,7 +3,7 @@
 # Startup banner
 STARTUP = "start info"
 
-CONF_DEFAULT_NAME = "EnergiMngt"
+CONF_DEFAULT_NAME = "pwmngt"
 CONF_TEMPLATE = "extra_cost_template"
 
 DEFAULT_TEMPLATE = "{{0.0|float(0)}}"
