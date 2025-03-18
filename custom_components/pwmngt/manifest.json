@@ -1,8 +1,8 @@
 {
   "domain": "pwmngt",
   "name": "Power Management",
-  "version": "0.0.3",
-  "documentation": "https://github.com/Irming1109/PwMngt/blob/main/README.md",
+  "version": "0.0.2 aplha",
+  "documentation": "https://github.com/Irming1109/PwMngt",
   "dependencies": [],
   "codeowners": [ "@Irming1109" ],
   "requirements": [ "requests" ],
