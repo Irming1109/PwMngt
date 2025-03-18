@@ -3,6 +3,14 @@
   "WorkspaceRootPath": "C:\\Solutions\\PwMngt\\",
   "Documents": [
     {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Solutions\\PwMngt\\custom_components\\pwmngt\\hacs.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}",
+      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:custom_components\\pwmngt\\hacs.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Solutions\\PwMngt\\custom_components\\pwmngt\\manifest.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}",
+      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:custom_components\\pwmngt\\manifest.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}"
+    },
+    {
       "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Solutions\\PwMngt\\custom_components\\pwmngt\\sensor.py||{3B902123-F8A7-4915-9F01-361F908088D0}",
       "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:custom_components\\pwmngt\\sensor.py||{3B902123-F8A7-4915-9F01-361F908088D0}"
     },
@@ -17,10 +25,6 @@
     {
       "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Solutions\\PwMngt\\custom_components\\pwmngt\\const.py||{3B902123-F8A7-4915-9F01-361F908088D0}",
       "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:custom_components\\pwmngt\\const.py||{3B902123-F8A7-4915-9F01-361F908088D0}"
-    },
-    {
-      "AbsoluteMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|C:\\Solutions\\PwMngt\\custom_components\\pwmngt\\manifest.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}",
-      "RelativeMoniker": "D:0:0:{A2FE74E1-B743-11D0-AE1A-00A0C90FFFC3}|\u003CMiscFiles\u003E|solutionrelative:custom_components\\pwmngt\\manifest.json||{90A6B3A7-C1A3-4009-A288-E2FF89E96FA0}"
     }
   ],
   "DocumentGroupContainers": [
@@ -30,11 +34,24 @@
       "DocumentGroups": [
         {
           "DockedWidth": 200,
-          "SelectedChildIndex": 3,
+          "SelectedChildIndex": 0,
           "Children": [
             {
               "$type": "Document",
-              "DocumentIndex": 4,
+              "DocumentIndex": 0,
+              "Title": "hacs.json",
+              "DocumentMoniker": "C:\\Solutions\\PwMngt\\custom_components\\pwmngt\\hacs.json",
+              "RelativeDocumentMoniker": "custom_components\\pwmngt\\hacs.json",
+              "ToolTip": "C:\\Solutions\\PwMngt\\custom_components\\pwmngt\\hacs.json",
+              "RelativeToolTip": "custom_components\\pwmngt\\hacs.json",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAEAAAAbAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001642|",
+              "WhenOpened": "2025-03-18T21:08:32.674Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
               "Title": "manifest.json",
               "DocumentMoniker": "C:\\Solutions\\PwMngt\\custom_components\\pwmngt\\manifest.json",
               "RelativeDocumentMoniker": "custom_components\\pwmngt\\manifest.json",
@@ -42,11 +59,12 @@
               "RelativeToolTip": "custom_components\\pwmngt\\manifest.json",
               "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001642|",
-              "WhenOpened": "2025-03-16T18:02:20.664Z"
+              "WhenOpened": "2025-03-16T18:02:20.664Z",
+              "EditorCaption": ""
             },
             {
               "$type": "Document",
-              "DocumentIndex": 3,
+              "DocumentIndex": 5,
               "Title": "const.py",
               "DocumentMoniker": "C:\\Solutions\\PwMngt\\custom_components\\pwmngt\\const.py",
               "RelativeDocumentMoniker": "custom_components\\pwmngt\\const.py",
@@ -58,7 +76,7 @@
             },
             {
               "$type": "Document",
-              "DocumentIndex": 2,
+              "DocumentIndex": 4,
               "Title": "config_flow.py",
               "DocumentMoniker": "C:\\Solutions\\PwMngt\\custom_components\\pwmngt\\config_flow.py",
               "RelativeDocumentMoniker": "custom_components\\pwmngt\\config_flow.py",
@@ -70,7 +88,7 @@
             },
             {
               "$type": "Document",
-              "DocumentIndex": 0,
+              "DocumentIndex": 2,
               "Title": "sensor.py",
               "DocumentMoniker": "C:\\Solutions\\PwMngt\\custom_components\\pwmngt\\sensor.py",
               "RelativeDocumentMoniker": "custom_components\\pwmngt\\sensor.py",
@@ -83,7 +101,7 @@
             },
             {
               "$type": "Document",
-              "DocumentIndex": 1,
+              "DocumentIndex": 3,
               "Title": "__init__.py",
               "DocumentMoniker": "C:\\Solutions\\PwMngt\\custom_components\\pwmngt\\__init__.py",
               "RelativeDocumentMoniker": "custom_components\\pwmngt\\__init__.py",
@@ -95,11 +113,11 @@
             },
             {
               "$type": "Bookmark",
-              "Name": "ST:0:0:{cce594b6-0c39-4442-ba28-10c64ac7e89f}"
+              "Name": "ST:0:0:{1c4feeaa-4718-4aa9-859d-94ce25d182ba}"
             },
             {
               "$type": "Bookmark",
-              "Name": "ST:0:0:{1c4feeaa-4718-4aa9-859d-94ce25d182ba}"
+              "Name": "ST:0:0:{cce594b6-0c39-4442-ba28-10c64ac7e89f}"
             }
           ]
         }
