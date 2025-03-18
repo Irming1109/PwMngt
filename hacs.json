@@ -1,9 +1,15 @@
 {
+  "name": "Power Management"
+  "render_readme": true,
+  "homeassistant": "2025.3.0",
+  "zip_release": true,
+  "filename": "pwmngt.zip",
+  "domain": "pwmngt",
   "country": [
     "DK"
   ],
-  "domains": [ "pwmngt" ],
-  "homeassistant": "2025.1.1",
-  "name": "Power Management",
-  "render_readme": true
+  "documentation": "https://github.com/Irming1109/PwMngt",
+  "codeowners": [ "@Irming1109" ],
+  "requirements": [],
+  "iot_class": "local_polling"
 }
