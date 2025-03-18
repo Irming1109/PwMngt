@@ -11,7 +11,7 @@ Power management application - not suitable for general usage yet.
 [**Setup**](#setup)
 
 [**Use the custom template to show the next x cheapest hours**](#use-the-custom-template-to-show-the-next-x-cheapest-hours)
- 
+
 
 ## Installation:
 
@@ -49,12 +49,12 @@ Add "Power management" integration _(If it doesn't show, try CTRL+F5 to force a 
 Copy the `custom_templates/FindCheapestPrice.jinja` to the `custom_templates` directory in your config folder (if it doesn't exist then create the folder)
 Reload Home Assistant and use the Jinja template by inserting the example below in a template sensor helper
 
-```
+
 {% from 'FindCheapestPeriod.jinja' import FindCheapestPeriod%}
 {% set earliestStartTime = now() %}
 {% set latestStartTime = now() + timedelta(days=2) %}
 {% set periodLength = timedelta(hours=3) %}
 {{ FindCheapestPeriod(earliestStartTime , latestStartTime , periodLength, false) }}
-```
+
 
 This will result in a sensor showing the cheapest 3 hours within the known prices
