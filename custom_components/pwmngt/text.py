@@ -12,10 +12,16 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 
 from .base import PwMngtTextEntityDescription
-from .chargers import CHARGERS, charger_device_info
+from .chargers import CHARGERS, charger_device_info, hub_device_info
 
 LOGGER = logging.getLogger(__name__)
 
+# Shown once, under the main "PwM" hub device's "Configuration" tab --
+# not tied to a specific charger.
+HUB_CONFIG_TEXTS: list[PwMngtTextEntityDescription] = [
+]
+
+# Shown under each charger device's "Configuration" tab.
 CONFIG_TEXTS: list[PwMngtTextEntityDescription] = [
     PwMngtTextEntityDescription(
         key="serial_number",
@@ -24,12 +30,24 @@ CONFIG_TEXTS: list[PwMngtTextEntityDescription] = [
         entity_category=EntityCategory.CONFIG,
         default_value="",
     ),
+    # Read live from the "Ladestander konfiguration" card on the
+    # Konfiguration dashboard, then translated to English.
+    PwMngtTextEntityDescription(
+        key="charger2_easee_serial_number",
+        name="Charger2 Easee serial number",
+        icon="mdi:identifier",
+        entity_category=EntityCategory.CONFIG,
+        default_value="",
+    ),
 ]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
-    """Set up text entities for each configured charger."""
+    """Set up text entities for the hub device and each configured charger."""
     entities = []
+
+    for description in HUB_CONFIG_TEXTS:
+        entities.append(PwMngtText(description, entry))
 
     for charger in CHARGERS:
         for description in CONFIG_TEXTS:
@@ -48,11 +66,16 @@ class PwMngtText(TextEntity):
         self,
         description: PwMngtTextEntityDescription,
         entry: ConfigEntry,
-        charger: dict,
+        charger: dict | None = None,
     ) -> None:
         self.entity_description = description
-        self._attr_unique_id = f"{entry.entry_id}_{charger['id']}_{description.key}"
-        self._attr_device_info = charger_device_info(entry, charger)
+        if charger is None:
+            # Hub-level entity: belongs to the general "PwM" device.
+            self._attr_unique_id = f"{entry.entry_id}_{description.key}"
+            self._attr_device_info = hub_device_info(entry)
+        else:
+            self._attr_unique_id = f"{entry.entry_id}_{charger['id']}_{description.key}"
+            self._attr_device_info = charger_device_info(entry, charger)
         self._attr_native_value = description.default_value
 
     async def async_set_value(self, value: str) -> None:

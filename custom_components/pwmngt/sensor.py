@@ -166,6 +166,38 @@ CHARGER_SENSORS: list[SensorEntityDescription] = [
         name="Remaining",
         icon="mdi:progress-question",
     ),
+    # Moved here from select.py: these are values the automation reports,
+    # not something the user picks from a dropdown, so a read-only ENUM
+    # sensor is the correct entity type rather than a Select.
+    SensorEntityDescription(
+        key="ordered_phases",
+        name="Ordered phases",
+        icon="mdi:sine-wave",
+        device_class=SensorDeviceClass.ENUM,
+        options=["1", "3"],
+    ),
+    SensorEntityDescription(
+        key="state",
+        name="State",
+        icon="mdi:information-outline",
+        device_class=SensorDeviceClass.ENUM,
+        options=[
+            "No car connected",
+            "Inactive",
+            "Paused",
+            "Active - solar",
+            "Active - manual",
+            "No demand",
+            "Unknown",
+        ],
+    ),
+    SensorEntityDescription(
+        key="surplus_charging_active",
+        name="Surplus charging active",
+        icon="mdi:solar-power",
+        device_class=SensorDeviceClass.ENUM,
+        options=["No", "Yes"],
+    ),
 ]
 
 
