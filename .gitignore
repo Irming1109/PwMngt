@@ -4,3 +4,7 @@
 
 .vs/
 *.vsidx
+
+# Python bytecode cache
+__pycache__/
+*.pyc

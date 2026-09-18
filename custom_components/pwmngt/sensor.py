@@ -1,7 +1,6 @@
 import logging
 
 import homeassistant.helpers.config_validation as cv
-from homeassistant.components import sensor
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -24,8 +23,9 @@ from .chargers import CHARGERS, charger_device_info
 LOGGER = logging.getLogger(__name__)
 
 SENSORS = [
-        PwMngtSensorEntityDescription(
+    PwMngtSensorEntityDescription(
         key="hello_world_str",
+        name="Hello world",
         entity_category=None,
         icon="mdi:flash",
         value_fn=lambda pwmngt: pwmngt.get_hello_world2(),
@@ -51,6 +51,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
 
 class PwMngtSensor(SensorEntity):
+    _attr_has_entity_name = True
+
     def __init__(self, description: PwMngtSensorEntityDescription, hass: HomeAssistant, entry: ConfigEntry) -> None:
         super().__init__()
         self.entity_description = description
@@ -66,7 +68,7 @@ class PwMngtSensor(SensorEntity):
 
         self._attr_device_info = {
             "identifiers": {(DOMAIN, self._config.entry_id)},
-            "name": self._config.data.get(CONF_NAME),
+            "name": "PwM",
             "manufacturer": "Power Management",
         }
 
@@ -78,12 +80,6 @@ class PwMngtSensor(SensorEntity):
             self._hass,
             util_slugify(self.entity_description.update_signal),
             self.handle_update,
-        )
-
-        self.entity_id = sensor.ENTITY_ID_FORMAT.format(
-            util_slugify(
-                f"{DOMAIN}_{self.entity_description.key}"
-            )
         )
 
         if not isinstance(self._cost_template, Template):
