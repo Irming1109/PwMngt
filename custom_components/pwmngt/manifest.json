@@ -1,7 +1,7 @@
 {
   "domain": "pwmngt",
   "name": "Power Management",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "documentation": "https://github.com/Irming1109/PwMngt",
   "dependencies": [],
   "codeowners": [ "@Irming1109" ],

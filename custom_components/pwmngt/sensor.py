@@ -22,7 +22,7 @@ from .chargers import CHARGERS, charger_device_info
 
 LOGGER = logging.getLogger(__name__)
 
-SENSORS = [
+PwM_SENSORS = [
     PwMngtSensorEntityDescription(
         key="hello_world_str",
         name="Hello world",
@@ -36,13 +36,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     """Setup sensors."""
     sensors = []
 
-    for sensor in SENSORS:
+    for sensor in PwM_SENSORS:
         entity = PwMngtSensor(sensor, hass, entry)
         LOGGER.info("Added sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
     for charger in CHARGERS:
-        for description in CHARGER_SENSORS:
+        for description in PwM_CHARGER_SENSORS:
             entity = PwMngtChargerSensor(description, entry, charger)
             LOGGER.info("Added charger sensor with entity_id '%s'", entity.entity_id)
             sensors.append(entity)
@@ -136,7 +136,7 @@ class PwMngtSensor(SensorEntity):
 # from) is wired up in a later step.
 # ---------------------------------------------------------------------------
 
-CHARGER_SENSORS: list[SensorEntityDescription] = [
+PwM_CHARGER_SENSORS: list[SensorEntityDescription] = [
     SensorEntityDescription(
         key="current",
         name="Current",

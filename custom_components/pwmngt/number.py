@@ -21,7 +21,7 @@ from .chargers import CHARGERS, charger_device_info
 LOGGER = logging.getLogger(__name__)
 
 # Shown under the device's "Configuration" tab (set once, rarely changed).
-CONFIG_NUMBERS: list[PwMngtNumberEntityDescription] = [
+PwM_CHARGER_CONFIG_NUMBERS: list[PwMngtNumberEntityDescription] = [
     PwMngtNumberEntityDescription(
         key="phase_count",
         name="Phase count",
@@ -35,7 +35,7 @@ CONFIG_NUMBERS: list[PwMngtNumberEntityDescription] = [
 ]
 
 # Shown on the main entity list (day-to-day values).
-NUMBERS: list[PwMngtNumberEntityDescription] = [
+PwM_CHARGER_NUMBERS: list[PwMngtNumberEntityDescription] = [
     PwMngtNumberEntityDescription(
         key="battery_charge",
         name="Battery charge",
@@ -82,7 +82,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     entities = []
 
     for charger in CHARGERS:
-        for description in CONFIG_NUMBERS + NUMBERS:
+        for description in PwM_CHARGER_CONFIG_NUMBERS + PwM_CHARGER_NUMBERS:
             entities.append(PwMngtNumber(description, entry, charger))
 
     async_add_entities(entities)

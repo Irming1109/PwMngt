@@ -14,7 +14,7 @@ from .chargers import CHARGERS, charger_device_info
 
 LOGGER = logging.getLogger(__name__)
 
-BUTTONS: list[ButtonEntityDescription] = [
+PwM_CHARGER_BUTTONS: list[ButtonEntityDescription] = [
     ButtonEntityDescription(key="charge_tonight_5a", name="Charge tonight 5A", icon="mdi:weather-night"),
     ButtonEntityDescription(key="charge_tonight_10a", name="Charge tonight 10A", icon="mdi:weather-night"),
     ButtonEntityDescription(key="charge_tonight_50a", name="Charge tonight 50A", icon="mdi:weather-night"),
@@ -35,7 +35,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     entities = []
 
     for charger in CHARGERS:
-        for description in BUTTONS:
+        for description in PwM_CHARGER_BUTTONS:
             entities.append(PwMngtButton(description, entry, charger))
 
     async_add_entities(entities)

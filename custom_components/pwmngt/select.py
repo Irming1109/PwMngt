@@ -28,7 +28,7 @@ LOGGER = logging.getLogger(__name__)
 
 # Shown once, under the main "PwM" hub device's "Configuration" tab --
 # not tied to a specific charger.
-HUB_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
+PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
     PwMngtSelectEntityDescription(
         key="charger1_type",
         name="Charger1 type",
@@ -96,7 +96,7 @@ HUB_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
 ]
 
 # Shown under each charger device's "Configuration" tab (set once, rarely changed).
-CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
+PwM_CHARGER_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
     PwMngtSelectEntityDescription(
         key="driving_distance_km_per_kwh",
         name="Driving distance in Km per KwH",
@@ -149,7 +149,7 @@ CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
 ]
 
 # Shown on the main entity list (day-to-day values).
-SELECTS: list[PwMngtSelectEntityDescription] = [
+PwM_CHARGER_SELECTS: list[PwMngtSelectEntityDescription] = [
     PwMngtSelectEntityDescription(
         key="topup",
         name="Top-up",
@@ -190,11 +190,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     """Set up select entities for the hub device and each configured charger."""
     entities = []
 
-    for description in HUB_CONFIG_SELECTS:
+    for description in PwM_CONFIG_SELECTS:
         entities.append(PwMngtSelect(description, entry))
 
     for charger in CHARGERS:
-        for description in CONFIG_SELECTS + SELECTS:
+        for description in PwM_CHARGER_CONFIG_SELECTS + PwM_CHARGER_SELECTS:
             entities.append(PwMngtSelect(description, entry, charger))
 
     async_add_entities(entities)

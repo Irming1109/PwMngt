@@ -18,11 +18,11 @@ LOGGER = logging.getLogger(__name__)
 
 # Shown once, under the main "PwM" hub device's "Configuration" tab --
 # not tied to a specific charger.
-HUB_CONFIG_TEXTS: list[PwMngtTextEntityDescription] = [
+PwM_CONFIG_TEXTS: list[PwMngtTextEntityDescription] = [
 ]
 
 # Shown under each charger device's "Configuration" tab.
-CONFIG_TEXTS: list[PwMngtTextEntityDescription] = [
+PwM_CHARGER_CONFIG_TEXTS: list[PwMngtTextEntityDescription] = [
     PwMngtTextEntityDescription(
         key="serial_number",
         name="Serial number",
@@ -46,11 +46,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     """Set up text entities for the hub device and each configured charger."""
     entities = []
 
-    for description in HUB_CONFIG_TEXTS:
+    for description in PwM_CONFIG_TEXTS:
         entities.append(PwMngtText(description, entry))
 
     for charger in CHARGERS:
-        for description in CONFIG_TEXTS:
+        for description in PwM_CHARGER_CONFIG_TEXTS:
             entities.append(PwMngtText(description, entry, charger))
 
     async_add_entities(entities)
