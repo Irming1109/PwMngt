@@ -5,6 +5,7 @@ from homeassistant.components import sensor
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
+    SensorEntityDescription,
     SensorStateClass,
 )
 
@@ -18,6 +19,7 @@ from homeassistant.util import slugify as util_slugify
 from .api import PwMngtAPI
 from .base import PwMngtSensorEntityDescription
 from .const import CONF_TEMPLATE, DEFAULT_TEMPLATE, DOMAIN, API_OBJ
+from .chargers import CHARGERS, charger_device_info
 
 LOGGER = logging.getLogger(__name__)
 
@@ -38,6 +40,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         entity = PwMngtSensor(sensor, hass, entry)
         LOGGER.info("Added sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
+
+    for charger in CHARGERS:
+        for description in CHARGER_SENSORS:
+            entity = PwMngtChargerSensor(description, entry, charger)
+            LOGGER.info("Added charger sensor with entity_id '%s'", entity.entity_id)
+            sensors.append(entity)
 
     async_add_entities(sensors)
 
@@ -123,3 +131,61 @@ class PwMngtSensor(SensorEntity):
     async def async_added_to_hass(self):
         await self.handle_update()
         return await super().async_added_to_hass()
+
+# ---------------------------------------------------------------------------
+# Charger status sensors (read-only, scaffolding only).
+#
+# These have no value_fn / API backing yet -- they report None until real
+# data (from Node-RED, Easee, or wherever "Ladeboks 1" ends up being read
+# from) is wired up in a later step.
+# ---------------------------------------------------------------------------
+
+CHARGER_SENSORS: list[SensorEntityDescription] = [
+    SensorEntityDescription(
+        key="current",
+        name="Current",
+        icon="mdi:current-ac",
+        native_unit_of_measurement="A",
+    ),
+    SensorEntityDescription(
+        key="power",
+        name="Power",
+        icon="mdi:flash",
+        native_unit_of_measurement="W",
+    ),
+    SensorEntityDescription(
+        key="consumption",
+        name="Consumption",
+        icon="mdi:lightning-bolt",
+        native_unit_of_measurement="kWh",
+    ),
+    SensorEntityDescription(
+        key="km_charged",
+        name="Km charged",
+        icon="mdi:map-marker-distance",
+        native_unit_of_measurement="km",
+    ),
+    SensorEntityDescription(
+        key="remaining",
+        name="Remaining",
+        icon="mdi:progress-question",
+    ),
+]
+
+
+class PwMngtChargerSensor(SensorEntity):
+    """A scaffolded, read-only PwMngt charger sensor. No live value yet."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+
+    def __init__(
+        self,
+        description: SensorEntityDescription,
+        entry: ConfigEntry,
+        charger: dict,
+    ) -> None:
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.entry_id}_{charger['id']}_{description.key}"
+        self._attr_device_info = charger_device_info(entry, charger)
+        self._attr_native_value = None

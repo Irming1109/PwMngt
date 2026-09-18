@@ -10,6 +10,6 @@ DEFAULT_TEMPLATE = "{{0.0|float(0)}}"
 DOMAIN = "pwmngt"
 API_OBJ = "api_obj"
 
-PLATFORMS = ["sensor", "binary_sensor"]
+PLATFORMS = ["sensor", "binary_sensor", "number", "select", "button", "text"]
 
 UPDATE_SIGNAL = f"{DOMAIN}_SIGNAL_UPDATE"

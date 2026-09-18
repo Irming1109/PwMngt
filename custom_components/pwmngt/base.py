@@ -34,3 +34,36 @@ class PwMngtBinarySensorEntityDescription(
     """Describes a PwMngt sensor."""
 
     unit_fn: Callable[[PwMngtAPI], None] = None
+
+# ---------------------------------------------------------------------------
+# Scaffolding-only entity descriptions for charger entities (number/select/
+# text). These deliberately do NOT use PwMngtBaseEntityDescriptionMixin's
+# value_fn, because there is no backing API/data source yet -- entities just
+# hold a local default value until real functionality is wired up. Buttons
+# and sensors use Home Assistant's own EntityDescription classes directly.
+# ---------------------------------------------------------------------------
+
+from homeassistant.components.number import NumberEntityDescription
+from homeassistant.components.select import SelectEntityDescription
+from homeassistant.components.text import TextEntityDescription
+
+
+@dataclass
+class PwMngtNumberEntityDescription(NumberEntityDescription):
+    """Describes a PwMngt number entity (no live value wired up yet)."""
+
+    default_value: float | None = None
+
+
+@dataclass
+class PwMngtSelectEntityDescription(SelectEntityDescription):
+    """Describes a PwMngt select entity (no live value wired up yet)."""
+
+    default_option: str | None = None
+
+
+@dataclass
+class PwMngtTextEntityDescription(TextEntityDescription):
+    """Describes a PwMngt text entity (no live value wired up yet)."""
+
+    default_value: str | None = None
