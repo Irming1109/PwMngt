@@ -12,7 +12,7 @@ class PwMngtAPI:
     def __init__(
         self, hass: HomeAssistant, entry: ConfigEntry
     ) -> None:
-        """Initialize the Stromligning connector object."""
+        """Initialize the PwMngt API connector object."""
 
         self._entry = entry
 

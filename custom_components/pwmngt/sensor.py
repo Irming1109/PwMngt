@@ -1,6 +1,5 @@
 import logging
 
-import homeassistant.helpers.config_validation as cv
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
@@ -12,12 +11,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.template import Template
 from homeassistant.util import slugify as util_slugify
 
 from .api import PwMngtAPI
 from .base import PwMngtSensorEntityDescription
-from .const import CONF_TEMPLATE, DEFAULT_TEMPLATE, DOMAIN, API_OBJ
+from .const import DOMAIN, API_OBJ
 from .chargers import CHARGERS, charger_device_info
 
 LOGGER = logging.getLogger(__name__)
@@ -59,7 +57,6 @@ class PwMngtSensor(SensorEntity):
         self._config = entry
         self._hass = hass
         self.api: PwMngtAPI = hass.data[DOMAIN][API_OBJ]
-        self._cost_template = entry.options.get(CONF_TEMPLATE)
 
         self._attr_unique_id = util_slugify(
             f"{self.entity_description.key}_{self._config.entry_id}"
@@ -82,27 +79,8 @@ class PwMngtSensor(SensorEntity):
             self.handle_update,
         )
 
-        if not isinstance(self._cost_template, Template):
-            if self._cost_template in (None, ""):
-                self._cost_template = DEFAULT_TEMPLATE
-            self._cost_template = cv.template(self._cost_template)
-        else:
-            if self._cost_template.template in ("", None):
-                self._cost_template = cv.template(DEFAULT_TEMPLATE)
-
     async def handle_attributes(self) -> None:
-        """Handle attributes."""
-        #if self.entity_description.key == "current_price_vat":
-        #    self._attr_extra_state_attributes = {}
-        #    price_set: list = []
-        #    for price in self.api.prices_today:
-        #        price_set.append(
-        #            {
-        #                "start": price["date"],
-        #                "end": price["date"] + timedelta(hours=1),
-        #                "price": price["price"]["total"],
-        #            }
-        #        )
+        """Handle attributes. No extra attributes yet -- placeholder for later."""
 
     async def handle_update(self) -> None:
         """Handle data update."""
