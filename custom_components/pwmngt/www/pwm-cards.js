@@ -255,10 +255,13 @@ class PwMChargerCard extends PwMngtBaseCard {
     }
     const charger = config.charger;
     const chargerNumber = charger.replace("charger", "");
-    this.cardTitle = config.title || `PwM Charger${chargerNumber}`;
+    this.cardTitle = config.title || `Charger ${chargerNumber}`;
 
     this.fields = [
-      chargerField(charger, "number", "phase_count", "Phase count", "mdi:sine-wave"),
+      // Note: "phase_count" is intentionally NOT listed here. It's a real
+      // entity (number.pwm_<charger>_phase_count) used by automations /
+      // Node-RED / internal PwMngt logic, but it isn't user-configurable
+      // and shouldn't clutter this configuration card.
       chargerField(
         charger,
         "select",
@@ -288,12 +291,105 @@ class PwMChargerCard extends PwMngtBaseCard {
     ];
     super.setConfig(config);
   }
+
+  // Called by Home Assistant when this card type is picked from the "Add
+  // Card" list without going into YAML mode -- gives it a working default
+  // instead of erroring on a missing 'charger'.
+  static getStubConfig() {
+    return { charger: "charger1" };
+  }
+
+  // Called by Home Assistant to get a small visual editor for this card's
+  // config, shown in the card's edit panel instead of raw YAML. See
+  // PwMChargerCardEditor below.
+  static getConfigElement() {
+    return document.createElement("pwm-charger-card-editor");
+  }
 }
 customElements.define("pwm-charger-card", PwMChargerCard);
 
+/**
+ * Visual editor for pwm-charger-card: a single "Charger" dropdown, listing
+ * every charger device this PwMngt install currently has (discovered via
+ * hass.devices, matching on the "pwmngt" device identifier domain and a
+ * "PwM Charger..." name) -- so adding a future charger in devices.py needs
+ * no change here. Home Assistant wires this up automatically because of
+ * PwMChargerCard.getConfigElement() above; it just needs to implement
+ * setConfig()/set hass() and fire a "config-changed" event on changes.
+ * See https://developers.home-assistant.io/docs/frontend/custom-ui/custom-card/#configuration-editor
+ */
+class PwMChargerCardEditor extends HTMLElement {
+  setConfig(config) {
+    this._config = config || {};
+    this._render();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    this._render();
+  }
+
+  _chargerOptions() {
+    if (!this._hass) return ["charger1", "charger2"];
+    const chargerDevices = Object.values(this._hass.devices).filter(
+      (d) =>
+        (d.identifiers || []).some(([domain]) => domain === "pwmngt") &&
+        d.name &&
+        d.name.startsWith("PwM Charger")
+    );
+    const ids = chargerDevices
+      .map((d) => (d.identifiers.find(([domain]) => domain === "pwmngt") || [])[1])
+      .filter(Boolean)
+      .sort();
+    return ids.length ? ids : ["charger1", "charger2"];
+  }
+
+  _render() {
+    const options = this._chargerOptions();
+    const currentValue = (this._config && this._config.charger) || options[0];
+
+    if (!this._built) {
+      this.innerHTML = `
+        <div style="padding: 12px 16px;">
+          <label style="display: block; font-size: 13px; font-weight: 500; margin-bottom: 4px; color: var(--primary-text-color);">
+            Charger
+          </label>
+          <select style="padding: 6px 8px; min-width: 160px; font: inherit;"></select>
+        </div>
+      `;
+      this._selectEl = this.querySelector("select");
+      this._selectEl.addEventListener("change", () => {
+        const newConfig = Object.assign({}, this._config, { charger: this._selectEl.value });
+        this._config = newConfig;
+        this.dispatchEvent(
+          new CustomEvent("config-changed", {
+            detail: { config: newConfig },
+            bubbles: true,
+            composed: true,
+          })
+        );
+      });
+      this._built = true;
+    }
+
+    const currentOptionValues = Array.from(this._selectEl.options).map((o) => o.value);
+    if (currentOptionValues.join("|") !== options.join("|")) {
+      this._selectEl.innerHTML = "";
+      for (const option of options) {
+        const optionEl = document.createElement("option");
+        optionEl.value = option;
+        optionEl.textContent = option;
+        this._selectEl.appendChild(optionEl);
+      }
+    }
+    this._selectEl.value = currentValue;
+  }
+}
+customElements.define("pwm-charger-card-editor", PwMChargerCardEditor);
+
 class PwMHubCard extends PwMngtBaseCard {
   setConfig(config) {
-    this.cardTitle = (config && config.title) || "PwM";
+    this.cardTitle = (config && config.title) || "Power Management Configuration";
     this.fields = [
       { entityId: "select.pwm_charger1_type", label: "Charger1 type", icon: "mdi:ev-station", type: "select" },
       { entityId: "select.pwm_charger2_type", label: "Charger2 type", icon: "mdi:ev-station", type: "select" },
@@ -341,7 +437,7 @@ customElements.define("pwm-hub-card", PwMHubCard);
 
 class PwMPvCard extends PwMngtBaseCard {
   setConfig(config) {
-    this.cardTitle = (config && config.title) || "PwM PV";
+    this.cardTitle = (config && config.title) || "Solar PV System";
     this.fields = [
       {
         entityId: "select.pwm_pv_battery_size_kwh",

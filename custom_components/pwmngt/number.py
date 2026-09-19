@@ -20,15 +20,18 @@ from .devices import CHARGERS, charger_device_info
 
 LOGGER = logging.getLogger(__name__)
 
-# Shown under the device's "Configuration" tab (set once, rarely changed).
-PwM_CHARGER_CONFIG_NUMBERS: list[PwMngtNumberEntityDescription] = [
+# Shown under the device's "Diagnostic" tab, not "Configuration" -- this is
+# not something a user is meant to change from the dashboard, but it's kept
+# as a writable number (not a sensor) so Node-RED or PwMngt's own internal
+# yaml/js scripts can still set it via number.set_value.
+PwM_CHARGER_DIAGNOSTIC_NUMBERS: list[PwMngtNumberEntityDescription] = [
     # Old key="ladeboks_1_antal_faser" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks 1 antal faser" (Ladeboks 2 ... equivalent for Charger2)
     PwMngtNumberEntityDescription(
         key="phase_count",
         name="Phase count",
         icon="mdi:sine-wave",
-        entity_category=EntityCategory.CONFIG,
+        entity_category=EntityCategory.DIAGNOSTIC,
         native_min_value=1,
         native_max_value=3,
         native_step=1,
@@ -92,7 +95,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     entities = []
 
     for charger in CHARGERS:
-        for description in PwM_CHARGER_CONFIG_NUMBERS + PwM_CHARGER_NUMBERS:
+        for description in PwM_CHARGER_DIAGNOSTIC_NUMBERS + PwM_CHARGER_NUMBERS:
             entities.append(PwMngtNumber(description, entry, charger))
 
     async_add_entities(entities)
