@@ -2,6 +2,16 @@
 
 Scaffolding only: setting the value stores it locally and nothing
 downstream reacts to it yet. Real behaviour comes in a later step.
+
+One exception is visibility: a text entity whose description sets
+visible_when_charger_type (see PwMngtTextEntityDescription in base.py) is
+automatically hidden from the default UI unless the matching charger's
+"<id>_type" select (from PwM_CONFIG_SELECTS in select.py) currently equals
+that option -- e.g. "charger_identification" only makes sense for an Easee
+charger, so it's hidden while a charger is set to "Wallbox" or
+"Not installed". This is enforced via the entity registry's hidden_by, not
+by removing the entity, so it still shows up (with a "show hidden
+entities" toggle) if Kasper wants to look at it regardless.
 """
 
 import logging
@@ -9,9 +19,12 @@ import logging
 from homeassistant.components.text import TextEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 
 from .base import PwMngtTextEntityDescription
+from .const import DOMAIN
 from .devices import CHARGERS, charger_device_info, hub_device_info
 
 LOGGER = logging.getLogger(__name__)
@@ -23,25 +36,15 @@ PwM_CONFIG_TEXTS: list[PwMngtTextEntityDescription] = [
 
 # Shown under each charger device's "Configuration" tab.
 PwM_CHARGER_CONFIG_TEXTS: list[PwMngtTextEntityDescription] = [
-    # Old key="ladeboks_1_easee_sn"
-    # Old name="Ladeboks_1_Easee_SN"
+    # Old key="ladeboks_1_easee_sn" ("ladeboks_2_easee_sn")
+    # Old name="Ladeboks_1_Easee_SN" (Ladeboks_2_Easee_SN)
     PwMngtTextEntityDescription(
-        key="serial_number",
-        name="Serial number",
+        key="charger_identification",
+        name="Charger identification (Easee serial number)",
         icon="mdi:identifier",
         entity_category=EntityCategory.CONFIG,
         default_value="",
-    ),
-    # Read live from the "Ladestander konfiguration" card on the
-    # Konfiguration dashboard, then translated to English.
-    # Old key="ladeboks_2_easee_sn"
-    # Old name="Ladeboks_2_Easee_SN"
-    PwMngtTextEntityDescription(
-        key="charger2_easee_serial_number",
-        name="Charger2 Easee serial number",
-        icon="mdi:identifier",
-        entity_category=EntityCategory.CONFIG,
-        default_value="",
+        visible_when_charger_type="Easee",
     ),
 ]
 
@@ -73,6 +76,8 @@ class PwMngtText(TextEntity):
         charger: dict | None = None,
     ) -> None:
         self.entity_description = description
+        self._entry = entry
+        self._charger = charger
         if charger is None:
             # Hub-level entity: belongs to the general "PwM" device.
             self._attr_unique_id = f"{entry.entry_id}_{description.key}"
@@ -89,3 +94,74 @@ class PwMngtText(TextEntity):
         )
         self._attr_native_value = value
         self.async_write_ha_state()
+
+    async def async_added_to_hass(self) -> None:
+        """Start tracking the matching charger-type select, if any."""
+        await super().async_added_to_hass()
+        self._start_visibility_tracking()
+
+    def _start_visibility_tracking(self) -> None:
+        """Hide this entity unless its charger's type select matches.
+
+        Only applies to per-charger entities whose description sets
+        visible_when_charger_type (see base.py). Hides/shows the entity via
+        the entity registry's hidden_by so it reacts live to the select
+        changing, without needing a reload -- and never overrides a
+        hidden_by the user set manually themselves.
+        """
+        wanted_option = getattr(self.entity_description, "visible_when_charger_type", None)
+        if wanted_option is None or self._charger is None:
+            return
+
+        registry = er.async_get(self.hass)
+        type_unique_id = f"{self._entry.entry_id}_{self._charger['id']}_type"
+
+        @callback
+        def _apply(current_option: str | None) -> None:
+            target_hidden = None if current_option == wanted_option else er.RegistryEntryHider.INTEGRATION
+            reg_entry = registry.async_get(self.entity_id)
+            if reg_entry is None:
+                return
+            # Never fight a hidden_by the user set from the UI themselves.
+            if reg_entry.hidden_by not in (None, er.RegistryEntryHider.INTEGRATION):
+                return
+            if reg_entry.hidden_by != target_hidden:
+                registry.async_update_entity(self.entity_id, hidden_by=target_hidden)
+
+        def _subscribe(type_entity_id: str) -> None:
+            state = self.hass.states.get(type_entity_id)
+            _apply(state.state if state else None)
+
+            @callback
+            def _on_change(event) -> None:
+                new_state = event.data.get("new_state")
+                _apply(new_state.state if new_state else None)
+
+            self.async_on_remove(
+                async_track_state_change_event(self.hass, [type_entity_id], _on_change)
+            )
+
+        type_entity_id = registry.async_get_entity_id("select", DOMAIN, type_unique_id)
+        if type_entity_id:
+            _subscribe(type_entity_id)
+            return
+
+        # First-ever setup: the charger-type select's platform may not have
+        # finished registering it yet. Retry shortly -- after that it will
+        # always resolve immediately, since registry entries persist across
+        # restarts.
+        @callback
+        def _retry(_now) -> None:
+            retried_entity_id = registry.async_get_entity_id("select", DOMAIN, type_unique_id)
+            if retried_entity_id:
+                _subscribe(retried_entity_id)
+            else:
+                LOGGER.warning(
+                    "Could not find the charger-type select (%s) to drive "
+                    "visibility of %s; leaving it hidden",
+                    type_unique_id,
+                    self.entity_id,
+                )
+                _apply(None)
+
+        self.async_on_remove(async_call_later(self.hass, 2, _retry))

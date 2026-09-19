@@ -86,3 +86,10 @@ class PwMngtTextEntityDescription(TextEntityDescription):
     """Describes a PwMngt text entity (no live value wired up yet)."""
 
     default_value: str | None = None
+    # When set, this per-charger entity is only shown while the matching
+    # charger's "<id>_type" select (see PwM_CONFIG_SELECTS in select.py) is
+    # currently set to this option -- e.g. "Easee" for a field that only
+    # makes sense for an Easee charger. Ignored for hub-level entities
+    # (charger is None). See PwMngtText._start_visibility_tracking in
+    # text.py for how this is enforced.
+    visible_when_charger_type: str | None = None
