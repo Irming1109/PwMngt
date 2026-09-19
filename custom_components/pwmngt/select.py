@@ -142,16 +142,10 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["Full", "Reduced (electric heating)"],
         default_option="Full",
     ),
-    # Old key="stromafregning" (input_select.stromafregning)
-    # Old name="Strømafregning"
-    PwMngtSelectEntityDescription(
-        key="electricity_pricing_model",
-        name="Electricity pricing model",
-        icon="mdi:cash-multiple",
-        entity_category=EntityCategory.CONFIG,
-        options=["Fixed price", "Variable price (spot price + surcharge)"],
-        default_option="Variable price (spot price + surcharge)",
-    ),
+    # Note: "stromafregning" (input_select.stromafregning, Fixed/Variable
+    # price) has no PwM equivalent -- superseded by sensor.pwm_spot_electricity_price,
+    # which mirrors the Stromligning integration's own price for the
+    # configured product (see PwM_HUB_MIRROR_SENSORS in sensor.py).
     # Old key="tarif_sikring" (input_select.tarif_sikring)
     # Old name="Tarifsikring størrelse (Ampere)"
     PwMngtSelectEntityDescription(

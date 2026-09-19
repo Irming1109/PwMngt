@@ -21,37 +21,13 @@ from .devices import CHARGERS, charger_device_info, hub_device_info
 LOGGER = logging.getLogger(__name__)
 
 # Shown once, under the main "PwM" hub device's "Configuration" tab --
-# not tied to a specific charger. Read from the "Strøm" card on the
-# Konfiguration dashboard, then translated to English. Both live source
-# entities below are input_number helpers (not Node-RED-provided).
-PwM_CONFIG_NUMBERS: list[PwMngtNumberEntityDescription] = [
-    # Old key="el_fastpris_aftale_i_orer" (input_number.el_fastpris_aftale_i_orer)
-    # Old name="el fastpris aftale i ører"
-    PwMngtNumberEntityDescription(
-        key="fixed_price_agreement",
-        name="Fixed price agreement (øre)",
-        icon="mdi:cash",
-        entity_category=EntityCategory.CONFIG,
-        native_unit_of_measurement="øre",
-        native_min_value=0,
-        native_max_value=1000,
-        native_step=1,
-        default_value=0,
-    ),
-    # Old key="el_spotpris_tillaeg_i_orer" (input_number.el_spotpris_tillaeg_i_orer)
-    # Old name="el spotpris tillæg i ører"
-    PwMngtNumberEntityDescription(
-        key="spot_price_surcharge",
-        name="Spot price surcharge (øre)",
-        icon="mdi:cash-plus",
-        entity_category=EntityCategory.CONFIG,
-        native_unit_of_measurement="øre",
-        native_min_value=0,
-        native_max_value=100,
-        native_step=1,
-        default_value=0,
-    ),
-]
+# not tied to a specific charger. Empty for now: "el_fastpris_aftale_i_orer"
+# and "el_spotpris_tillaeg_i_orer" used to live here, but PwM no longer
+# needs its own fixed-price/surcharge fields -- sensor.pwm_spot_electricity_price
+# mirrors the Stromligning integration's price for whatever product is
+# configured there (fixed or variable), so PwM doesn't model billing plans
+# itself (see PwM_HUB_MIRROR_SENSORS in sensor.py).
+PwM_CONFIG_NUMBERS: list[PwMngtNumberEntityDescription] = []
 
 # Shown under the device's "Diagnostic" tab, this is
 # not something a user is meant to change from the dashboard, but it's kept

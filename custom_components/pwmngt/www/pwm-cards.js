@@ -78,6 +78,12 @@ const PWM_CARD_STYLE = `
     color: var(--primary-text-color);
     min-width: 120px;
   }
+  .pwm-row-control .pwm-row-value {
+    font-size: 14px;
+    color: var(--primary-text-color);
+    min-width: 120px;
+    text-align: right;
+  }
   .pwm-warning {
     color: var(--error-color);
     font-size: 13px;
@@ -94,9 +100,12 @@ const PWM_CARD_STYLE = `
  *     entityId: "select.pwm_charger1_type",
  *     label: "Charger1 type",
  *     icon: "mdi:ev-station",
- *     type: "select" | "number" | "text",
+ *     type: "select" | "number" | "text" | "sensor",
  *     hideUnless: { entityId: "...", equals: "Easee" },  // optional
  *   }
+ * "sensor" is read-only: it just displays the entity's current state (plus
+ * its unit_of_measurement, if any), with no input control and no service
+ * call -- for informational fields like a live battery percentage.
  */
 class PwMngtBaseCard extends HTMLElement {
   setConfig(config) {
@@ -159,7 +168,10 @@ class PwMngtBaseCard extends HTMLElement {
     controlWrap.className = "pwm-row-control";
 
     let controlEl;
-    if (field.type === "select") {
+    if (field.type === "sensor") {
+      controlEl = document.createElement("span");
+      controlEl.className = "pwm-row-value";
+    } else if (field.type === "select") {
       controlEl = document.createElement("select");
       controlEl.addEventListener("change", () => {
         this._hass.callService("select", "select_option", {
@@ -214,7 +226,10 @@ class PwMngtBaseCard extends HTMLElement {
 
       const isBeingEdited = document.activeElement === row.controlEl;
 
-      if (field.type === "select") {
+      if (field.type === "sensor") {
+        const unit = state.attributes.unit_of_measurement;
+        row.controlEl.textContent = unit ? `${state.state} ${unit}` : state.state;
+      } else if (field.type === "select") {
         const options = state.attributes.options || [];
         const currentOptions = Array.from(row.controlEl.options).map((o) => o.value);
         if (currentOptions.join("|") !== options.join("|")) {
@@ -284,6 +299,16 @@ class PwMChargerCard extends PwMngtBaseCard {
         "mdi:solar-power"
       ),
       chargerField(charger, "select", "charger_max_load", "Charger max load", "mdi:current-ac"),
+      // Not charger-specific -- this is the shared PwM PV device's battery
+      // SoC sensor (see PwM_PV_MIRROR_SENSORS in sensor.py), shown here
+      // read-only since it's informational context for charging decisions,
+      // same placement as "Batteri tilstand" on the old Ladeboks dashboard.
+      {
+        entityId: "sensor.pwm_pv_battery_soc",
+        label: "Battery SoC",
+        icon: "mdi:battery",
+        type: "sensor",
+      },
       chargerField(
         charger,
         "text",
@@ -461,29 +486,26 @@ class PwMElectricityCard extends PwMngtBaseCard {
         icon: "mdi:receipt-text",
         type: "select",
       },
+      // Note: "Electricity pricing model" / "Fixed price agreement" /
+      // "Spot price surcharge" used to be here -- retired, since
+      // sensor.pwm_spot_electricity_price below now covers this (mirrors
+      // whatever product is configured in the Stromligning integration).
       {
-        entityId: "select.pwm_electricity_pricing_model",
-        label: "Electricity pricing model",
-        icon: "mdi:cash-multiple",
-        type: "select",
-      },
-      {
-        entityId: "number.pwm_fixed_price_agreement",
-        label: "Fixed price agreement (\u00f8re)",
-        icon: "mdi:cash",
-        type: "number",
-      },
-      {
-        entityId: "number.pwm_spot_price_surcharge",
-        label: "Spot price surcharge (\u00f8re)",
-        icon: "mdi:cash-plus",
-        type: "number",
-      },
-      {
-        entityId: "select.pwm_tariff_fuse_size",
+        // HA slugifies "(Ampere)" in the display name into an "_ampere"
+        // entity_id suffix -- the description's key alone ("tariff_fuse_
+        // size") is not the real entity_id.
+        entityId: "select.pwm_tariff_fuse_size_ampere",
         label: "Tariff fuse size (Ampere)",
         icon: "mdi:fuse",
         type: "select",
+      },
+      // Read-only: live-mirrors sensor.stromligning_current_price_vat_2
+      // (see PwM_HUB_MIRROR_SENSORS in sensor.py). Not editable.
+      {
+        entityId: "sensor.pwm_spot_electricity_price",
+        label: "Spot electricity price",
+        icon: "mdi:cash",
+        type: "sensor",
       },
     ];
     super.setConfig(config || {});
