@@ -6,13 +6,21 @@
  * and getCardSize(). Background on the pattern:
  * https://developers.home-assistant.io/docs/frontend/custom-ui/custom-card
  *
- * Three card types are defined here:
- *   - pwm-hub-card:      the "PwM" hub device's configuration fields.
- *   - pwm-charger-card:  a charger device's configuration fields. Takes a
- *                        `charger` config key ("charger1" / "charger2", or
- *                        any future charger id from CHARGERS in devices.py)
- *                        so the same card type is reused for every charger.
- *   - pwm-pv-card:       the "PwM PV" device's configuration fields.
+ * Four card types are defined here:
+ *   - pwm-hub-card:         the "PwM" hub device's charger/PV configuration
+ *                           fields.
+ *   - pwm-charger-card:     a charger device's configuration fields. Takes
+ *                           a `charger` config key ("charger1" / "charger2",
+ *                           or any future charger id from CHARGERS in
+ *                           devices.py) so the same card type is reused for
+ *                           every charger.
+ *   - pwm-pv-card:          the "PwM PV" device's configuration fields.
+ *   - pwm-electricity-card: the "PwM" hub device's electricity billing/
+ *                           tariff configuration fields (a separate card
+ *                           from pwm-hub-card, mirroring the "Strøm" vs.
+ *                           "Ladestander konfiguration" split on the
+ *                           Konfiguration dashboard, even though both sets
+ *                           of entities live on the same hub device).
  *
  * Each card's field list mirrors the matching Python entity descriptions
  * (select.py / number.py / text.py) as of this writing, in the same order.
@@ -258,10 +266,6 @@ class PwMChargerCard extends PwMngtBaseCard {
     this.cardTitle = config.title || `Charger ${chargerNumber}`;
 
     this.fields = [
-      // Note: "phase_count" is intentionally NOT listed here. It's a real
-      // entity (number.pwm_<charger>_phase_count) used by automations /
-      // Node-RED / internal PwMngt logic, but it isn't user-configurable
-      // and shouldn't clutter this configuration card.
       chargerField(
         charger,
         "select",
@@ -435,6 +439,58 @@ class PwMHubCard extends PwMngtBaseCard {
 }
 customElements.define("pwm-hub-card", PwMHubCard);
 
+class PwMElectricityCard extends PwMngtBaseCard {
+  setConfig(config) {
+    this.cardTitle = (config && config.title) || "Electricity";
+    this.fields = [
+      {
+        entityId: "select.pwm_billing_period",
+        label: "Billing period",
+        icon: "mdi:calendar-month",
+        type: "select",
+      },
+      {
+        entityId: "select.pwm_grid_company",
+        label: "Grid company",
+        icon: "mdi:transmission-tower",
+        type: "select",
+      },
+      {
+        entityId: "select.pwm_electricity_tax",
+        label: "Electricity tax",
+        icon: "mdi:receipt-text",
+        type: "select",
+      },
+      {
+        entityId: "select.pwm_electricity_pricing_model",
+        label: "Electricity pricing model",
+        icon: "mdi:cash-multiple",
+        type: "select",
+      },
+      {
+        entityId: "number.pwm_fixed_price_agreement",
+        label: "Fixed price agreement (\u00f8re)",
+        icon: "mdi:cash",
+        type: "number",
+      },
+      {
+        entityId: "number.pwm_spot_price_surcharge",
+        label: "Spot price surcharge (\u00f8re)",
+        icon: "mdi:cash-plus",
+        type: "number",
+      },
+      {
+        entityId: "select.pwm_tariff_fuse_size",
+        label: "Tariff fuse size (Ampere)",
+        icon: "mdi:fuse",
+        type: "select",
+      },
+    ];
+    super.setConfig(config || {});
+  }
+}
+customElements.define("pwm-electricity-card", PwMElectricityCard);
+
 class PwMPvCard extends PwMngtBaseCard {
   setConfig(config) {
     this.cardTitle = (config && config.title) || "Solar PV System";
@@ -488,5 +544,10 @@ window.customCards.push(
     type: "pwm-pv-card",
     name: "PwM PV",
     description: "PwM PV system device configuration fields.",
+  },
+  {
+    type: "pwm-electricity-card",
+    name: "PwM Electricity",
+    description: "PwM hub electricity billing/tariff configuration fields.",
   }
 );

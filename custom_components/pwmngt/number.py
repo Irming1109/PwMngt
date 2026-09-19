@@ -16,11 +16,44 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 
 from .base import PwMngtNumberEntityDescription
-from .devices import CHARGERS, charger_device_info
+from .devices import CHARGERS, charger_device_info, hub_device_info
 
 LOGGER = logging.getLogger(__name__)
 
-# Shown under the device's "Diagnostic" tab, not "Configuration" -- this is
+# Shown once, under the main "PwM" hub device's "Configuration" tab --
+# not tied to a specific charger. Read from the "Strøm" card on the
+# Konfiguration dashboard, then translated to English. Both live source
+# entities below are input_number helpers (not Node-RED-provided).
+PwM_CONFIG_NUMBERS: list[PwMngtNumberEntityDescription] = [
+    # Old key="el_fastpris_aftale_i_orer" (input_number.el_fastpris_aftale_i_orer)
+    # Old name="el fastpris aftale i ører"
+    PwMngtNumberEntityDescription(
+        key="fixed_price_agreement",
+        name="Fixed price agreement (øre)",
+        icon="mdi:cash",
+        entity_category=EntityCategory.CONFIG,
+        native_unit_of_measurement="øre",
+        native_min_value=0,
+        native_max_value=1000,
+        native_step=1,
+        default_value=0,
+    ),
+    # Old key="el_spotpris_tillaeg_i_orer" (input_number.el_spotpris_tillaeg_i_orer)
+    # Old name="el spotpris tillæg i ører"
+    PwMngtNumberEntityDescription(
+        key="spot_price_surcharge",
+        name="Spot price surcharge (øre)",
+        icon="mdi:cash-plus",
+        entity_category=EntityCategory.CONFIG,
+        native_unit_of_measurement="øre",
+        native_min_value=0,
+        native_max_value=100,
+        native_step=1,
+        default_value=0,
+    ),
+]
+
+# Shown under the device's "Diagnostic" tab, this is
 # not something a user is meant to change from the dashboard, but it's kept
 # as a writable number (not a sensor) so Node-RED or PwMngt's own internal
 # yaml/js scripts can still set it via number.set_value.
@@ -91,8 +124,11 @@ PwM_CHARGER_NUMBERS: list[PwMngtNumberEntityDescription] = [
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
-    """Set up number entities for each configured charger."""
+    """Set up number entities for the hub and each configured charger."""
     entities = []
+
+    for description in PwM_CONFIG_NUMBERS:
+        entities.append(PwMngtNumber(description, entry))
 
     for charger in CHARGERS:
         for description in PwM_CHARGER_DIAGNOSTIC_NUMBERS + PwM_CHARGER_NUMBERS:
@@ -112,11 +148,16 @@ class PwMngtNumber(NumberEntity):
         self,
         description: PwMngtNumberEntityDescription,
         entry: ConfigEntry,
-        charger: dict,
+        charger: dict | None = None,
     ) -> None:
         self.entity_description = description
-        self._attr_unique_id = f"{entry.entry_id}_{charger['id']}_{description.key}"
-        self._attr_device_info = charger_device_info(entry, charger)
+        if charger is None:
+            # Hub-level entity: belongs to the general "PwM" device.
+            self._attr_unique_id = f"{entry.entry_id}_{description.key}"
+            self._attr_device_info = hub_device_info(entry)
+        else:
+            self._attr_unique_id = f"{entry.entry_id}_{charger['id']}_{description.key}"
+            self._attr_device_info = charger_device_info(entry, charger)
         self._attr_native_value = description.default_value
 
     async def async_set_native_value(self, value: float) -> None:

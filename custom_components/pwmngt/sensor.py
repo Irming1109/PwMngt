@@ -9,14 +9,15 @@ from homeassistant.components.sensor import (
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import slugify as util_slugify
 
 from .api import PwMngtAPI
 from .base import PwMngtSensorEntityDescription
-from .const import DOMAIN, API_OBJ
-from .devices import CHARGERS, charger_device_info
+from .const import DOMAIN, API_OBJ, CONF_INVERTER_NAME
+from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
 
 LOGGER = logging.getLogger(__name__)
 
@@ -37,6 +38,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     for sensor in PwM_SENSORS:
         entity = PwMngtSensor(sensor, hass, entry)
         LOGGER.info("Added sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    for description in PwM_HUB_SENSORS:
+        entity = PwMngtHubBalanceSensor(description, entry)
+        LOGGER.info("Added hub sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    for description, source_entity_suffix in PwM_PV_MIRROR_SENSORS:
+        entity = PwMngtPvMirrorSensor(description, entry, source_entity_suffix)
+        LOGGER.info("Added PV mirror sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
     for charger in CHARGERS:
@@ -154,9 +165,6 @@ PwM_CHARGER_SENSORS: list[SensorEntityDescription] = [
         name="Remaining",
         icon="mdi:progress-question",
     ),
-    # Moved here from select.py: these are values the automation reports,
-    # not something the user picks from a dropdown, so a read-only ENUM
-    # sensor is the correct entity type rather than a Select.
     # Old key="ladeboks_1_faser_bestilt" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks_1_faser_bestilt" (Ladeboks 2 ... equivalent for Charger2)  # source was a Select entity in Node-RED; here it's an ENUM sensor
     SensorEntityDescription(
@@ -211,3 +219,169 @@ class PwMngtChargerSensor(SensorEntity):
         self._attr_unique_id = f"{entry.entry_id}_{charger['id']}_{description.key}"
         self._attr_device_info = charger_device_info(entry, charger)
         self._attr_native_value = None
+
+
+# ---------------------------------------------------------------------------
+# Hub-level "power balance" sensor (read-only, scaffolding only).
+#
+# The live dashboard/Node-RED side has 7 sibling sensors, all reporting a
+# net power balance (W) averaged/corrected over different windows. None of
+# the 7 need their own History/Statistics graph in Home Assistant -- the
+# only reason to use separate entities would be per-value graphing, and the
+# stated use here is purely programmatic (Node-RED / PwMngt's own internal
+# logic reading all 7 current numbers from one place). So instead of 7
+# entities, this bundles all 7 as attributes on a single entity.
+#
+# Old key="balance_30_sek" (sensor.balance_30_sek) -> attribute "balance_30_sec"
+# Old key="balance_1_min" (sensor.balance_1_min) -> attribute "balance_1_min"
+# Old key="balance_5_min" (sensor.balance_5_min) -> attribute "balance_5_min"
+# Old key="balance_15_min" (sensor.balance_15_min) -> attribute "balance_15_min"
+# Old key="balance_15_min_korrigeret" (sensor.balance_15_min_korrigeret)
+#   -> attribute "balance_15_min_corrected"
+# Old key="balance_15_min_korrigeret_m_ladere"
+#   (sensor.balance_15_min_korrigeret_m_ladere)
+#   -> attribute "balance_15_min_corrected_with_chargers"
+# Old key="balance_30_min" (sensor.balance_30_min) -> attribute "balance_30_min"
+#
+# No value_fn / real calculation wired up yet -- the state and every
+# attribute report None until PwMngt computes them itself in a later step.
+PwM_HUB_BALANCE_ATTRIBUTES: list[str] = [
+    "balance_30_sec",
+    "balance_1_min",
+    "balance_5_min",
+    "balance_15_min",
+    "balance_15_min_corrected",
+    "balance_15_min_corrected_with_chargers",
+    "balance_30_min",
+]
+
+PwM_HUB_SENSORS: list[SensorEntityDescription] = [
+    SensorEntityDescription(
+        key="power_balance",
+        name="Power balance",
+        icon="mdi:scale-balance",
+        device_class=SensorDeviceClass.POWER,
+        native_unit_of_measurement="W",
+    ),
+]
+
+
+class PwMngtHubBalanceSensor(SensorEntity):
+    """A scaffolded, read-only PwMngt hub sensor bundling the 7 balance
+    values above as attributes. No live value yet -- see the comment block
+    above PwM_HUB_BALANCE_ATTRIBUTES.
+    """
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+
+    def __init__(
+        self,
+        description: SensorEntityDescription,
+        entry: ConfigEntry,
+    ) -> None:
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
+        self._attr_device_info = hub_device_info(entry)
+        self._attr_native_value = None
+        self._attr_extra_state_attributes = {
+            key: None for key in PwM_HUB_BALANCE_ATTRIBUTES
+        }
+
+
+# ---------------------------------------------------------------------------
+# PV-device sensors that live-mirror another entity's state (not
+# scaffolding -- these have a real value from day one, no "later step").
+#
+# The source entity's name depends on what the user's inverter is called in
+# their own Home Assistant (set via the CONF_INVERTER_NAME field in
+# config_flow.py, e.g. Kasper's is "Pileaas") -- so only the fixed suffix
+# after "sensor.<inverter_name>_" is stored below; the full source
+# entity_id is built per-entry in PwMngtPvMirrorSensor.__init__. Only
+# Kostal inverters are supported for now, assumed to all share this suffix.
+# ---------------------------------------------------------------------------
+
+PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
+    # Old key="batteri_soc" (sensor.batteri_soc)
+    # NOTE: sensor.batteri_soc is itself just a read-only mirror of
+    # sensor.<inverter_name>_sol_battery_soc.
+    (
+        SensorEntityDescription(
+            key="battery_soc",
+            name="Battery SoC",
+            icon="mdi:battery",
+            device_class=SensorDeviceClass.BATTERY,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="%",
+        ),
+        "sol_battery_soc",
+    ),
+]
+
+
+class PwMngtPvMirrorSensor(SensorEntity):
+    """A PwM PV-device sensor that live-mirrors another entity's state."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+
+    def __init__(
+        self,
+        description: SensorEntityDescription,
+        entry: ConfigEntry,
+        source_entity_suffix: str,
+    ) -> None:
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
+        self._attr_device_info = pv_device_info(entry)
+        self._attr_native_value = None
+        self._attr_available = False
+
+        inverter_name = entry.options.get(CONF_INVERTER_NAME) or entry.data.get(
+            CONF_INVERTER_NAME
+        )
+        if inverter_name:
+            self._source_entity_id = (
+                f"sensor.{util_slugify(inverter_name)}_{source_entity_suffix}"
+            )
+        else:
+            # No inverter name configured yet (e.g. an entry created before
+            # this field existed) -- nothing to mirror until it's set via
+            # the integration's options ("Configure").
+            self._source_entity_id = None
+            LOGGER.warning(
+                "PwMngt: no inverter name configured, '%s' will stay unavailable",
+                self.entity_description.key,
+            )
+
+    async def async_added_to_hass(self) -> None:
+        """Start mirroring the source entity's state, if one is configured."""
+        await super().async_added_to_hass()
+
+        if self._source_entity_id is None:
+            return
+
+        @callback
+        def _handle_source_update(event) -> None:
+            self._apply_source_state(event.data.get("new_state"))
+
+        self.async_on_remove(
+            async_track_state_change_event(
+                self.hass, [self._source_entity_id], _handle_source_update
+            )
+        )
+        self._apply_source_state(self.hass.states.get(self._source_entity_id))
+
+    @callback
+    def _apply_source_state(self, source_state) -> None:
+        """Copy the source entity's state onto this entity."""
+        if source_state is None or source_state.state in ("unknown", "unavailable"):
+            self._attr_native_value = None
+            self._attr_available = source_state is not None
+        else:
+            try:
+                self._attr_native_value = float(source_state.state)
+            except ValueError:
+                self._attr_native_value = source_state.state
+            self._attr_available = True
+        self.async_write_ha_state()

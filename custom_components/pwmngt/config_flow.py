@@ -5,11 +5,12 @@ from typing import Any
 
 from homeassistant import config_entries
 from homeassistant.const import CONF_NAME
+from homeassistant.core import callback
 
 from homeassistant.helpers.event import async_call_later
 
 from . import async_setup_entry, async_unload_entry
-from .const import DOMAIN, CONF_DEFAULT_NAME
+from .const import DOMAIN, CONF_DEFAULT_NAME, CONF_INVERTER_NAME
 
 LOGGER = logging.getLogger(__name__)
 
@@ -44,12 +45,30 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         schema = vol.Schema(
             {
                 vol.Required(CONF_NAME, default=CONF_DEFAULT_NAME): str,
+                # The solar inverter's device name in this HA instance, e.g.
+                # "Pileaas" or "Lundekrog" -- used to build entity_ids like
+                # "<name>_sol_battery_soc"
+                # Only Kostal inverters are supported for now.
+                vol.Required(
+                    CONF_INVERTER_NAME,
+                    default=self.config_entry.options.get(CONF_INVERTER_NAME, ""),
+                ): str,
             }
         )
 
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
 
 class PwMngtConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: config_entries.ConfigEntry) -> PwMngtOptionsFlow:
+        """Make the options flow (the "Configure" button) reachable.
+
+        Without this, PwMngtOptionsFlow above is defined but never used --
+        Home Assistant has no other way to discover it.
+        """
+        return PwMngtOptionsFlow(config_entry)
 
     async def async_step_user(self, user_input=None):
 
@@ -71,6 +90,10 @@ class PwMngtConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
             {
                 #vol.Required("sensor_name", default="Min Sensor"): str,
                 vol.Required(CONF_NAME, default=CONF_DEFAULT_NAME): str,
+                # See the matching field in PwMngtOptionsFlow.async_step_init
+                # above -- this is the first field of PwMngt's own setup
+                # wizard.
+                vol.Required(CONF_INVERTER_NAME): str,
             }
         )
 

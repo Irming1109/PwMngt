@@ -17,25 +17,28 @@ LOGGER = logging.getLogger(__name__)
 PwM_CHARGER_BUTTONS: list[ButtonEntityDescription] = [
     # Old key="ladeboks_1_lad_nat_5" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks_1_lad_nat_5" (Ladeboks 2 ... equivalent for Charger2)
-    ButtonEntityDescription(key="charge_tonight_5a", name="Charge tonight 5A", icon="mdi:weather-night"),
+    ButtonEntityDescription(key="charge_tonight_5km", name="Charge tonight 5 km", icon="mdi:weather-night"),
     # Old key="ladeboks_1_lad_nat_10" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks_1_lad_nat_10" (Ladeboks 2 ... equivalent for Charger2)
-    ButtonEntityDescription(key="charge_tonight_10a", name="Charge tonight 10A", icon="mdi:weather-night"),
+    ButtonEntityDescription(key="charge_tonight_10km", name="Charge tonight 10 km", icon="mdi:weather-night"),
     # Old key="ladeboks_1_lad_nat_50" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks_1_lad_nat_50" (Ladeboks 2 ... equivalent for Charger2)
-    ButtonEntityDescription(key="charge_tonight_50a", name="Charge tonight 50A", icon="mdi:weather-night"),
+    ButtonEntityDescription(key="charge_tonight_50km", name="Charge tonight 50 km", icon="mdi:weather-night"),
+    # Old key="ladebolks_1_lad_nat_fuld" (ladebolks_2_... equivalent for Charger2)
+    # Old name="Ladebolks_1_lad_nat_fuld" (Ladebolks 2 ... equivalent for Charger2)
+    ButtonEntityDescription(key="charge_tonight_full", name="Charge tonight full", icon="mdi:battery-charging-100"),
     # Old key="ladeboks_1_lad_nat_reset" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks_1_lad_nat_reset" (Ladeboks 2 ... equivalent for Charger2)
     ButtonEntityDescription(key="charge_tonight_reset", name="Charge tonight reset", icon="mdi:restore"),
     # Old key="ladeboks_1_lad_nu_5" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks_1_lad_nu_5" (Ladeboks 2 ... equivalent for Charger2)
-    ButtonEntityDescription(key="charge_now_5a", name="Charge now 5A", icon="mdi:ev-station"),
+    ButtonEntityDescription(key="charge_now_5km", name="Charge now 5 km", icon="mdi:ev-station"),
     # Old key="ladeboks_1_lad_nu_10" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks_1_lad_nu_10" (Ladeboks 2 ... equivalent for Charger2)
-    ButtonEntityDescription(key="charge_now_10a", name="Charge now 10A", icon="mdi:ev-station"),
+    ButtonEntityDescription(key="charge_now_10km", name="Charge now 10 km", icon="mdi:ev-station"),
     # Old key="ladeboks_1_lad_nu_50" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks_1_lad_nu_50" (Ladeboks 2 ... equivalent for Charger2)
-    ButtonEntityDescription(key="charge_now_50a", name="Charge now 50A", icon="mdi:ev-station"),
+    ButtonEntityDescription(key="charge_now_50km", name="Charge now 50 km", icon="mdi:ev-station"),
     # Old key="ladeboks_1_lad_nu_fuld" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks_1_lad_nu_fuld" (Ladeboks 2 ... equivalent for Charger2)
     ButtonEntityDescription(key="charge_now_full", name="Charge now full", icon="mdi:battery-charging-100"),
@@ -44,13 +47,13 @@ PwM_CHARGER_BUTTONS: list[ButtonEntityDescription] = [
     ButtonEntityDescription(key="charge_now_reset", name="Charge now reset", icon="mdi:restore"),
     # Old key="ladeboks_1_tom_batteri_5" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks 1 tom batteri 5" (Ladeboks 2 ... equivalent for Charger2)
-    ButtonEntityDescription(key="discharge_battery_5a", name="Discharge battery 5A", icon="mdi:battery-arrow-down"),
+    ButtonEntityDescription(key="decrease_min_soc_5pct", name="Decrease min SoC 5%", icon="mdi:battery-arrow-down"),
     # Old key="ladeboks_1_tom_batteri_10" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks 1 tom batteri 10" (Ladeboks 2 ... equivalent for Charger2)
-    ButtonEntityDescription(key="discharge_battery_10a", name="Discharge battery 10A", icon="mdi:battery-arrow-down"),
+    ButtonEntityDescription(key="decrease_min_soc_10pct", name="Decrease min SoC 10%", icon="mdi:battery-arrow-down"),
     # Old key="ladeboks_1_tom_batteri_reset" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks 1 tom batteri reset" (Ladeboks 2 ... equivalent for Charger2)
-    ButtonEntityDescription(key="discharge_battery_reset", name="Discharge battery reset", icon="mdi:restore"),
+    ButtonEntityDescription(key="decrease_min_soc_reset", name="Decrease min SoC reset", icon="mdi:restore"),
 ]
 
 

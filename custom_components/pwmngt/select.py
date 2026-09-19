@@ -109,6 +109,59 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["Auto", "500", "1000", "2000", "3000"],
         default_option="Auto",
     ),
+    # Read from the "Strøm" card on the Konfiguration dashboard, then
+    # translated to English. All five live source entities below are
+    # input_select helpers (not Node-RED-provided).
+    # Old key="stromafregning_periode" (input_select.stromafregning_periode)
+    # Old name="Strømafregning periode"
+    PwMngtSelectEntityDescription(
+        key="billing_period",
+        name="Billing period",
+        icon="mdi:calendar-month",
+        entity_category=EntityCategory.CONFIG,
+        options=["Month", "Quarter"],
+        default_option="Month",
+    ),
+    # Old key="net_leverandor" (input_select.net_leverandor)
+    # Old name="Forsyning selskab"
+    PwMngtSelectEntityDescription(
+        key="grid_company",
+        name="Grid company",
+        icon="mdi:transmission-tower",
+        entity_category=EntityCategory.CONFIG,
+        options=["Cerius", "NKE-Elnet"],
+        default_option="Cerius",
+    ),
+    # Old key="afgift_pa_el" (input_select.afgift_pa_el)
+    # Old name="El afgift"
+    PwMngtSelectEntityDescription(
+        key="electricity_tax",
+        name="Electricity tax",
+        icon="mdi:receipt-text",
+        entity_category=EntityCategory.CONFIG,
+        options=["Full", "Reduced (electric heating)"],
+        default_option="Full",
+    ),
+    # Old key="stromafregning" (input_select.stromafregning)
+    # Old name="Strømafregning"
+    PwMngtSelectEntityDescription(
+        key="electricity_pricing_model",
+        name="Electricity pricing model",
+        icon="mdi:cash-multiple",
+        entity_category=EntityCategory.CONFIG,
+        options=["Fixed price", "Variable price (spot price + surcharge)"],
+        default_option="Variable price (spot price + surcharge)",
+    ),
+    # Old key="tarif_sikring" (input_select.tarif_sikring)
+    # Old name="Tarifsikring størrelse (Ampere)"
+    PwMngtSelectEntityDescription(
+        key="tariff_fuse_size",
+        name="Tariff fuse size (Ampere)",
+        icon="mdi:fuse",
+        entity_category=EntityCategory.CONFIG,
+        options=["25", "35", "62"],
+        default_option="35",
+    ),
 ]
 
 # Shown once, under the "PwM PV" solar PV system device's "Configuration"
