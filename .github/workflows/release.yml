@@ -1,0 +1,43 @@
+name: Create GitHub Release
+
+# Fires automatically whenever a tag like "v0.2.11" is pushed. Reads the
+# release title/notes straight from that tag's own annotated message (set
+# by release.ps1 via `git tag -a -F RELEASE_NOTES.md`), and publishes it as
+# a GitHub Release -- no manual clicking on github.com needed.
+#
+# Uses the repo's automatic GITHUB_TOKEN; no secrets to configure. Requires
+# "Workflow permissions" under Settings -> Actions -> General to be set to
+# "Read and write permissions" (one-time repo setting, not per-release).
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (tag only, with its annotation)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract tag message and publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="${GITHUB_REF#refs/tags/}"
+          git for-each-ref "refs/tags/$TAG" --format='%(contents)' > /tmp/notes.md
+
+          if [ -s /tmp/notes.md ]; then
+            gh release create "$TAG" --title "$TAG" --notes-file /tmp/notes.md --prerelease
+          else
+            # Fallback: lightweight tag with no message -- let GitHub
+            # auto-generate notes instead of publishing an empty release.
+            gh release create "$TAG" --title "$TAG" --generate-notes --prerelease
+          fi

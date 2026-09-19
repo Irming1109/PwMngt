@@ -115,30 +115,40 @@ class PwMngtSensor(SensorEntity):
 # ---------------------------------------------------------------------------
 
 PwM_CHARGER_SENSORS: list[SensorEntityDescription] = [
+    # Old key="ladeboks_1_ampere" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 ampere" (Ladeboks 2 ... equivalent for Charger2)
     SensorEntityDescription(
         key="current",
         name="Current",
         icon="mdi:current-ac",
         native_unit_of_measurement="A",
     ),
+    # Old key="ladeboks_1_effekt" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 effekt" (Ladeboks 2 ... equivalent for Charger2)
     SensorEntityDescription(
         key="power",
         name="Power",
         icon="mdi:flash",
         native_unit_of_measurement="W",
     ),
+    # Old key="ladeboks_1_forbrug" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 forbrug" (Ladeboks 2 ... equivalent for Charger2)
     SensorEntityDescription(
         key="consumption",
         name="Consumption",
         icon="mdi:lightning-bolt",
         native_unit_of_measurement="kWh",
     ),
+    # Old key="ladeboks_1_km" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 km" (Ladeboks 2 ... equivalent for Charger2)
     SensorEntityDescription(
         key="km_charged",
         name="Km charged",
         icon="mdi:map-marker-distance",
         native_unit_of_measurement="km",
     ),
+    # Old key="ladeboks_1_mangler" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 mangler" (Ladeboks 2 ... equivalent for Charger2)
     SensorEntityDescription(
         key="remaining",
         name="Remaining",
@@ -147,6 +157,8 @@ PwM_CHARGER_SENSORS: list[SensorEntityDescription] = [
     # Moved here from select.py: these are values the automation reports,
     # not something the user picks from a dropdown, so a read-only ENUM
     # sensor is the correct entity type rather than a Select.
+    # Old key="ladeboks_1_faser_bestilt" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks_1_faser_bestilt" (Ladeboks 2 ... equivalent for Charger2)  # source was a Select entity in Node-RED; here it's an ENUM sensor
     SensorEntityDescription(
         key="ordered_phases",
         name="Ordered phases",
@@ -154,6 +166,8 @@ PwM_CHARGER_SENSORS: list[SensorEntityDescription] = [
         device_class=SensorDeviceClass.ENUM,
         options=["1", "3"],
     ),
+    # Old key="ladeboks_1_tilstand" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 tilstand" (Ladeboks 2 ... equivalent for Charger2)  # source was a Select entity in Node-RED; here it's an ENUM sensor
     SensorEntityDescription(
         key="state",
         name="State",
@@ -169,6 +183,8 @@ PwM_CHARGER_SENSORS: list[SensorEntityDescription] = [
             "Unknown",
         ],
     ),
+    # Old key="ladeboks_1_pv_ladning_aktiv" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 PV ladning aktiv" (Ladeboks 2 ... equivalent for Charger2)  # source was a Select entity in Node-RED; here it's an ENUM sensor
     SensorEntityDescription(
         key="surplus_charging_active",
         name="Surplus charging active",

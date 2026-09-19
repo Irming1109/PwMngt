@@ -8,3 +8,7 @@
 # Python bytecode cache
 __pycache__/
 *.pyc
+
+# Scratch file Claude writes per release; content ends up in the git tag
+# message, not meant to be committed to history.
+RELEASE_NOTES.md

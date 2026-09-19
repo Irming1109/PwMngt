@@ -23,6 +23,8 @@ PwM_CONFIG_TEXTS: list[PwMngtTextEntityDescription] = [
 
 # Shown under each charger device's "Configuration" tab.
 PwM_CHARGER_CONFIG_TEXTS: list[PwMngtTextEntityDescription] = [
+    # Old key="ladeboks_1_easee_sn"
+    # Old name="Ladeboks_1_Easee_SN"
     PwMngtTextEntityDescription(
         key="serial_number",
         name="Serial number",
@@ -32,6 +34,8 @@ PwM_CHARGER_CONFIG_TEXTS: list[PwMngtTextEntityDescription] = [
     ),
     # Read live from the "Ladestander konfiguration" card on the
     # Konfiguration dashboard, then translated to English.
+    # Old key="ladeboks_2_easee_sn"
+    # Old name="Ladeboks_2_Easee_SN"
     PwMngtTextEntityDescription(
         key="charger2_easee_serial_number",
         name="Charger2 Easee serial number",

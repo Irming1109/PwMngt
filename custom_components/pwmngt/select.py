@@ -29,6 +29,8 @@ LOGGER = logging.getLogger(__name__)
 # Shown once, under the main "PwM" hub device's "Configuration" tab --
 # not tied to a specific charger.
 PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
+    # Old key="ladeboks_1_opsaetning"
+    # Old name="Ladeboks 1 opsætning"
     PwMngtSelectEntityDescription(
         key="charger1_type",
         name="Charger1 type",
@@ -37,6 +39,8 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["Not installed", "Wallbox", "Easee"],
         default_option="Wallbox",
     ),
+    # Old key="ladeboks_2_opsaetning"
+    # Old name="Ladeboks 2 opsætning"
     PwMngtSelectEntityDescription(
         key="charger2_type",
         name="Charger2 type",
@@ -45,6 +49,8 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["Not installed", "Wallbox", "Easee"],
         default_option="Wallbox",
     ),
+    # Old key="ladebokse_prioritet"
+    # Old name="Ladebokse prioritet"
     PwMngtSelectEntityDescription(
         key="charger_priority",
         name="Charger priority",
@@ -53,6 +59,8 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["Charger1", "Charger2"],
         default_option="Charger1",
     ),
+    # Old key="ladebokse_min_andel_af_solcelle_strom"
+    # Old name="Ladebokse min. andel af solcelle strøm (%)"
     PwMngtSelectEntityDescription(
         key="minimum_solar_power_to_charge",
         name="Minimum solar power to charge (%)",
@@ -61,6 +69,8 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["90", "80", "70", "60", "50", "40", "30", "20", "10"],
         default_option="90",
     ),
+    # Old key="ladebokse_max_afladning_fra_solcelle_batteri"
+    # Old name="Ladebokse max afladning fra solcelle batteri"
     PwMngtSelectEntityDescription(
         key="start_charging_at_battery_capacity",
         name="Start charging at battery capacity (%)",
@@ -69,6 +79,8 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["Not installed", "95", "90", "85", "80", "75", "70", "65", "60"],
         default_option="85",
     ),
+    # Old key="ladebokse_minimum_pa_solcelle_batteri"
+    # Old name="Ladebokse minimum på solcelle batteri"
     PwMngtSelectEntityDescription(
         key="stop_charging_at_battery_capacity",
         name="Stop charging at battery capacity (%)",
@@ -77,6 +89,8 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["Not installed", "95", "90", "85", "80", "75", "70", "65", "60"],
         default_option="95",
     ),
+    # Old key="ladebokse_max_belastning"
+    # Old name="Ladebokse max belastning"
     PwMngtSelectEntityDescription(
         key="installation_max_load",
         name="Installation max load",
@@ -85,6 +99,8 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["16", "20", "25", "30"],
         default_option="16",
     ),
+    # Old key="ladebokse_pv_styring"
+    # Old name="ladebokse:_pv_styring"
     PwMngtSelectEntityDescription(
         key="pv_control",
         name="PV control",
@@ -97,6 +113,8 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
 
 # Shown under each charger device's "Configuration" tab (set once, rarely changed).
 PwM_CHARGER_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
+    # Old key="ladeboks_1_effektivitet" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 effektivitet" (Ladeboks 2 ... equivalent for Charger2)
     PwMngtSelectEntityDescription(
         key="driving_distance_km_per_kwh",
         name="Driving distance in Km per KwH",
@@ -105,6 +123,8 @@ PwM_CHARGER_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["4", "4.5", "5", "5.5", "6", "6.5", "7", "7.5", "8"],
         default_option="5",
     ),
+    # Old key="ladeboks_1_daglig_opladning" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 daglig opladning" (Ladeboks 2 ... equivalent for Charger2)
     PwMngtSelectEntityDescription(
         key="daily_charge_limit",
         name="Daily charge limit",
@@ -113,6 +133,8 @@ PwM_CHARGER_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["None", "20", "40", "50", "60", "70", "80", "90", "100", "125", "150", "175", "Full"],
         default_option="None",
     ),
+    # Old key="ladeboks_1_minimum_raekkeevne" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks_1_minimum_rækkeevne" (Ladeboks 2 ... equivalent for Charger2)
     PwMngtSelectEntityDescription(
         key="minimum_range",
         name="Minimum range",
@@ -121,6 +143,8 @@ PwM_CHARGER_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["None", "50", "75", "100", "125", "150", "175", "200", "250", "Full"],
         default_option="None",
     ),
+    # Old key="ladeboks_1_periode" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 periode" (Ladeboks 2 ... equivalent for Charger2)
     PwMngtSelectEntityDescription(
         key="charge_period",
         name="Charge period",
@@ -129,6 +153,8 @@ PwM_CHARGER_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["Weekdays", "Every day"],
         default_option="Weekdays",
     ),
+    # Old key="ladeboks_1_udskyd_pv" (ladeboks_2_... equivalent for Charger2)
+    # Old name="ladeboks_1_udskyd_pv" (Ladeboks 2 ... equivalent for Charger2)
     PwMngtSelectEntityDescription(
         key="defer_surplus_charging",
         name="Defer surplus charging",
@@ -137,6 +163,8 @@ PwM_CHARGER_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["Inactive", "4 hours", "Until tomorrow"],
         default_option="Inactive",
     ),
+    # Old key="ladeboks_1_max_ampere_manuel_ladning" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 max ampere manuel ladning" (Ladeboks 2 ... equivalent for Charger2)
     PwMngtSelectEntityDescription(
         key="charger_max_load",
         name="Charger max load",
@@ -150,6 +178,8 @@ PwM_CHARGER_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
 
 # Shown on the main entity list (day-to-day values).
 PwM_CHARGER_SELECTS: list[PwMngtSelectEntityDescription] = [
+    # Old key="ladeboks_1_efterfyld" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks_1_efterfyld" (Ladeboks 2 ... equivalent for Charger2)
     PwMngtSelectEntityDescription(
         key="topup",
         name="Top-up",
@@ -162,6 +192,8 @@ PwM_CHARGER_SELECTS: list[PwMngtSelectEntityDescription] = [
     # that is confirmed, this should likely be split into a settable
     # select/switch plus a separate read-only status sensor, similar to the
     # ordered_phases/state/surplus_charging_active move above.
+    # Old key="ladeboks_1_faseskift" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 faseskift" (Ladeboks 2 ... equivalent for Charger2)
     PwMngtSelectEntityDescription(
         key="phase_switch",
         name="Phase switch",
@@ -169,6 +201,8 @@ PwM_CHARGER_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["No", "Yes", "Yes (active)"],
         default_option="No",
     ),
+    # Old key="ladeboks_1_opstart" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 opstart" (Ladeboks 2 ... equivalent for Charger2)
     PwMngtSelectEntityDescription(
         key="startup",
         name="Startup",
@@ -176,6 +210,8 @@ PwM_CHARGER_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["No", "Yes"],
         default_option="No",
     ),
+    # Old key="ladeboks_1_kommando" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 kommando" (Ladeboks 2 ... equivalent for Charger2)
     PwMngtSelectEntityDescription(
         key="command",
         name="Command",

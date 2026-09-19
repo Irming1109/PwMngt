@@ -1,4 +1,23 @@
-"""Entity base definitions."""
+"""Entity base definitions.
+
+Documentation convention: whenever an entity's key/name is created by
+translating or renaming an existing source (a Danish Node-RED/HA entity,
+or an earlier key/name of our own), add a two-line comment directly above
+its EntityDescription(...) call, e.g.:
+
+    # Old key="ladeboks_1_opsaetning"
+    # Old name="Ladeboks 1 opsaetning"
+    PwMngtSelectEntityDescription(
+        key="charger1_type",
+        name="Charger1 type",
+        ...
+    ),
+
+This is so the original Node-RED/HA entity (or our own earlier name) can be
+found again later when wiring up real functionality/data. Apply this to
+every new or renamed entity across select.py, text.py, number.py,
+button.py and sensor.py.
+"""
 
 from collections.abc import Callable
 from dataclasses import dataclass

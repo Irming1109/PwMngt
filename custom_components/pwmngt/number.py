@@ -22,6 +22,8 @@ LOGGER = logging.getLogger(__name__)
 
 # Shown under the device's "Configuration" tab (set once, rarely changed).
 PwM_CHARGER_CONFIG_NUMBERS: list[PwMngtNumberEntityDescription] = [
+    # Old key="ladeboks_1_antal_faser" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 antal faser" (Ladeboks 2 ... equivalent for Charger2)
     PwMngtNumberEntityDescription(
         key="phase_count",
         name="Phase count",
@@ -36,6 +38,8 @@ PwM_CHARGER_CONFIG_NUMBERS: list[PwMngtNumberEntityDescription] = [
 
 # Shown on the main entity list (day-to-day values).
 PwM_CHARGER_NUMBERS: list[PwMngtNumberEntityDescription] = [
+    # Old key="ladeboks_1_lad_batteri" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 lad batteri" (Ladeboks 2 ... equivalent for Charger2)
     PwMngtNumberEntityDescription(
         key="battery_charge",
         name="Battery charge",
@@ -46,6 +50,8 @@ PwM_CHARGER_NUMBERS: list[PwMngtNumberEntityDescription] = [
         native_step=5,
         default_value=0,
     ),
+    # Old key="ladeboks_1_lad_nu" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks_1_lad_nu" (Ladeboks 2 ... equivalent for Charger2)
     PwMngtNumberEntityDescription(
         key="charge_now_amount",
         name="Charge now amount",
@@ -55,6 +61,8 @@ PwM_CHARGER_NUMBERS: list[PwMngtNumberEntityDescription] = [
         native_step=5,
         default_value=0,
     ),
+    # Old key="ladeboks_1_lad_nat" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks_1_lad_nat" (Ladeboks 2 ... equivalent for Charger2)
     PwMngtNumberEntityDescription(
         key="charge_tonight_amount",
         name="Charge tonight amount",
@@ -64,6 +72,8 @@ PwM_CHARGER_NUMBERS: list[PwMngtNumberEntityDescription] = [
         native_step=1,
         default_value=0,
     ),
+    # Old key="ladeboks_1_range" (ladeboks_2_... equivalent for Charger2)
+    # Old name="Ladeboks 1 range" (Ladeboks 2 ... equivalent for Charger2)
     PwMngtNumberEntityDescription(
         key="estimated_range",
         name="Estimated range",
