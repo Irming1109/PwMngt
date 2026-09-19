@@ -10,7 +10,7 @@ from homeassistant.components.button import ButtonEntity, ButtonEntityDescriptio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
-from .chargers import CHARGERS, charger_device_info
+from .devices import CHARGERS, charger_device_info
 
 LOGGER = logging.getLogger(__name__)
 

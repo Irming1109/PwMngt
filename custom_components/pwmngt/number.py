@@ -16,7 +16,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 
 from .base import PwMngtNumberEntityDescription
-from .chargers import CHARGERS, charger_device_info
+from .devices import CHARGERS, charger_device_info
 
 LOGGER = logging.getLogger(__name__)
 

@@ -22,7 +22,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 
 from .base import PwMngtSelectEntityDescription
-from .chargers import CHARGERS, charger_device_info, hub_device_info
+from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
 
 LOGGER = logging.getLogger(__name__)
 
@@ -108,6 +108,57 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         entity_category=EntityCategory.CONFIG,
         options=["Auto", "500", "1000", "2000", "3000"],
         default_option="Auto",
+    ),
+]
+
+# Shown once, under the "PwM_PV" solar PV system device's "Configuration"
+# tab -- a device related to the hub, for the solar PV system specifically.
+# Read from the "Solcelle anlaeg" card on the Konfiguration dashboard, then
+# translated to English. Three of the four live source entities are
+# input_select helpers (not Node-RED-provided), the fourth is a real select.
+PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
+    # Old key="battery_size" (input_select.battery_size)
+    # Old name="Batteri antal kWh"
+    PwMngtSelectEntityDescription(
+        key="battery_size",
+        name="Battery size (kWh)",
+        icon="mdi:home-battery",
+        entity_category=EntityCategory.CONFIG,
+        options=["None", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
+                 "11", "12", "13", "14", "15", "16", "17", "18", "19", "20"],
+        default_option="8",
+    ),
+    # Old key="history_period_days" (input_select.historik_periode)
+    # Old name="Antal dage til historik"
+    PwMngtSelectEntityDescription(
+        key="history_period_days",
+        name="History period (days)",
+        icon="mdi:history",
+        entity_category=EntityCategory.CONFIG,
+        options=["7", "14", "21", "30"],
+        default_option="7",
+    ),
+    # Old key="solar_inverter_max_ac_kw" (input_select.sol_inverter_max)
+    # Old name="Sol inverter max ydeevne AC KW"
+    PwMngtSelectEntityDescription(
+        key="solar_inverter_max_ac_kw",
+        name="Solar inverter max AC output (kW)",
+        icon="mdi:solar-power",
+        entity_category=EntityCategory.CONFIG,
+        options=["0", "3", "4", "5", "6", "7", "8", "9", "10"],
+        default_option="5",
+    ),
+    # Old key="pv_batteri_pris_difference"
+    # Old name="pv batteri pris difference"
+    PwMngtSelectEntityDescription(
+        key="pv_battery_price_difference",
+        name="PV battery price difference",
+        icon="mdi:currency-usd",
+        entity_category=EntityCategory.CONFIG,
+        options=["0.20", "0.30", "0.40", "0.50", "0.60", "0.70", "0.80", "0.90",
+                 "1.00", "1.10", "1.20", "1.30", "1.40", "1.50", "1.60", "1.70",
+                 "1.80", "1.90", "2.00"],
+        default_option="0.80",
     ),
 ]
 
@@ -223,11 +274,14 @@ PwM_CHARGER_SELECTS: list[PwMngtSelectEntityDescription] = [
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
-    """Set up select entities for the hub device and each configured charger."""
+    """Set up select entities for the hub, the PV device, and each configured charger."""
     entities = []
 
     for description in PwM_CONFIG_SELECTS:
         entities.append(PwMngtSelect(description, entry))
+
+    for description in PwM_PV_CONFIG_SELECTS:
+        entities.append(PwMngtSelect(description, entry, pv=True))
 
     for charger in CHARGERS:
         for description in PwM_CHARGER_CONFIG_SELECTS + PwM_CHARGER_SELECTS:
@@ -247,9 +301,14 @@ class PwMngtSelect(SelectEntity):
         description: PwMngtSelectEntityDescription,
         entry: ConfigEntry,
         charger: dict | None = None,
+        pv: bool = False,
     ) -> None:
         self.entity_description = description
-        if charger is None:
+        if pv:
+            # PV-device-level entity: belongs to the related "PwM_PV" device.
+            self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
+            self._attr_device_info = pv_device_info(entry)
+        elif charger is None:
             # Hub-level entity: belongs to the general "PwM" device.
             self._attr_unique_id = f"{entry.entry_id}_{description.key}"
             self._attr_device_info = hub_device_info(entry)

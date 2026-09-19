@@ -16,7 +16,7 @@ from homeassistant.util import slugify as util_slugify
 from .api import PwMngtAPI
 from .base import PwMngtSensorEntityDescription
 from .const import DOMAIN, API_OBJ
-from .chargers import CHARGERS, charger_device_info
+from .devices import CHARGERS, charger_device_info
 
 LOGGER = logging.getLogger(__name__)
 
