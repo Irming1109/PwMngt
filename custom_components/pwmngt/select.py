@@ -111,7 +111,7 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
     ),
 ]
 
-# Shown once, under the "PwM_PV" solar PV system device's "Configuration"
+# Shown once, under the "PwM PV" solar PV system device's "Configuration"
 # tab -- a device related to the hub, for the solar PV system specifically.
 # Read from the "Solcelle anlaeg" card on the Konfiguration dashboard, then
 # translated to English. Three of the four live source entities are
@@ -305,7 +305,7 @@ class PwMngtSelect(SelectEntity):
     ) -> None:
         self.entity_description = description
         if pv:
-            # PV-device-level entity: belongs to the related "PwM_PV" device.
+            # PV-device-level entity: belongs to the related "PwM PV" device.
             self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
             self._attr_device_info = pv_device_info(entry)
         elif charger is None:

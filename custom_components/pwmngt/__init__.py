@@ -2,6 +2,7 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.helpers.device_registry import DeviceEntry
 
 import voluptuous as vol
 
@@ -40,4 +41,20 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_setup(hass: HomeAssistant, config: dict):
     LOGGER.info("Setting up %s", DOMAIN)
 
+    return True
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, config_entry: ConfigEntry, device_entry: DeviceEntry
+) -> bool:
+    """Allow deleting a PwMngt device from the Home Assistant UI.
+
+    Without this hook, HA hides the "Delete device" button for any device
+    still tied to a live config entry -- which is why an old device (e.g.
+    a retired charger) couldn't be removed from the UI even after all its
+    entities were deleted by hand. Devices this integration still creates
+    (the hub, current chargers, PwM PV, ...) simply get recreated on the
+    next reload if one is ever deleted by mistake, so it's safe to always
+    allow removal here.
+    """
     return True

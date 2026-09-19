@@ -10,7 +10,7 @@ DeviceInfo builders from here rather than constructing DeviceInfo inline.
   nested under the hub via via_device. To scaffold another charger, add a
   dict to CHARGERS -- the platform files all loop over this list, so
   nothing else needs to change.
-- pv_device_info(): the single "PwM_PV" solar PV system device, also
+- pv_device_info(): the single "PwM PV" solar PV system device, also
   nested under the hub.
 
 More related devices (e.g. a ground-source heat pump, pool control) will
@@ -63,7 +63,7 @@ def hub_device_info(entry: ConfigEntry) -> DeviceInfo:
 
 
 def pv_device_info(entry: ConfigEntry) -> DeviceInfo:
-    """Build the DeviceInfo for the "PwM_PV" solar PV system device.
+    """Build the DeviceInfo for the "PwM PV" solar PV system device.
 
     A related device nested under the main hub (same via_device pattern as
     a charger), for configuration that belongs to the solar PV system
@@ -71,7 +71,7 @@ def pv_device_info(entry: ConfigEntry) -> DeviceInfo:
     """
     return DeviceInfo(
         identifiers={(DOMAIN, f"{entry.entry_id}_pv")},
-        name="PwM_PV",
+        name="PwM PV",
         manufacturer="Power Management",
         model="Solar PV system",
         via_device=(DOMAIN, entry.entry_id),

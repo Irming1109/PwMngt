@@ -32,6 +32,13 @@ jobs:
         run: |
           set -e
           TAG="${GITHUB_REF#refs/tags/}"
+          # actions/checkout@v4 fetches the tag correctly, then re-fetches by
+          # commit sha and overwrites refs/tags/$TAG to point straight at the
+          # commit -- silently discarding the annotation. Re-fetch the tag by
+          # NAME from origin to restore the real annotated tag object before
+          # reading its message, otherwise %(contents) falls back to the
+          # underlying commit message instead of our release notes.
+          git fetch origin "refs/tags/$TAG:refs/tags/$TAG" --force
           git for-each-ref "refs/tags/$TAG" --format='%(contents)' > /tmp/notes.md
 
           if [ -s /tmp/notes.md ]; then
