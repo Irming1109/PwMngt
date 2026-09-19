@@ -15,12 +15,13 @@ from .const import DOMAIN, CONF_DEFAULT_NAME, CONF_INVERTER_NAME
 LOGGER = logging.getLogger(__name__)
 
 class PwMngtOptionsFlow(config_entries.OptionsFlow):
-    """PwMngt options flow handler."""
+    """PwMngt options flow handler.
 
-    def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
-        """Initialize PwMngt options flow."""
-        self.config_entry = config_entry
-        self._errors = {}
+    self.config_entry is provided by Home Assistant's config entries manager
+    itself (it's a property on the base OptionsFlow class) -- do not set it
+    manually in __init__ here, that is no longer allowed by newer HA
+    versions and causes the options flow to fail with a 500 error.
+    """
 
     async def _do_update(
         self, *args, **kwargs  # pylint: disable=unused-argument
@@ -68,7 +69,7 @@ class PwMngtConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         Without this, PwMngtOptionsFlow above is defined but never used --
         Home Assistant has no other way to discover it.
         """
-        return PwMngtOptionsFlow(config_entry)
+        return PwMngtOptionsFlow()
 
     async def async_step_user(self, user_input=None):
 
