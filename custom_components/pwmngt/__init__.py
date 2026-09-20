@@ -75,11 +75,10 @@ def _async_check_dependencies(hass: HomeAssistant) -> None:
       today"/"PV forecast tomorrow" fields in Options -> Solar PV Plant --
       without it there's nothing to pick for those two fields, and the
       wizard can't be completed at all (they're required).
-    - Strømligning (stromligning): backs the hub's "Spot electricity
-      price" sensor (see PwM_HUB_MIRROR_SENSORS in sensor.py), which is
-      hardcoded to one of its entities rather than user-configurable, so
-      there's no wizard field to attach a warning to for this one -- the
-      Repair is the only place this gets surfaced at all.
+    - Strømligning (stromligning): backs the "Spot electricity price"
+      entity_map field in Options -> Solar PV Plant (see
+      PwM_HUB_MIRROR_SENSORS in sensor.py) -- without it there's nothing
+      to auto-detect or pick for that field.
 
     Checked on every setup (fresh install, every Home Assistant restart,
     and every Options-flow-triggered reload -- see
@@ -156,11 +155,8 @@ async def async_remove_config_entry_device(
     """Allow deleting a PwMngt device from the Home Assistant UI.
 
     Without this hook, HA hides the "Delete device" button for any device
-    still tied to a live config entry -- which is why an old device (e.g.
-    a retired charger) couldn't be removed from the UI even after all its
-    entities were deleted by hand. Devices this integration still creates
-    (the hub, current chargers, PwM PV, ...) simply get recreated on the
-    next reload if one is ever deleted by mistake, so it's safe to always
-    allow removal here.
+    still tied to a live config entry. Devices this integration still
+    creates (the hub, current chargers, PwM PV, ...) simply get recreated
+    on the next reload, so it's safe to always allow removal here.
     """
     return True

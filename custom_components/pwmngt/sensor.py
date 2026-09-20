@@ -35,9 +35,6 @@ from .const import (
     ENTITY_KEY_GRID_POWER,
     ENTITY_KEY_PV_FORECAST_TODAY,
     ENTITY_KEY_PV_FORECAST_TOMORROW,
-    ENTITY_KEY_BATTERY_NIGHTLY_TARGET,
-    ENTITY_KEY_PV_FORECAST_DAYTIME_TODAY,
-    ENTITY_KEY_PV_FORECAST_DAYTIME_TOMORROW,
     ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
 )
 from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
@@ -91,6 +88,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     for description, entity_map_key in PwM_HUB_MIRROR_SENSORS:
         entity = PwMngtHubMirrorSensor(description, entry, entity_map_key)
         LOGGER.info("Added hub mirror sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    for description in PwM_PV_PLACEHOLDER_SENSORS:
+        entity = PwMngtPlaceholderSensor(description, entry)
+        LOGGER.info("Added PV placeholder sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
     for description in PwM_CONSUMPTION_DATA_SENSORS:
@@ -166,11 +168,8 @@ class PwMngtSensor(SensorEntity):
         return await super().async_added_to_hass()
 
 # ---------------------------------------------------------------------------
-# Charger status sensors (read-only, scaffolding only).
-#
-# These have no value_fn / API backing yet -- they report None until real
-# data (from Node-RED, Easee, or wherever "Ladeboks 1" ends up being read
-# from) is wired up in a later step.
+# Charger status sensors (read-only, scaffolding only). No value_fn / API
+# backing yet -- each reports None until wired up.
 # ---------------------------------------------------------------------------
 
 PwM_CHARGER_SENSORS: list[SensorEntityDescription] = [
@@ -270,15 +269,10 @@ class PwMngtChargerSensor(SensorEntity):
 
 
 # ---------------------------------------------------------------------------
-# Hub-level "power balance" sensor (read-only, scaffolding only).
-#
-# The live dashboard/Node-RED side has 7 sibling sensors, all reporting a
-# net power balance (W) averaged/corrected over different windows. None of
-# the 7 need their own History/Statistics graph in Home Assistant -- the
-# only reason to use separate entities would be per-value graphing, and the
-# stated use here is purely programmatic (Node-RED / PwMngt's own internal
-# logic reading all 7 current numbers from one place). So instead of 7
-# entities, this bundles all 7 as attributes on a single entity.
+# Hub-level "power balance" sensor (read-only, scaffolding only). Bundles
+# 7 net-power-balance values (averaged/corrected over different windows)
+# as attributes on a single entity rather than 7 separate sensors -- none
+# need their own History/Statistics graph, they're read programmatically.
 #
 # Old key="balance_30_sek" (sensor.balance_30_sek) -> attribute "balance_30_sec"
 # Old key="balance_1_min" (sensor.balance_1_min) -> attribute "balance_1_min"
@@ -291,8 +285,7 @@ class PwMngtChargerSensor(SensorEntity):
 #   -> attribute "balance_15_min_corrected_with_chargers"
 # Old key="balance_30_min" (sensor.balance_30_min) -> attribute "balance_30_min"
 #
-# No value_fn / real calculation wired up yet -- the state and every
-# attribute report None until PwMngt computes them itself in a later step.
+# No value_fn wired up yet -- state and every attribute report None.
 PwM_HUB_BALANCE_ATTRIBUTES: list[str] = [
     "balance_30_sec",
     "balance_1_min",
@@ -338,16 +331,10 @@ class PwMngtHubBalanceSensor(SensorEntity):
 
 
 # ---------------------------------------------------------------------------
-# PV-device sensors that live-mirror another entity's state (not
-# scaffolding -- these have a real value from day one, no "later step").
-#
-# The source entity is picked by the user in Options -> Solar PV Plant
-# (page 2 of the wizard, see PwMngtOptionsFlow in config_flow.py) and
-# stored in entry.options[CONF_ENTITY_MAP] keyed by ENTITY_KEY_*, rather
-# than assumed from an "inverter name" naming convention -- entity names
-# aren't reliable across different users' Home Assistant setups, so PwMngt
-# no longer guesses them. The second tuple element below is that
-# ENTITY_KEY_* lookup key, resolved to an actual entity_id per-entry in
+# PV-device sensors that live-mirror another entity's state. The source
+# entity is picked by the user in Options -> Solar PV Plant and stored in
+# entry.options[CONF_ENTITY_MAP] keyed by ENTITY_KEY_*. The second tuple
+# element below is that lookup key, resolved to an entity_id in
 # PwMngtPvMirrorSensor.__init__.
 # ---------------------------------------------------------------------------
 
@@ -474,10 +461,8 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
         ),
         ENTITY_KEY_GRID_POWER,
     ),
-    # Replaces the old per-string pv1/pv2/pv3_forecast_today mirrors --
-    # most installs only have a single, whole-plant forecast entity (e.g.
-    # from a Forecast.Solar-style integration), not one per PV string, so
-    # a single field is what actually matches what people have to map.
+    # A single whole-plant forecast entity, not one per PV string -- most
+    # installs only have one (e.g. from a Forecast.Solar-style integration).
     (
         SensorEntityDescription(
             key="pv_forecast_today",
@@ -500,52 +485,64 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
         ),
         ENTITY_KEY_PV_FORECAST_TOMORROW,
     ),
-    # Diagnostic sensors -- auxiliary values used by Kasper's own
-    # automations rather than headline PV-plant metrics, so these get
-    # entity_category=DIAGNOSTIC (tucked under "Diagnostic" on the device
-    # page, hidden from the main entity list by default). Optional in the
-    # wizard too -- not every install runs the automations that produce
-    # them.
+]
+
+
+# ---------------------------------------------------------------------------
+# PV-device sensors for values PwMngt computes internally itself, rather
+# than mirror an external entity -- same scaffold-now-compute-later
+# pattern as PwM_CONSUMPTION_DATA_SENSORS below. Each stays at
+# native_value=None ("unknown") until that calculation lands.
+# ---------------------------------------------------------------------------
+
+PwM_PV_PLACEHOLDER_SENSORS: list[SensorEntityDescription] = [
     # Old key="batteri target" (sensor.batteri_target), from Node-RED.
-    (
-        SensorEntityDescription(
-            key="battery_nightly_target",
-            name="Battery nightly target",
-            icon="mdi:battery-clock-outline",
-            device_class=SensorDeviceClass.BATTERY,
-            state_class=SensorStateClass.MEASUREMENT,
-            native_unit_of_measurement="%",
-            entity_category=EntityCategory.DIAGNOSTIC,
-        ),
-        ENTITY_KEY_BATTERY_NIGHTLY_TARGET,
+    SensorEntityDescription(
+        key="battery_nightly_target",
+        name="Battery nightly target",
+        icon="mdi:battery-clock-outline",
+        device_class=SensorDeviceClass.BATTERY,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="%",
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     # Old key="solproduktion 11_16" (sensor.solproduktion_11_16), from Node-RED.
-    (
-        SensorEntityDescription(
-            key="pv_forecast_daytime_today",
-            name="PV forecast daytime today",
-            icon="mdi:sun-clock-outline",
-            device_class=SensorDeviceClass.ENERGY,
-            state_class=SensorStateClass.MEASUREMENT,
-            native_unit_of_measurement="kWh",
-            entity_category=EntityCategory.DIAGNOSTIC,
-        ),
-        ENTITY_KEY_PV_FORECAST_DAYTIME_TODAY,
+    SensorEntityDescription(
+        key="pv_forecast_daytime_today",
+        name="PV forecast daytime today",
+        icon="mdi:sun-clock-outline",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="kWh",
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
     # Old key="solproduktion_imorgen_11_16" (sensor.solproduktion_imorgen_11_16), from Node-RED.
-    (
-        SensorEntityDescription(
-            key="pv_forecast_daytime_tomorrow",
-            name="PV forecast daytime tomorrow",
-            icon="mdi:sun-clock-outline",
-            device_class=SensorDeviceClass.ENERGY,
-            state_class=SensorStateClass.MEASUREMENT,
-            native_unit_of_measurement="kWh",
-            entity_category=EntityCategory.DIAGNOSTIC,
-        ),
-        ENTITY_KEY_PV_FORECAST_DAYTIME_TOMORROW,
+    SensorEntityDescription(
+        key="pv_forecast_daytime_tomorrow",
+        name="PV forecast daytime tomorrow",
+        icon="mdi:sun-clock-outline",
+        device_class=SensorDeviceClass.ENERGY,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="kWh",
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
 ]
+
+
+class PwMngtPlaceholderSensor(SensorEntity):
+    """A PV-device sensor for a value PwMngt computes internally itself
+    (see PwM_PV_PLACEHOLDER_SENSORS). Stays at native_value=None until
+    then, same pattern as PwMngtConsumptionDataSensor further down.
+    """
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+
+    def __init__(self, description: SensorEntityDescription, entry: ConfigEntry) -> None:
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
+        self._attr_device_info = pv_device_info(entry)
+        self._attr_native_value = None
 
 
 # ---------------------------------------------------------------------------
@@ -555,8 +552,6 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 # ---------------------------------------------------------------------------
 
 PwM_PV_SUM_SENSORS: list[tuple[SensorEntityDescription, tuple[str, ...]]] = [
-    # New sensor -- not a mirror of a single Node-RED entity, but the sum
-    # of PV1/PV2/PV3 power (each already mirrored individually above).
     (
         SensorEntityDescription(
             key="pv_total",
@@ -577,11 +572,8 @@ PwM_PV_SUM_SENSORS: list[tuple[SensorEntityDescription, tuple[str, ...]]] = [
 # and an export-only power sensor. Each tuple is (description,
 # entity_map_key of the single source, split_fn(value) -> value).
 #
-# Replaces the old "grid_kob"/"grid_salg" Jinja template sensors, which did
-# this same split by hand outside PwMngt. Home Assistant's own built-in
-# "Integration - Riemann sum" helper still does the W -> kWh integration
-# over time (unchanged) -- it should just be repointed at these two native
-# sensors instead of at the old templates.
+# Home Assistant's built-in "Integration - Riemann sum" helper does the
+# W -> kWh integration over time, pointed at these two sensors.
 # ---------------------------------------------------------------------------
 
 PwM_PV_SPLIT_SENSORS: list[tuple[SensorEntityDescription, str, Callable[[float], float]]] = [
@@ -617,23 +609,17 @@ PwM_PV_SPLIT_SENSORS: list[tuple[SensorEntityDescription, str, Callable[[float],
 # ---------------------------------------------------------------------------
 # PV-device sensors that integrate one of the split power (W) sensors above
 # over time into a cumulative energy (kWh) total -- a left-Riemann-sum
-# approximation, same method as Home Assistant's own built-in "Integration
-# - Riemann sum" helper (`platform: integration`, method: left, unit_prefix:
+# approximation, same method as Home Assistant's built-in "Integration -
+# Riemann sum" helper (`platform: integration`, method: left, unit_prefix:
 # k, round: 2). Each tuple is (description, source_entity_id).
 #
-# The source entity_id is the PwMngt split sensor's own predictable
-# entity_id (domain "sensor" + slug of its fixed, non-user-configurable
-# name from PwM_PV_SPLIT_SENSORS above) -- not something the user maps.
-#
-# Replaces Kasper's old external "integration_grid_samlet_kob"/
-# "integration_grid_samlet_salg" YAML helpers, which consumed the old
-# grid_kob/grid_salg template sensors. With this, the whole chain (split by
-# sign, then integrate to kWh) lives natively in PwMngt.
+# source_entity_id is the PwMngt split sensor's own predictable entity_id
+# (domain "sensor" + slug of its fixed name from PwM_PV_SPLIT_SENSORS
+# above) -- not something the user maps.
 # ---------------------------------------------------------------------------
 
 PwM_PV_INTEGRAL_SENSORS: list[tuple[SensorEntityDescription, str]] = [
-    # Old key="integration_grid_samlet_kob", integrates the new
-    # grid_import_power sensor (itself replacing the old grid_kob template).
+    # Old key="integration_grid_samlet_kob". Integrates grid_import_power.
     (
         SensorEntityDescription(
             key="energy_import",
@@ -646,8 +632,7 @@ PwM_PV_INTEGRAL_SENSORS: list[tuple[SensorEntityDescription, str]] = [
         ),
         "sensor.grid_import_power",
     ),
-    # Old key="integration_grid_samlet_salg", integrates the new
-    # grid_export_power sensor (itself replacing the old grid_salg template).
+    # Old key="integration_grid_samlet_salg". Integrates grid_export_power.
     (
         SensorEntityDescription(
             key="energy_export",
@@ -664,22 +649,15 @@ PwM_PV_INTEGRAL_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 
 
 # ---------------------------------------------------------------------------
-# Hub-device sensors that live-mirror another entity's state, where the
-# source entity_id is picked by the user in Options -> Solar PV Plant (see
-# PwM_PV_MIRROR_SENSORS' comment above for why -- entity names aren't
-# reliable across different users' Home Assistant setups). Same tuple
-# shape and wiring as PwM_PV_MIRROR_SENSORS: second element is the
-# ENTITY_KEY_* entity_map lookup key, resolved to an actual entity_id
-# per-entry in PwMngtHubMirrorSensor.__init__.
+# Hub-device sensors that live-mirror another entity's state, picked by
+# the user in Options -> Solar PV Plant. Same tuple shape and wiring as
+# PwM_PV_MIRROR_SENSORS: second element is the ENTITY_KEY_* entity_map
+# lookup key, resolved to an entity_id in PwMngtHubMirrorSensor.__init__.
 # ---------------------------------------------------------------------------
 
 PwM_HUB_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
     # Old key="el_kobspris_variabel"
-    # The Stromligning integration, configured with the real product,
-    # computes this exact figure natively. Used to be hardcoded to
-    # "sensor.stromligning_current_price_vat_2" -- but that exact
-    # entity_id depends on which Stromligning product/VAT setup is
-    # configured, so it's a user-picked entity_map field instead now.
+    # Computed natively by the Stromligning integration.
     (
         SensorEntityDescription(
             key="spot_electricity_price",
@@ -695,19 +673,15 @@ PwM_HUB_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 
 # ---------------------------------------------------------------------------
 # PV-device "consumption data" sensor (read-only, scaffolding only).
+# Bundles 12 household-consumption-average values as attributes on a
+# single diagnostic entity, same pattern as PwMngtHubBalanceSensor above.
+# No calculation logic yet -- state and every attribute report None.
 #
-# Ports over Kasper's Node-RED household-consumption-average setup (his
-# "Beregn 8-16 & 6-9 & 17-06" / "Beregn gennemsnitsforbrug 17-21" /
-# "Beregn gennemsnitsforbrug d\u00f8gn" functions): several rolling averages
-# of household consumption over different time-of-day windows, plus the
-# per-category (pool heating / mining / EV charger / heat pump) daytime
-# consumption used to compute the "adjusted" daytime average. Recomputing
-# these natively needs a 30-day rolling history and time-based triggers
-# (kl 16:01/21:01/00:01, plus ENTITY_KEY_PV_HISTORY_PERIOD_DAYS changing)
-# that haven't been built yet -- for now this just bundles all 12 values as
-# attributes on a single diagnostic entity, same scaffolding pattern as
-# PwMngtHubBalanceSensor above. The actual calculation logic lands in a
-# later release.
+# Old Node-RED functions: "Beregn 8-16 & 6-9 & 17-06" / "Beregn
+# gennemsnitsforbrug 17-21" / "Beregn gennemsnitsforbrug døgn".
+# Recomputing natively needs a 30-day rolling history and time-based
+# triggers (kl 16:01/21:01/00:01, plus select.pwm_pv_history_period_days
+# changing).
 # ---------------------------------------------------------------------------
 
 PwM_CONSUMPTION_DATA_ATTRIBUTES: list[str] = [
@@ -974,10 +948,9 @@ class PwMngtGridSplitSensor(SensorEntity):
     power when positive, else 0; Grid export power = -Grid power when
     negative, else 0).
 
-    Replaces the old grid_kob/grid_salg Jinja template sensors, which did
-    the same split by hand outside PwMngt. Unlike PwMngtPvSumSensor, this
-    stays unavailable whenever its single source is unavailable/unknown --
-    there's nothing meaningful to default to for a 1:1 derived value.
+    Unlike PwMngtPvSumSensor, this stays unavailable whenever its single
+    source is unavailable/unknown -- there's nothing meaningful to default
+    to for a 1:1 derived value.
     """
 
     _attr_has_entity_name = True
@@ -1045,16 +1018,14 @@ class PwMngtGridSplitSensor(SensorEntity):
 class PwMngtEnergyIntegrationSensor(RestoreEntity, SensorEntity):
     """A PwM PV-device sensor that integrates a power (W) source sensor
     over time into a cumulative energy (kWh) total, using a left-Riemann-sum
-    approximation -- the same method Home Assistant's own built-in
-    "Integration - Riemann sum" helper used to provide externally
-    (`platform: integration`, method: left, unit_prefix: k, round: 2).
+    approximation (same method as Home Assistant's built-in "Integration -
+    Riemann sum" helper: `platform: integration`, method: left,
+    unit_prefix: k, round: 2).
 
-    Replaces Kasper's old external "integration_grid_samlet_kob"/
-    "integration_grid_samlet_salg" YAML helpers. The accumulated total
-    survives Home Assistant restarts via RestoreEntity; only the elapsed-
-    time baseline resets on restart (the next source update after a
-    restart just re-anchors the clock, it doesn't add a spurious chunk of
-    energy for the downtime).
+    The accumulated total survives Home Assistant restarts via
+    RestoreEntity; only the elapsed-time baseline resets on restart (the
+    next source update after a restart just re-anchors the clock, it
+    doesn't add a spurious chunk of energy for the downtime).
     """
 
     _attr_has_entity_name = True

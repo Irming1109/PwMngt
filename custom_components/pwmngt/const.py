@@ -13,14 +13,9 @@ PLATFORMS = ["sensor", "binary_sensor", "number", "select", "button", "text"]
 UPDATE_SIGNAL = f"{DOMAIN}_SIGNAL_UPDATE"
 
 # ---------------------------------------------------------------------------
-# External integrations PwMngt effectively depends on today, even though
-# nothing in Home Assistant's own integration model lets a custom
-# component declare "requires this other custom integration to be
-# installed". Instead PwMngt raises a Home Assistant Repair (Settings ->
-# System -> Repairs) when either is missing, so a new install gets a
-# clear, actionable nudge instead of silently-unavailable sensors and a
-# Solar PV Plant wizard that can't be completed. See
-# _async_check_dependencies in __init__.py.
+# External integrations PwMngt depends on but can't declare as a formal
+# dependency. A missing one raises a Home Assistant Repair instead (see
+# _async_check_dependencies in __init__.py).
 # ---------------------------------------------------------------------------
 
 DEPENDENCY_SOLCAST_SOLAR = "solcast_solar"
@@ -29,23 +24,13 @@ DEPENDENCY_STROMLIGNING = "stromligning"
 # ---------------------------------------------------------------------------
 # Entity abstraction layer.
 #
-# PwMngt used to assume a fixed naming convention for other integrations'
-# entities (e.g. "the inverter is called X, so its battery SoC entity is
-# sensor.<x>_sol_battery_soc"). That assumption doesn't hold once you
-# compare setups across different users -- everyone names/renames their
-# entities differently. Instead, PwMngt's Options wizard lets the user pick
-# the real source entity for each abstracted value directly (a dropdown
-# filtered to entities of the right unit/type, so the list stays short and
-# only shows entities that could actually work).
-#
+# The Options wizard lets the user pick the real source entity for each
+# abstracted value (an entity picker filtered to the right unit/type).
 # CONF_ENTITY_MAP holds that per-installation mapping as a flat dict:
 # {<entity key> -> <picked entity_id>}, stored in the config entry's
-# options. The entity keys below (ENTITY_KEY_*) are the stable identifiers
-# used both by the Options wizard (to build/read the picker fields) and by
-# the platform files (sensor.py etc., to look up the picked entity_id).
-# Expect ENTITY_KEY_* to grow to ~30 entries over time as more of PwMngt's
-# segments get their abstraction layer built out -- add a new key here,
-# then wire it into the matching wizard step and platform file.
+# options. ENTITY_KEY_* below are the stable identifiers used both by the
+# Options wizard and by the platform files (sensor.py etc.) to look up the
+# picked entity_id.
 # ---------------------------------------------------------------------------
 
 CONF_ENTITY_MAP = "entity_map"
@@ -63,25 +48,17 @@ ENTITY_KEY_PV_TOTAL_CONSUMPTION = "pv_total_consumption"
 ENTITY_KEY_GRID_POWER = "grid_power"
 ENTITY_KEY_PV_FORECAST_TODAY = "pv_forecast_today"
 ENTITY_KEY_PV_FORECAST_TOMORROW = "pv_forecast_tomorrow"
-ENTITY_KEY_BATTERY_NIGHTLY_TARGET = "battery_nightly_target"
-ENTITY_KEY_PV_FORECAST_DAYTIME_TODAY = "pv_forecast_daytime_today"
-ENTITY_KEY_PV_FORECAST_DAYTIME_TOMORROW = "pv_forecast_daytime_tomorrow"
 
-# History-period select entity used by the (upcoming) native
-# consumption-averages calculation engine to decide how many days of
-# rolling history to average over. Kasper already has a "select" helper
-# for this in his own HA (select.pwm_pv_history_period_days) -- not a
-# sensor, so it isn't part of _SOLAR_PV_PLANT_FIELDS' unit-based picker,
-# see config_flow.py's _SOLAR_PV_PLANT_SELECT_FIELDS instead. Wired into
-# Options now so it's ready before that engine lands.
-ENTITY_KEY_PV_HISTORY_PERIOD_DAYS = "pv_history_period_days"
+# battery_nightly_target, pv_forecast_daytime_today and
+# pv_forecast_daytime_tomorrow are not entity_map fields -- PwMngt
+# computes them internally (see sensor.py's PwM_PV_PLACEHOLDER_SENSORS).
 
-# Hub segment. Used to be hardcoded to
-# "sensor.stromligning_current_price_vat_2" (see PwM_HUB_MIRROR_SENSORS
-# in sensor.py) -- but that exact entity_id depends on which
-# Strømligning product/VAT setup is configured, so it isn't reliable
-# across installs. Now a user-picked entity_map field like the Solar PV
-# Plant ones, even though the sensor itself lives on the Hub device.
+# pv_history_period_days is also not an entity_map field -- it's a fixed
+# entity (select.pwm_pv_history_period_days) the user sets through his own
+# PwMPvCard dashboard card (www/pwm-cards.js).
+
+# Hub segment -- an entity_map field like the Solar PV Plant ones, even
+# though the sensor itself lives on the Hub device.
 ENTITY_KEY_SPOT_ELECTRICITY_PRICE = "spot_electricity_price"
 
 # ---------------------------------------------------------------------------
