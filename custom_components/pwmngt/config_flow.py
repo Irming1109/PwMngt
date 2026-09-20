@@ -6,6 +6,7 @@ from typing import Any
 from homeassistant import config_entries
 from homeassistant.const import CONF_NAME
 from homeassistant.core import callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
 from homeassistant.helpers.event import async_call_later
@@ -38,20 +39,23 @@ from .const import (
 # unit of measurement its entity picker is filtered to. Keep this list and
 # PwM_PV_MIRROR_SENSORS in sensor.py in sync -- this is what drives both
 # the wizard page's fields and which of them get saved into the entity map.
+# Third element: whether the field is required to advance the wizard. PV2/
+# PV3 power and forecast are optional -- not every installation has a
+# second/third PV string, and the field shouldn't block setup if so.
 _SOLAR_PV_PLANT_FIELDS = [
-    (ENTITY_KEY_BATTERY_SOC, "%"),
-    (ENTITY_KEY_BATTERY_PV_CHARGED, "kWh"),
-    (ENTITY_KEY_BATTERY_PV_DISCHARGED, "kWh"),
-    (ENTITY_KEY_BATTERY_POWER, "W"),
-    (ENTITY_KEY_PV1_POWER, "W"),
-    (ENTITY_KEY_PV2_POWER, "W"),
-    (ENTITY_KEY_PV3_POWER, "W"),
-    (ENTITY_KEY_PV_DIRECT_CONSUMPTION, "W"),
-    (ENTITY_KEY_PV_TOTAL_CONSUMPTION, "kWh"),
-    (ENTITY_KEY_GRID_POWER, "W"),
-    (ENTITY_KEY_PV1_FORECAST_TODAY, "kWh"),
-    (ENTITY_KEY_PV2_FORECAST_TODAY, "kWh"),
-    (ENTITY_KEY_PV3_FORECAST_TODAY, "kWh"),
+    (ENTITY_KEY_BATTERY_SOC, "%", True),
+    (ENTITY_KEY_BATTERY_PV_CHARGED, "kWh", True),
+    (ENTITY_KEY_BATTERY_PV_DISCHARGED, "kWh", True),
+    (ENTITY_KEY_BATTERY_POWER, "W", True),
+    (ENTITY_KEY_PV1_POWER, "W", True),
+    (ENTITY_KEY_PV2_POWER, "W", False),
+    (ENTITY_KEY_PV3_POWER, "W", False),
+    (ENTITY_KEY_PV_DIRECT_CONSUMPTION, "W", True),
+    (ENTITY_KEY_PV_TOTAL_CONSUMPTION, "kWh", True),
+    (ENTITY_KEY_GRID_POWER, "W", True),
+    (ENTITY_KEY_PV1_FORECAST_TODAY, "kWh", True),
+    (ENTITY_KEY_PV2_FORECAST_TODAY, "kWh", False),
+    (ENTITY_KEY_PV3_FORECAST_TODAY, "kWh", False),
 ]
 
 LOGGER = logging.getLogger(__name__)
@@ -62,31 +66,35 @@ LOGGER = logging.getLogger(__name__)
 _SEGMENT_STEP_ORDER = [SEGMENT_EV_CHARGING, SEGMENT_POOL, SEGMENT_PV_SURPLUS]
 
 
-def _entities_by_unit(hass, unit: str) -> list[selector.SelectOptionDict]:
-    """List sensor entities whose unit of measurement matches `unit`.
-
-    Used to build a short, type-safe entity picker for the abstraction
-    layer (e.g. only "%"-unit entities are offered for battery_soc)
-    instead of a dropdown of every entity in the house.
+def _entity_ids_by_unit(hass, unit: str) -> list[str]:
+    """List sensor entity_ids whose unit of measurement matches `unit`,
+    excluding PwMngt's own sensors -- mirroring one of PwMngt's own
+    entities would be circular and is never what the user wants here.
     """
-    options = []
-    for state in sorted(hass.states.async_all("sensor"), key=lambda s: s.entity_id):
-        if state.attributes.get("unit_of_measurement") == unit:
-            friendly_name = state.attributes.get("friendly_name", state.entity_id)
-            options.append(
-                selector.SelectOptionDict(
-                    value=state.entity_id,
-                    label=f"{friendly_name} ({state.entity_id})",
-                )
-            )
-    return options
+    registry = er.async_get(hass)
+    entity_ids = []
+    for state in hass.states.async_all("sensor"):
+        if state.attributes.get("unit_of_measurement") != unit:
+            continue
+        entry = registry.async_get(state.entity_id)
+        if entry is not None and entry.platform == DOMAIN:
+            continue
+        entity_ids.append(state.entity_id)
+    return sorted(entity_ids)
 
 
-def _entity_picker(hass, unit: str) -> selector.SelectSelector:
-    return selector.SelectSelector(
-        selector.SelectSelectorConfig(
-            options=_entities_by_unit(hass, unit),
-            mode=selector.SelectSelectorMode.DROPDOWN,
+def _entity_picker(hass, unit: str) -> selector.EntitySelector:
+    """Build an entity picker restricted to sensors of the given unit.
+
+    Uses Home Assistant's native entity selector (via `include_entities`)
+    rather than a hand-rolled dropdown -- it already provides type-to-
+    filter search and an alphabetically sorted list for free, and treats a
+    cleared/empty selection as valid, which is what lets a field be left
+    blank when it's optional (see _SOLAR_PV_PLANT_FIELDS).
+    """
+    return selector.EntitySelector(
+        selector.EntitySelectorConfig(
+            include_entities=_entity_ids_by_unit(hass, unit),
         )
     )
 
@@ -170,7 +178,8 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
 
     async def async_step_solar_pv_plant(self, user_input: Any | None = None):
-        """Page 2: Solar PV Plant abstraction layer (mandatory).
+        """Page 2: Solar PV Plant abstraction layer (mandatory page, but
+        not every field on it is mandatory -- see _SOLAR_PV_PLANT_FIELDS).
 
         Each field is an entity picker filtered to the unit of measurement
         that value should have (see _SOLAR_PV_PLANT_FIELDS), so the
@@ -180,22 +189,37 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         (strings.json -> data_description) tells the user what to look
         for. More fields land here as PwMngt's entity map grows (see
         ENTITY_KEY_* in const.py).
-        """
-        errors = {}
-        if user_input is not None:
-            entity_map = dict(self.config_entry.options.get(CONF_ENTITY_MAP, {}))
-            for key, _unit in _SOLAR_PV_PLANT_FIELDS:
-                entity_map[key] = user_input.get(key)
-            self._data[CONF_ENTITY_MAP] = entity_map
-            return await self._advance()
 
-        current_entity_map = self.config_entry.options.get(CONF_ENTITY_MAP, {})
+        The picker itself (see _entity_picker) always allows a field to be
+        left blank -- that's just Home Assistant's native entity selector
+        behaviour. Whether blank is actually *allowed* for a given field is
+        enforced here instead, per _SOLAR_PV_PLANT_FIELDS' "required" flag,
+        so a field like pv2_power can be skipped (not everyone has a second
+        PV string) while e.g. battery_soc still can't be.
+        """
+        errors: dict[str, str] = {}
+        values = dict(self.config_entry.options.get(CONF_ENTITY_MAP, {}))
+
+        if user_input is not None:
+            values.update(user_input)
+            errors = {
+                key: "required"
+                for key, _unit, required in _SOLAR_PV_PLANT_FIELDS
+                if required and not user_input.get(key)
+            }
+            if not errors:
+                entity_map = dict(self.config_entry.options.get(CONF_ENTITY_MAP, {}))
+                for key, _unit, _required in _SOLAR_PV_PLANT_FIELDS:
+                    entity_map[key] = user_input.get(key) or None
+                self._data[CONF_ENTITY_MAP] = entity_map
+                return await self._advance()
+
         schema = vol.Schema(
             {
                 vol.Optional(
-                    key, default=current_entity_map.get(key)
+                    key, default=values.get(key) or ""
                 ): _entity_picker(self.hass, unit)
-                for key, unit in _SOLAR_PV_PLANT_FIELDS
+                for key, unit, _required in _SOLAR_PV_PLANT_FIELDS
             }
         )
 

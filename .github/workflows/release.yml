@@ -3,7 +3,16 @@ name: Create GitHub Release
 # Fires automatically whenever a tag like "v0.2.11" is pushed. Reads the
 # release title/notes straight from that tag's own annotated message (set
 # by release.ps1 via `git tag -a -F RELEASE_NOTES.md`), and publishes it as
-# a GitHub Release -- no manual clicking on github.com needed.
+# a full (non-prerelease) GitHub Release, marked as "Latest" -- no manual
+# clicking on github.com needed.
+#
+# IMPORTANT: every release up through v0.2.23 was published with
+# --prerelease, which means HACS never saw a "latest" release for this
+# repo. On a fresh install (no existing entry to redownload), this makes
+# HACS's default version resolution unreliable -- it can offer/install an
+# old version instead of the newest one (confirmed: this is what happened
+# when Claus did a first-time install and got an outdated Options wizard).
+# Dropping --prerelease here fixes this going forward for new installs.
 #
 # Uses the repo's automatic GITHUB_TOKEN; no secrets to configure. Requires
 # "Workflow permissions" under Settings -> Actions -> General to be set to
@@ -42,9 +51,9 @@ jobs:
           git for-each-ref "refs/tags/$TAG" --format='%(contents)' > /tmp/notes.md
 
           if [ -s /tmp/notes.md ]; then
-            gh release create "$TAG" --title "$TAG" --notes-file /tmp/notes.md --prerelease
+            gh release create "$TAG" --title "$TAG" --notes-file /tmp/notes.md
           else
             # Fallback: lightweight tag with no message -- let GitHub
             # auto-generate notes instead of publishing an empty release.
-            gh release create "$TAG" --title "$TAG" --generate-notes --prerelease
+            gh release create "$TAG" --title "$TAG" --generate-notes
           fi
