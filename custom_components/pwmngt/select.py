@@ -72,8 +72,8 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
     # Old key="ladebokse_max_afladning_fra_solcelle_batteri"
     # Old name="Ladebokse max afladning fra solcelle batteri"
     PwMngtSelectEntityDescription(
-        key="start_charging_at_battery_capacity",
-        name="Start charging at battery capacity (%)",
+        key="buffer_minimum_soc",
+        name="Buffer minimum SoC",
         icon="mdi:battery-arrow-down",
         entity_category=EntityCategory.CONFIG,
         options=["Not installed", "95", "90", "85", "80", "75", "70", "65", "60"],
@@ -82,8 +82,8 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
     # Old key="ladebokse_minimum_pa_solcelle_batteri"
     # Old name="Ladebokse minimum på solcelle batteri"
     PwMngtSelectEntityDescription(
-        key="stop_charging_at_battery_capacity",
-        name="Stop charging at battery capacity (%)",
+        key="buffer_maximum_soc",
+        name="Buffer maximum SoC",
         icon="mdi:battery-arrow-up",
         entity_category=EntityCategory.CONFIG,
         options=["Not installed", "95", "90", "85", "80", "75", "70", "65", "60"],
@@ -92,8 +92,8 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
     # Old key="ladebokse_max_belastning"
     # Old name="Ladebokse max belastning"
     PwMngtSelectEntityDescription(
-        key="installation_max_load",
-        name="Installation max load",
+        key="chargers_max_load_combined",
+        name="Chargers max load (Combined)",
         icon="mdi:fuse",
         entity_category=EntityCategory.CONFIG,
         options=["16", "20", "25", "30"],
@@ -102,8 +102,8 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
     # Old key="ladebokse_pv_styring"
     # Old name="ladebokse:_pv_styring"
     PwMngtSelectEntityDescription(
-        key="pv_control",
-        name="PV control",
+        key="battery_reserve_car_charging",
+        name="Battery reserve car charging",
         icon="mdi:solar-power-variant",
         entity_category=EntityCategory.CONFIG,
         options=["Auto", "500", "1000", "2000", "3000"],
@@ -121,16 +121,6 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         entity_category=EntityCategory.CONFIG,
         options=["Month", "Quarter"],
         default_option="Month",
-    ),
-    # Old key="net_leverandor" (input_select.net_leverandor)
-    # Old name="Forsyning selskab"
-    PwMngtSelectEntityDescription(
-        key="grid_company",
-        name="Grid company",
-        icon="mdi:transmission-tower",
-        entity_category=EntityCategory.CONFIG,
-        options=["Cerius", "NKE-Elnet"],
-        default_option="Cerius",
     ),
     # Old key="afgift_pa_el" (input_select.afgift_pa_el)
     # Old name="El afgift"
