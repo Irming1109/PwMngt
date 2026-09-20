@@ -1,0 +1,53 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Power Management",
+        "description": "Set up PwMngt.",
+        "data": {
+          "name": "Name"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Power Management",
+        "description": "Choose which optional segments to enable below. Solar PV Plant itself is always included.",
+        "data": {
+          "ev_charging": "EV Charging",
+          "pool": "Pool",
+          "pv_surplus": "PV Surplus"
+        },
+        "data_description": {
+          "ev_charging": "Manage EV charger scheduling and load control, e.g. charging on solar surplus or off-peak spot prices.",
+          "pool": "Manage pool pump/heater scheduling, e.g. running the pump during solar surplus hours.",
+          "pv_surplus": "Manage what happens to solar production left over once the battery and other loads are covered."
+        }
+      },
+      "solar_pv_plant": {
+        "title": "Solar PV Plant",
+        "description": "Pick the entity in your own Home Assistant that PwMngt should mirror for each value below.",
+        "data": {
+          "battery_soc": "Battery SoC"
+        },
+        "data_description": {
+          "battery_soc": "The entity that reports your home battery's state of charge (%), e.g. your inverter's battery SoC sensor. Only \"%\"-unit sensors are listed."
+        }
+      },
+      "ev_charging": {
+        "title": "EV Charging",
+        "description": "Coming soon -- this segment doesn't have any configurable fields yet."
+      },
+      "pool": {
+        "title": "Pool",
+        "description": "Coming soon -- this segment doesn't have any configurable fields yet."
+      },
+      "pv_surplus": {
+        "title": "PV Surplus",
+        "description": "Coming soon -- this segment doesn't have any configurable fields yet."
+      }
+    }
+  }
+}
