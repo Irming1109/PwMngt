@@ -36,8 +36,20 @@ UPDATE_SIGNAL = f"{DOMAIN}_SIGNAL_UPDATE"
 
 CONF_ENTITY_MAP = "entity_map"
 
-# Power Management segment (mandatory -- always configured).
+# Solar PV Plant segment (mandatory -- always configured).
 ENTITY_KEY_BATTERY_SOC = "battery_soc"
+ENTITY_KEY_BATTERY_PV_CHARGED = "battery_pv_charged"
+ENTITY_KEY_BATTERY_PV_DISCHARGED = "battery_pv_discharged"
+ENTITY_KEY_BATTERY_POWER = "battery_power"
+ENTITY_KEY_PV1_POWER = "pv1_power"
+ENTITY_KEY_PV2_POWER = "pv2_power"
+ENTITY_KEY_PV3_POWER = "pv3_power"
+ENTITY_KEY_PV_DIRECT_CONSUMPTION = "pv_direct_consumption"
+ENTITY_KEY_PV_TOTAL_CONSUMPTION = "pv_total_consumption"
+ENTITY_KEY_GRID_POWER = "grid_power"
+ENTITY_KEY_PV1_FORECAST_TODAY = "pv1_forecast_today"
+ENTITY_KEY_PV2_FORECAST_TODAY = "pv2_forecast_today"
+ENTITY_KEY_PV3_FORECAST_TODAY = "pv3_forecast_today"
 
 # ---------------------------------------------------------------------------
 # Segments: optional areas of PwMngt a given installation may not need.

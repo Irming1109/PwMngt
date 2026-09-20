@@ -1,4 +1,5 @@
 import logging
+from typing import Callable
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -12,11 +13,30 @@ from homeassistant.const import CONF_NAME, EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify as util_slugify
 
 from .api import PwMngtAPI
 from .base import PwMngtSensorEntityDescription
-from .const import DOMAIN, API_OBJ, CONF_ENTITY_MAP, ENTITY_KEY_BATTERY_SOC
+from .const import (
+    DOMAIN,
+    API_OBJ,
+    CONF_ENTITY_MAP,
+    ENTITY_KEY_BATTERY_SOC,
+    ENTITY_KEY_BATTERY_PV_CHARGED,
+    ENTITY_KEY_BATTERY_PV_DISCHARGED,
+    ENTITY_KEY_BATTERY_POWER,
+    ENTITY_KEY_PV1_POWER,
+    ENTITY_KEY_PV2_POWER,
+    ENTITY_KEY_PV3_POWER,
+    ENTITY_KEY_PV_DIRECT_CONSUMPTION,
+    ENTITY_KEY_PV_TOTAL_CONSUMPTION,
+    ENTITY_KEY_GRID_POWER,
+    ENTITY_KEY_PV1_FORECAST_TODAY,
+    ENTITY_KEY_PV2_FORECAST_TODAY,
+    ENTITY_KEY_PV3_FORECAST_TODAY,
+)
 from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
 
 LOGGER = logging.getLogger(__name__)
@@ -48,6 +68,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     for description, entity_map_key in PwM_PV_MIRROR_SENSORS:
         entity = PwMngtPvMirrorSensor(description, entry, entity_map_key)
         LOGGER.info("Added PV mirror sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    for description, entity_map_keys in PwM_PV_SUM_SENSORS:
+        entity = PwMngtPvSumSensor(description, entry, entity_map_keys)
+        LOGGER.info("Added PV sum sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    for description, entity_map_key, split_fn in PwM_PV_SPLIT_SENSORS:
+        entity = PwMngtGridSplitSensor(description, entry, entity_map_key, split_fn)
+        LOGGER.info("Added PV split sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    for description, source_entity_id in PwM_PV_INTEGRAL_SENSORS:
+        entity = PwMngtEnergyIntegrationSensor(description, entry, source_entity_id)
+        LOGGER.info("Added PV energy-integration sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
     for description, source_entity_id in PwM_HUB_MIRROR_SENSORS:
@@ -323,6 +358,269 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
         ),
         ENTITY_KEY_BATTERY_SOC,
     ),
+    # Old key="batteri_ladet" (sensor.batteri_ladet), from Node-RED.
+    (
+        SensorEntityDescription(
+            key="battery_pv_charged",
+            name="Battery PV charged",
+            icon="mdi:battery-arrow-up-outline",
+            device_class=SensorDeviceClass.ENERGY_STORAGE,
+            state_class=SensorStateClass.TOTAL_INCREASING,
+            native_unit_of_measurement="kWh",
+        ),
+        ENTITY_KEY_BATTERY_PV_CHARGED,
+    ),
+    # Old key="batteri_afladet" (sensor.batteri_afladet), from Node-RED.
+    (
+        SensorEntityDescription(
+            key="battery_pv_discharged",
+            name="Battery PV discharged",
+            icon="mdi:battery-arrow-down-outline",
+            device_class=SensorDeviceClass.ENERGY_STORAGE,
+            state_class=SensorStateClass.TOTAL_INCREASING,
+            native_unit_of_measurement="kWh",
+        ),
+        ENTITY_KEY_BATTERY_PV_DISCHARGED,
+    ),
+    # Old key="batteri effekt" (sensor.batteri_effekt), from Node-RED.
+    (
+        SensorEntityDescription(
+            key="battery_power",
+            name="Battery power",
+            icon="mdi:battery-sync-outline",
+            device_class=SensorDeviceClass.POWER,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="W",
+        ),
+        ENTITY_KEY_BATTERY_POWER,
+    ),
+    # Old key="PV1" (sensor.pv1), from Node-RED.
+    (
+        SensorEntityDescription(
+            key="pv1_power",
+            name="PV1 power",
+            icon="mdi:solar-power",
+            device_class=SensorDeviceClass.POWER,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="W",
+        ),
+        ENTITY_KEY_PV1_POWER,
+    ),
+    # Old key="PV2" (sensor.pv2), from Node-RED.
+    (
+        SensorEntityDescription(
+            key="pv2_power",
+            name="PV2 power",
+            icon="mdi:solar-power",
+            device_class=SensorDeviceClass.POWER,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="W",
+        ),
+        ENTITY_KEY_PV2_POWER,
+    ),
+    # Old key="PV3" (sensor.pv3), from Node-RED.
+    (
+        SensorEntityDescription(
+            key="pv3_power",
+            name="PV3 power",
+            icon="mdi:solar-power",
+            device_class=SensorDeviceClass.POWER,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="W",
+        ),
+        ENTITY_KEY_PV3_POWER,
+    ),
+    # Old key="pv forbrug direkte" (sensor.pv_forbrug_direkte), from Node-RED.
+    (
+        SensorEntityDescription(
+            key="pv_direct_consumption",
+            name="PV direct consumption",
+            icon="mdi:home-import-outline",
+            device_class=SensorDeviceClass.POWER,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="W",
+        ),
+        ENTITY_KEY_PV_DIRECT_CONSUMPTION,
+    ),
+    # Old key="pv_forbrug" (sensor.pv_forbrug), from Node-RED.
+    (
+        SensorEntityDescription(
+            key="pv_total_consumption",
+            name="PV total consumption",
+            icon="mdi:counter",
+            device_class=SensorDeviceClass.ENERGY,
+            state_class=SensorStateClass.TOTAL_INCREASING,
+            native_unit_of_measurement="kWh",
+        ),
+        ENTITY_KEY_PV_TOTAL_CONSUMPTION,
+    ),
+    # Old key="Grid" (sensor.grid), from Node-RED.
+    (
+        SensorEntityDescription(
+            key="grid_power",
+            name="Grid power",
+            icon="mdi:transmission-tower",
+            device_class=SensorDeviceClass.POWER,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="W",
+        ),
+        ENTITY_KEY_GRID_POWER,
+    ),
+    # Old key="forecast_pv1_i_dag" (sensor.forecast_pv1_i_dag), from Node-RED.
+    (
+        SensorEntityDescription(
+            key="pv1_forecast_today",
+            name="PV1 forecast today",
+            icon="mdi:weather-sunny",
+            device_class=SensorDeviceClass.ENERGY,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="kWh",
+        ),
+        ENTITY_KEY_PV1_FORECAST_TODAY,
+    ),
+    # Old key="forecast_pv2_i_dag" (sensor.forecast_pv2_i_dag), from Node-RED.
+    # NOTE: the Node-RED source for this one had no state_class set (unlike
+    # its PV1/PV3 siblings, which both use "measurement") -- almost
+    # certainly just an omission on that node, since it's the same kind of
+    # value. Declared as "measurement" here too for consistency.
+    (
+        SensorEntityDescription(
+            key="pv2_forecast_today",
+            name="PV2 forecast today",
+            icon="mdi:weather-sunny",
+            device_class=SensorDeviceClass.ENERGY,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="kWh",
+        ),
+        ENTITY_KEY_PV2_FORECAST_TODAY,
+    ),
+    # Old key="forecast_pv3_i_dag" (sensor.forecast_pv3_i_dag), from Node-RED.
+    (
+        SensorEntityDescription(
+            key="pv3_forecast_today",
+            name="PV3 forecast today",
+            icon="mdi:weather-sunny",
+            device_class=SensorDeviceClass.ENERGY,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="kWh",
+        ),
+        ENTITY_KEY_PV3_FORECAST_TODAY,
+    ),
+]
+
+
+# ---------------------------------------------------------------------------
+# PV-device sensors computed as the live sum of several other configured
+# entities' states, rather than a 1:1 mirror of a single one. Each tuple's
+# second element is the ordered set of ENTITY_KEY_* to add together.
+# ---------------------------------------------------------------------------
+
+PwM_PV_SUM_SENSORS: list[tuple[SensorEntityDescription, tuple[str, ...]]] = [
+    # New sensor -- not a mirror of a single Node-RED entity, but the sum
+    # of PV1/PV2/PV3 power (each already mirrored individually above).
+    (
+        SensorEntityDescription(
+            key="pv_total",
+            name="PV total",
+            icon="mdi:solar-power-variant",
+            device_class=SensorDeviceClass.POWER,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="W",
+        ),
+        (ENTITY_KEY_PV1_POWER, ENTITY_KEY_PV2_POWER, ENTITY_KEY_PV3_POWER),
+    ),
+]
+
+
+# ---------------------------------------------------------------------------
+# PV-device sensors computed as a live, sign-based split of a single other
+# configured entity's state -- e.g. "Grid" power split into an import-only
+# and an export-only power sensor. Each tuple is (description,
+# entity_map_key of the single source, split_fn(value) -> value).
+#
+# Replaces the old "grid_kob"/"grid_salg" Jinja template sensors, which did
+# this same split by hand outside PwMngt. Home Assistant's own built-in
+# "Integration - Riemann sum" helper still does the W -> kWh integration
+# over time (unchanged) -- it should just be repointed at these two native
+# sensors instead of at the old templates.
+# ---------------------------------------------------------------------------
+
+PwM_PV_SPLIT_SENSORS: list[tuple[SensorEntityDescription, str, Callable[[float], float]]] = [
+    # Old key="grid_kob" (sensor.grid_kob), Jinja template (positive split of "Grid").
+    (
+        SensorEntityDescription(
+            key="grid_import_power",
+            name="Grid import power",
+            icon="mdi:transmission-tower-import",
+            device_class=SensorDeviceClass.POWER,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="W",
+        ),
+        ENTITY_KEY_GRID_POWER,
+        lambda value: value if value > 0 else 0.0,
+    ),
+    # Old key="grid_salg" (sensor.grid_salg), Jinja template (negative split of "Grid").
+    (
+        SensorEntityDescription(
+            key="grid_export_power",
+            name="Grid export power",
+            icon="mdi:transmission-tower-export",
+            device_class=SensorDeviceClass.POWER,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="W",
+        ),
+        ENTITY_KEY_GRID_POWER,
+        lambda value: -value if value < 0 else 0.0,
+    ),
+]
+
+
+# ---------------------------------------------------------------------------
+# PV-device sensors that integrate one of the split power (W) sensors above
+# over time into a cumulative energy (kWh) total -- a left-Riemann-sum
+# approximation, same method as Home Assistant's own built-in "Integration
+# - Riemann sum" helper (`platform: integration`, method: left, unit_prefix:
+# k, round: 2). Each tuple is (description, source_entity_id).
+#
+# The source entity_id is the PwMngt split sensor's own predictable
+# entity_id (domain "sensor" + slug of its fixed, non-user-configurable
+# name from PwM_PV_SPLIT_SENSORS above) -- not something the user maps.
+#
+# Replaces Kasper's old external "integration_grid_samlet_kob"/
+# "integration_grid_samlet_salg" YAML helpers, which consumed the old
+# grid_kob/grid_salg template sensors. With this, the whole chain (split by
+# sign, then integrate to kWh) lives natively in PwMngt.
+# ---------------------------------------------------------------------------
+
+PwM_PV_INTEGRAL_SENSORS: list[tuple[SensorEntityDescription, str]] = [
+    # Old key="integration_grid_samlet_kob", integrates the new
+    # grid_import_power sensor (itself replacing the old grid_kob template).
+    (
+        SensorEntityDescription(
+            key="energy_import",
+            name="Energy import",
+            icon="mdi:import",
+            device_class=SensorDeviceClass.ENERGY,
+            state_class=SensorStateClass.TOTAL_INCREASING,
+            native_unit_of_measurement="kWh",
+            suggested_display_precision=2,
+        ),
+        "sensor.grid_import_power",
+    ),
+    # Old key="integration_grid_samlet_salg", integrates the new
+    # grid_export_power sensor (itself replacing the old grid_salg template).
+    (
+        SensorEntityDescription(
+            key="energy_export",
+            name="Energy export",
+            icon="mdi:export",
+            device_class=SensorDeviceClass.ENERGY,
+            state_class=SensorStateClass.TOTAL_INCREASING,
+            native_unit_of_measurement="kWh",
+            suggested_display_precision=2,
+        ),
+        "sensor.grid_export_power",
+    ),
 ]
 
 
@@ -400,7 +698,8 @@ class _PwMngtMirrorSensor(SensorEntity):
 
 class PwMngtPvMirrorSensor(_PwMngtMirrorSensor):
     """A PwM PV-device sensor that live-mirrors another entity's state,
-    where the source entity_id depends on the configured inverter name.
+    where the source entity_id is picked by the user in Options -> Solar
+    PV Plant (see PwM_PV_MIRROR_SENSORS above).
     """
 
     def __init__(
@@ -448,3 +747,244 @@ class PwMngtHubMirrorSensor(_PwMngtMirrorSensor):
         self._attr_native_value = None
         self._attr_available = False
         self._source_entity_id = source_entity_id
+
+
+class PwMngtPvSumSensor(SensorEntity):
+    """A PwM PV-device sensor whose value is the live sum of several other
+    configured entities' states (e.g. PV total = PV1 + PV2 + PV3 power),
+    rather than a 1:1 mirror of a single entity.
+
+    A component entity that's missing (not configured) or momentarily
+    unavailable/unknown contributes 0 rather than making the whole sum
+    unavailable -- a PV string legitimately reads 0 at night, and that
+    shouldn't blank out the total.
+    """
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+
+    def __init__(
+        self,
+        description: SensorEntityDescription,
+        entry: ConfigEntry,
+        entity_map_keys: tuple[str, ...],
+    ) -> None:
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
+        self._attr_device_info = pv_device_info(entry)
+        self._attr_native_value = None
+        self._attr_available = False
+
+        entity_map = entry.options.get(CONF_ENTITY_MAP, {})
+        self._source_entity_ids = [
+            entity_map[key] for key in entity_map_keys if entity_map.get(key)
+        ]
+        if not self._source_entity_ids:
+            LOGGER.warning(
+                "PwMngt: no source entities configured for '%s' (set them "
+                "under Options -> Solar PV Plant), it will stay unavailable",
+                self.entity_description.key,
+            )
+
+    async def async_added_to_hass(self) -> None:
+        """Start summing the configured source entities' states, if any."""
+        await super().async_added_to_hass()
+
+        if not self._source_entity_ids:
+            return
+
+        @callback
+        def _handle_source_update(event) -> None:  # pylint: disable=unused-argument
+            self._recompute()
+
+        self.async_on_remove(
+            async_track_state_change_event(
+                self.hass, self._source_entity_ids, _handle_source_update
+            )
+        )
+        self._recompute()
+
+    @callback
+    def _recompute(self) -> None:
+        """Re-sum the configured source entities' current states."""
+        total = 0.0
+        for entity_id in self._source_entity_ids:
+            state = self.hass.states.get(entity_id)
+            if state is None or state.state in ("unknown", "unavailable"):
+                continue
+            try:
+                total += float(state.state)
+            except ValueError:
+                continue
+        self._attr_native_value = total
+        self._attr_available = True
+        self.async_write_ha_state()
+
+class PwMngtGridSplitSensor(SensorEntity):
+    """A PwM PV-device sensor whose value is a live, sign-based split of a
+    single other configured entity's state (e.g. Grid import power = Grid
+    power when positive, else 0; Grid export power = -Grid power when
+    negative, else 0).
+
+    Replaces the old grid_kob/grid_salg Jinja template sensors, which did
+    the same split by hand outside PwMngt. Unlike PwMngtPvSumSensor, this
+    stays unavailable whenever its single source is unavailable/unknown --
+    there's nothing meaningful to default to for a 1:1 derived value.
+    """
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+
+    def __init__(
+        self,
+        description: SensorEntityDescription,
+        entry: ConfigEntry,
+        entity_map_key: str,
+        split_fn: Callable[[float], float],
+    ) -> None:
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
+        self._attr_device_info = pv_device_info(entry)
+        self._attr_native_value = None
+        self._attr_available = False
+        self._split_fn = split_fn
+
+        entity_map = entry.options.get(CONF_ENTITY_MAP, {})
+        self._source_entity_id = entity_map.get(entity_map_key) or None
+        if not self._source_entity_id:
+            LOGGER.warning(
+                "PwMngt: no source entity configured for '%s' (set it under "
+                "Options -> Solar PV Plant), it will stay unavailable",
+                self.entity_description.key,
+            )
+
+    async def async_added_to_hass(self) -> None:
+        """Start tracking the configured source entity's state, if any."""
+        await super().async_added_to_hass()
+
+        if not self._source_entity_id:
+            return
+
+        @callback
+        def _handle_source_update(event) -> None:  # pylint: disable=unused-argument
+            self._recompute()
+
+        self.async_on_remove(
+            async_track_state_change_event(
+                self.hass, [self._source_entity_id], _handle_source_update
+            )
+        )
+        self._recompute()
+
+    @callback
+    def _recompute(self) -> None:
+        """Re-derive the split value from the source entity's current state."""
+        state = self.hass.states.get(self._source_entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            self._attr_available = False
+            self.async_write_ha_state()
+            return
+        try:
+            value = float(state.state)
+        except ValueError:
+            self._attr_available = False
+            self.async_write_ha_state()
+            return
+        self._attr_native_value = self._split_fn(value)
+        self._attr_available = True
+        self.async_write_ha_state()
+
+class PwMngtEnergyIntegrationSensor(RestoreEntity, SensorEntity):
+    """A PwM PV-device sensor that integrates a power (W) source sensor
+    over time into a cumulative energy (kWh) total, using a left-Riemann-sum
+    approximation -- the same method Home Assistant's own built-in
+    "Integration - Riemann sum" helper used to provide externally
+    (`platform: integration`, method: left, unit_prefix: k, round: 2).
+
+    Replaces Kasper's old external "integration_grid_samlet_kob"/
+    "integration_grid_samlet_salg" YAML helpers. The accumulated total
+    survives Home Assistant restarts via RestoreEntity; only the elapsed-
+    time baseline resets on restart (the next source update after a
+    restart just re-anchors the clock, it doesn't add a spurious chunk of
+    energy for the downtime).
+    """
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+
+    def __init__(
+        self,
+        description: SensorEntityDescription,
+        entry: ConfigEntry,
+        source_entity_id: str,
+    ) -> None:
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
+        self._attr_device_info = pv_device_info(entry)
+        self._attr_native_value = 0.0
+        self._attr_available = False
+        self._source_entity_id = source_entity_id
+        self._last_source_value: float | None = None
+        self._last_update_time = None
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the accumulated total, then start integrating."""
+        await super().async_added_to_hass()
+
+        last_state = await self.async_get_last_state()
+        if last_state is not None and last_state.state not in (
+            "unknown",
+            "unavailable",
+        ):
+            try:
+                self._attr_native_value = float(last_state.state)
+            except ValueError:
+                self._attr_native_value = 0.0
+        self._attr_available = True
+        self.async_write_ha_state()
+
+        @callback
+        def _handle_source_update(event) -> None:
+            self._integrate(event.data.get("new_state"))
+
+        self.async_on_remove(
+            async_track_state_change_event(
+                self.hass, [self._source_entity_id], _handle_source_update
+            )
+        )
+        # Pick up whatever the source already reports right now (in case we
+        # missed its own startup state-write due to add-order), so the
+        # elapsed-time baseline is anchored immediately rather than waiting
+        # for the source's next real update.
+        self._integrate(self.hass.states.get(self._source_entity_id))
+
+    @callback
+    def _integrate(self, new_state) -> None:
+        """Add the elapsed contribution of the source's *previous* value
+        (left Riemann sum) since the last time we saw it change."""
+        now = dt_util.utcnow()
+
+        if new_state is None or new_state.state in ("unknown", "unavailable"):
+            self._last_source_value = None
+            self._last_update_time = now
+            return
+
+        try:
+            value = float(new_state.state)
+        except ValueError:
+            self._last_source_value = None
+            self._last_update_time = now
+            return
+
+        if self._last_source_value is not None and self._last_update_time is not None:
+            elapsed_hours = (now - self._last_update_time).total_seconds() / 3600
+            self._attr_native_value = round(
+                (self._attr_native_value or 0.0)
+                + (self._last_source_value * elapsed_hours) / 1000,
+                2,
+            )
+            self._attr_available = True
+            self.async_write_ha_state()
+
+        self._last_source_value = value
+        self._last_update_time = now

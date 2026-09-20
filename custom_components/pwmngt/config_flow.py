@@ -17,10 +17,42 @@ from .const import (
     CONF_SEGMENTS,
     CONF_ENTITY_MAP,
     ENTITY_KEY_BATTERY_SOC,
+    ENTITY_KEY_BATTERY_PV_CHARGED,
+    ENTITY_KEY_BATTERY_PV_DISCHARGED,
+    ENTITY_KEY_BATTERY_POWER,
+    ENTITY_KEY_PV1_POWER,
+    ENTITY_KEY_PV2_POWER,
+    ENTITY_KEY_PV3_POWER,
+    ENTITY_KEY_PV_DIRECT_CONSUMPTION,
+    ENTITY_KEY_PV_TOTAL_CONSUMPTION,
+    ENTITY_KEY_GRID_POWER,
+    ENTITY_KEY_PV1_FORECAST_TODAY,
+    ENTITY_KEY_PV2_FORECAST_TODAY,
+    ENTITY_KEY_PV3_FORECAST_TODAY,
     SEGMENT_EV_CHARGING,
     SEGMENT_POOL,
     SEGMENT_PV_SURPLUS,
 )
+
+# Solar PV Plant abstraction-layer fields (page 2), each paired with the
+# unit of measurement its entity picker is filtered to. Keep this list and
+# PwM_PV_MIRROR_SENSORS in sensor.py in sync -- this is what drives both
+# the wizard page's fields and which of them get saved into the entity map.
+_SOLAR_PV_PLANT_FIELDS = [
+    (ENTITY_KEY_BATTERY_SOC, "%"),
+    (ENTITY_KEY_BATTERY_PV_CHARGED, "kWh"),
+    (ENTITY_KEY_BATTERY_PV_DISCHARGED, "kWh"),
+    (ENTITY_KEY_BATTERY_POWER, "W"),
+    (ENTITY_KEY_PV1_POWER, "W"),
+    (ENTITY_KEY_PV2_POWER, "W"),
+    (ENTITY_KEY_PV3_POWER, "W"),
+    (ENTITY_KEY_PV_DIRECT_CONSUMPTION, "W"),
+    (ENTITY_KEY_PV_TOTAL_CONSUMPTION, "kWh"),
+    (ENTITY_KEY_GRID_POWER, "W"),
+    (ENTITY_KEY_PV1_FORECAST_TODAY, "kWh"),
+    (ENTITY_KEY_PV2_FORECAST_TODAY, "kWh"),
+    (ENTITY_KEY_PV3_FORECAST_TODAY, "kWh"),
+]
 
 LOGGER = logging.getLogger(__name__)
 
@@ -140,29 +172,30 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
     async def async_step_solar_pv_plant(self, user_input: Any | None = None):
         """Page 2: Solar PV Plant abstraction layer (mandatory).
 
-        Only battery_soc is wired up so far -- more fields land here as
-        PwMngt's entity map grows (see ENTITY_KEY_* in const.py).
+        Each field is an entity picker filtered to the unit of measurement
+        that value should have (see _SOLAR_PV_PLANT_FIELDS), so the
+        dropdown is short and only offers entities that could actually be
+        the right one -- replaces the old fixed "inverter name"
+        naming-convention assumption. The helper text under each field
+        (strings.json -> data_description) tells the user what to look
+        for. More fields land here as PwMngt's entity map grows (see
+        ENTITY_KEY_* in const.py).
         """
         errors = {}
         if user_input is not None:
             entity_map = dict(self.config_entry.options.get(CONF_ENTITY_MAP, {}))
-            entity_map[ENTITY_KEY_BATTERY_SOC] = user_input.get(ENTITY_KEY_BATTERY_SOC)
+            for key, _unit in _SOLAR_PV_PLANT_FIELDS:
+                entity_map[key] = user_input.get(key)
             self._data[CONF_ENTITY_MAP] = entity_map
             return await self._advance()
 
         current_entity_map = self.config_entry.options.get(CONF_ENTITY_MAP, {})
         schema = vol.Schema(
             {
-                # Filtered to "%"-unit sensors, so the list is short and
-                # only contains entities that could actually be a battery
-                # state of charge -- replaces the old fixed "inverter
-                # name" naming-convention assumption. The helper text
-                # under this field (strings.json -> data_description)
-                # tells the user what to look for.
                 vol.Optional(
-                    ENTITY_KEY_BATTERY_SOC,
-                    default=current_entity_map.get(ENTITY_KEY_BATTERY_SOC),
-                ): _entity_picker(self.hass, "%"),
+                    key, default=current_entity_map.get(key)
+                ): _entity_picker(self.hass, unit)
+                for key, unit in _SOLAR_PV_PLANT_FIELDS
             }
         )
 
