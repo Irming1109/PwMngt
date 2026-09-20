@@ -16,7 +16,7 @@ from homeassistant.util import slugify as util_slugify
 
 from .api import PwMngtAPI
 from .base import PwMngtSensorEntityDescription
-from .const import DOMAIN, API_OBJ, CONF_INVERTER_NAME
+from .const import DOMAIN, API_OBJ, CONF_ENTITY_MAP, ENTITY_KEY_BATTERY_SOC
 from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
 
 LOGGER = logging.getLogger(__name__)
@@ -45,8 +45,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         LOGGER.info("Added hub sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
-    for description, source_entity_suffix in PwM_PV_MIRROR_SENSORS:
-        entity = PwMngtPvMirrorSensor(description, entry, source_entity_suffix)
+    for description, entity_map_key in PwM_PV_MIRROR_SENSORS:
+        entity = PwMngtPvMirrorSensor(description, entry, entity_map_key)
         LOGGER.info("Added PV mirror sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
@@ -298,18 +298,20 @@ class PwMngtHubBalanceSensor(SensorEntity):
 # PV-device sensors that live-mirror another entity's state (not
 # scaffolding -- these have a real value from day one, no "later step").
 #
-# The source entity's name depends on what the user's inverter is called in
-# their own Home Assistant (set via the CONF_INVERTER_NAME field in
-# config_flow.py, e.g. Kasper's is "Pileaas") -- so only the fixed suffix
-# after "sensor.<inverter_name>_" is stored below; the full source
-# entity_id is built per-entry in PwMngtPvMirrorSensor.__init__. Only
-# Kostal inverters are supported for now, assumed to all share this suffix.
+# The source entity is picked by the user in Options -> Power Management
+# (page 2 of the wizard, see PwMngtOptionsFlow in config_flow.py) and
+# stored in entry.options[CONF_ENTITY_MAP] keyed by ENTITY_KEY_*, rather
+# than assumed from an "inverter name" naming convention -- entity names
+# aren't reliable across different users' Home Assistant setups, so PwMngt
+# no longer guesses them. The second tuple element below is that
+# ENTITY_KEY_* lookup key, resolved to an actual entity_id per-entry in
+# PwMngtPvMirrorSensor.__init__.
 # ---------------------------------------------------------------------------
 
 PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
     # Old key="batteri_soc" (sensor.batteri_soc)
-    # NOTE: sensor.batteri_soc is itself just a read-only mirror of
-    # sensor.<inverter_name>_sol_battery_soc.
+    # NOTE: sensor.batteri_soc is itself just a read-only mirror of the
+    # inverter's own battery SoC entity.
     (
         SensorEntityDescription(
             key="battery_soc",
@@ -319,7 +321,7 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
             state_class=SensorStateClass.MEASUREMENT,
             native_unit_of_measurement="%",
         ),
-        "sol_battery_soc",
+        ENTITY_KEY_BATTERY_SOC,
     ),
 ]
 
@@ -405,7 +407,7 @@ class PwMngtPvMirrorSensor(_PwMngtMirrorSensor):
         self,
         description: SensorEntityDescription,
         entry: ConfigEntry,
-        source_entity_suffix: str,
+        entity_map_key: str,
     ) -> None:
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
@@ -413,20 +415,16 @@ class PwMngtPvMirrorSensor(_PwMngtMirrorSensor):
         self._attr_native_value = None
         self._attr_available = False
 
-        inverter_name = entry.options.get(CONF_INVERTER_NAME) or entry.data.get(
-            CONF_INVERTER_NAME
-        )
-        if inverter_name:
-            self._source_entity_id = (
-                f"sensor.{util_slugify(inverter_name)}_{source_entity_suffix}"
-            )
-        else:
-            # No inverter name configured yet (e.g. an entry created before
-            # this field existed) -- nothing to mirror until it's set via
-            # the integration's options ("Configure").
-            self._source_entity_id = None
+        entity_map = entry.options.get(CONF_ENTITY_MAP, {})
+        self._source_entity_id = entity_map.get(entity_map_key) or None
+        if self._source_entity_id is None:
+            # Not picked yet (e.g. an entry created before this field
+            # existed, or the user hasn't set it) -- nothing to mirror
+            # until it's set via the integration's options ("Configure" ->
+            # Power Management).
             LOGGER.warning(
-                "PwMngt: no inverter name configured, '%s' will stay unavailable",
+                "PwMngt: no source entity configured for '%s' (set it under "
+                "Options -> Power Management), it will stay unavailable",
                 self.entity_description.key,
             )
 
