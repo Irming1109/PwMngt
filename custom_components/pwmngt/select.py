@@ -148,8 +148,8 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
     ),
 ]
 
-# Shown once, under the "PwM PV" solar PV system device's "Configuration"
-# tab -- a device related to the hub, for the solar PV system specifically.
+# Shown once, under the "PwM PV" Solar PV Plant device's "Configuration"
+# tab -- a device related to the hub, for the Solar PV Plant specifically.
 # Read from the "Solcelle anlaeg" card on the Konfiguration dashboard, then
 # translated to English. Three of the four live source entities are
 # input_select helpers (not Node-RED-provided), the fourth is a real select.

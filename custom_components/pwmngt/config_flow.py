@@ -25,8 +25,8 @@ from .const import (
 LOGGER = logging.getLogger(__name__)
 
 # Fixed visit order for the optional segment pages (3-5 of the wizard).
-# "Power Management" isn't in here -- it's mandatory and always visited
-# right after page 1, see PwMngtOptionsFlow.async_step_power_management.
+# "Solar PV Plant" isn't in here -- it's mandatory and always visited
+# right after page 1, see PwMngtOptionsFlow.async_step_solar_pv_plant.
 _SEGMENT_STEP_ORDER = [SEGMENT_EV_CHARGING, SEGMENT_POOL, SEGMENT_PV_SURPLUS]
 
 
@@ -67,13 +67,15 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
     manually in __init__ here, that is no longer allowed by newer HA
     versions and causes the options flow to fail with a 500 error.
 
-    Page 1 (async_step_init): name + which optional segments are enabled.
-    "Power Management" itself is mandatory and not a toggle -- it's just
-    shown as a heading -- the EV Charging / Pool / PV Surplus rows are the
-    actual opt-in segments.
-    Page 2 (async_step_power_management): the Power Management
-    abstraction layer. Always visited. Only battery_soc is implemented so
-    far; more fields will be added here as PwMngt grows its entity map.
+    Page 1 (async_step_init): which optional segments are enabled. No
+    "name" field here -- the entry's name is set once at initial setup
+    (PwMngtConfigFlow.async_step_user) and isn't re-asked in Options.
+    "Solar PV Plant" itself is mandatory and not a toggle -- the EV
+    Charging / Pool / PV Surplus rows are the actual opt-in segments, each
+    with its own short helper text (see strings.json's data_description).
+    Page 2 (async_step_solar_pv_plant): the Solar PV Plant abstraction
+    layer. Always visited. Only battery_soc is implemented so far; more
+    fields will be added here as PwMngt grows its entity map.
     Pages 3-5 (async_step_ev_charging / _pool / _pv_surplus): one per
     optional segment, visited only if that segment was enabled on page 1.
     They're scaffolding for now -- no fields yet, just a page that exists
@@ -97,57 +99,46 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         await async_setup_entry(self.hass, self.config_entry)
 
     async def async_step_init(self, user_input: Any | None = None):
-        """Page 1: name + segment selection."""
+        """Page 1: which optional segments are enabled."""
 
         errors = {}
         if user_input is not None and "base" not in errors:
-            self._data[CONF_NAME] = user_input[CONF_NAME]
-            selected_segments = user_input.get(CONF_SEGMENTS, [])
-            self._data[CONF_SEGMENTS] = selected_segments
-            self._pending_segments = [
+            selected_segments = [
                 segment
                 for segment in _SEGMENT_STEP_ORDER
-                if segment in selected_segments
+                if user_input.get(segment)
             ]
-            return await self.async_step_power_management()
+            self._data[CONF_SEGMENTS] = selected_segments
+            self._pending_segments = list(selected_segments)
+            return await self.async_step_solar_pv_plant()
 
         current_segments = self.config_entry.options.get(CONF_SEGMENTS, [])
         schema = vol.Schema(
             {
-                vol.Required(
-                    CONF_NAME,
-                    default=self.config_entry.options.get(
-                        CONF_NAME,
-                        self.config_entry.data.get(CONF_NAME, CONF_DEFAULT_NAME),
-                    ),
-                ): str,
-                # "Power Management" itself isn't a choice here -- it's
-                # mandatory and always configured on page 2. This list is
-                # only the optional segments on top of it.
-                vol.Optional(CONF_SEGMENTS, default=current_segments): selector.SelectSelector(
-                    selector.SelectSelectorConfig(
-                        options=[
-                            selector.SelectOptionDict(
-                                value=SEGMENT_EV_CHARGING, label="EV Charging"
-                            ),
-                            selector.SelectOptionDict(
-                                value=SEGMENT_POOL, label="Pool"
-                            ),
-                            selector.SelectOptionDict(
-                                value=SEGMENT_PV_SURPLUS, label="PV Surplus"
-                            ),
-                        ],
-                        multiple=True,
-                        mode=selector.SelectSelectorMode.LIST,
-                    )
-                ),
+                # "Solar PV Plant" itself isn't a choice here -- it's
+                # mandatory and always configured on page 2. These three
+                # are the only optional segments on top of it, each with
+                # its own helper text under the toggle (see strings.json
+                # -> options.step.init.data_description).
+                vol.Optional(
+                    SEGMENT_EV_CHARGING,
+                    default=SEGMENT_EV_CHARGING in current_segments,
+                ): selector.BooleanSelector(),
+                vol.Optional(
+                    SEGMENT_POOL,
+                    default=SEGMENT_POOL in current_segments,
+                ): selector.BooleanSelector(),
+                vol.Optional(
+                    SEGMENT_PV_SURPLUS,
+                    default=SEGMENT_PV_SURPLUS in current_segments,
+                ): selector.BooleanSelector(),
             }
         )
 
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
 
-    async def async_step_power_management(self, user_input: Any | None = None):
-        """Page 2: Power Management abstraction layer (mandatory).
+    async def async_step_solar_pv_plant(self, user_input: Any | None = None):
+        """Page 2: Solar PV Plant abstraction layer (mandatory).
 
         Only battery_soc is wired up so far -- more fields land here as
         PwMngt's entity map grows (see ENTITY_KEY_* in const.py).
@@ -165,7 +156,9 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                 # Filtered to "%"-unit sensors, so the list is short and
                 # only contains entities that could actually be a battery
                 # state of charge -- replaces the old fixed "inverter
-                # name" naming-convention assumption.
+                # name" naming-convention assumption. The helper text
+                # under this field (strings.json -> data_description)
+                # tells the user what to look for.
                 vol.Optional(
                     ENTITY_KEY_BATTERY_SOC,
                     default=current_entity_map.get(ENTITY_KEY_BATTERY_SOC),
@@ -174,7 +167,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         )
 
         return self.async_show_form(
-            step_id="power_management", data_schema=schema, errors=errors
+            step_id="solar_pv_plant", data_schema=schema, errors=errors
         )
 
     async def async_step_ev_charging(self, user_input: Any | None = None):
@@ -214,17 +207,15 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
     def _finish(self):
         """Write out the collected options and trigger a reload."""
         async_call_later(self.hass, 2, self._do_update)
+        title = self.config_entry.data.get(CONF_NAME, self.config_entry.title)
         data = {
-            CONF_NAME: self._data.get(
-                CONF_NAME, self.config_entry.options.get(CONF_NAME)
-            ),
             CONF_SEGMENTS: self._data.get(CONF_SEGMENTS, []),
             CONF_ENTITY_MAP: self._data.get(CONF_ENTITY_MAP, {}),
         }
         return self.async_create_entry(
-            title=data[CONF_NAME],
+            title=title,
             data=data,
-            description=f"Power Management - {data[CONF_NAME]}",
+            description=f"Power Management - {title}",
         )
 
 

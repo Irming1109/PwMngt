@@ -298,7 +298,7 @@ class PwMngtHubBalanceSensor(SensorEntity):
 # PV-device sensors that live-mirror another entity's state (not
 # scaffolding -- these have a real value from day one, no "later step").
 #
-# The source entity is picked by the user in Options -> Power Management
+# The source entity is picked by the user in Options -> Solar PV Plant
 # (page 2 of the wizard, see PwMngtOptionsFlow in config_flow.py) and
 # stored in entry.options[CONF_ENTITY_MAP] keyed by ENTITY_KEY_*, rather
 # than assumed from an "inverter name" naming convention -- entity names
@@ -424,7 +424,7 @@ class PwMngtPvMirrorSensor(_PwMngtMirrorSensor):
             # Power Management).
             LOGGER.warning(
                 "PwMngt: no source entity configured for '%s' (set it under "
-                "Options -> Power Management), it will stay unavailable",
+                "Options -> Solar PV Plant), it will stay unavailable",
                 self.entity_description.key,
             )
 

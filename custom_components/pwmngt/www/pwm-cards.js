@@ -509,7 +509,7 @@ customElements.define("pwm-electricity-card", PwMElectricityCard);
 
 class PwMPvCard extends PwMngtBaseCard {
   setConfig(config) {
-    this.cardTitle = (config && config.title) || "Solar PV System";
+    this.cardTitle = (config && config.title) || "Solar PV Plant";
     this.fields = [
       {
         entityId: "select.pwm_pv_battery_size_kwh",
