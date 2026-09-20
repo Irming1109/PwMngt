@@ -6,13 +6,20 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.device_registry import DeviceEntry
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.loader import async_get_integration
 
 import voluptuous as vol
 
 from .services import async_setup_services
 from .api import PwMngtAPI
-from .const import DOMAIN, PLATFORMS, API_OBJ
+from .const import (
+    DOMAIN,
+    PLATFORMS,
+    API_OBJ,
+    DEPENDENCY_SOLCAST_SOLAR,
+    DEPENDENCY_STROMLIGNING,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -39,6 +46,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Forward config entry setup to the sensor platform
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
+    _async_check_dependencies(hass)
+
     return True
 
 # Clean up when the integration is removed
@@ -55,6 +64,57 @@ async def async_setup(hass: HomeAssistant, config: dict):
     LOGGER.info("Setting up %s", DOMAIN)
 
     return True
+
+
+def _async_check_dependencies(hass: HomeAssistant) -> None:
+    """Raise (or clear) a Home Assistant Repair for each external
+    integration PwMngt effectively depends on today but can't enforce
+    through Home Assistant's own mechanisms.
+
+    - Solcast PV Forecast (solcast_solar): backs the required "PV forecast
+      today"/"PV forecast tomorrow" fields in Options -> Solar PV Plant --
+      without it there's nothing to pick for those two fields, and the
+      wizard can't be completed at all (they're required).
+    - Strømligning (stromligning): backs the hub's "Spot electricity
+      price" sensor (see PwM_HUB_MIRROR_SENSORS in sensor.py), which is
+      hardcoded to one of its entities rather than user-configurable, so
+      there's no wizard field to attach a warning to for this one -- the
+      Repair is the only place this gets surfaced at all.
+
+    Checked on every setup (fresh install, every Home Assistant restart,
+    and every Options-flow-triggered reload -- see
+    PwMngtOptionsFlow._do_update), so the Repair also clears itself
+    automatically the next time either integration gets installed, with
+    nothing for the user to dismiss by hand.
+
+    Home Assistant's issue_registry helpers here are synchronous
+    (@callback) despite the "async_" naming convention -- not awaited.
+    """
+    checks = [
+        (
+            DEPENDENCY_SOLCAST_SOLAR,
+            "missing_solcast_solar",
+            "https://github.com/BJReplay/ha-solcast-solar",
+        ),
+        (
+            DEPENDENCY_STROMLIGNING,
+            "missing_stromligning",
+            "https://github.com/MTrab/stromligning",
+        ),
+    ]
+    for dependency_domain, issue_id, learn_more_url in checks:
+        if hass.config_entries.async_entries(dependency_domain):
+            ir.async_delete_issue(hass, DOMAIN, issue_id)
+        else:
+            ir.async_create_issue(
+                hass,
+                DOMAIN,
+                issue_id,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=issue_id,
+                learn_more_url=learn_more_url,
+            )
 
 
 async def _async_register_frontend(hass: HomeAssistant) -> None:

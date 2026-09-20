@@ -45,7 +45,8 @@
           "battery_nightly_target": "Battery nightly target (optional)",
           "pv_forecast_daytime_today": "PV forecast daytime today (optional)",
           "pv_forecast_daytime_tomorrow": "PV forecast daytime tomorrow (optional)",
-          "pv_history_period_days": "History period days (optional)"
+          "pv_history_period_days": "History period days (optional)",
+          "spot_electricity_price": "Spot electricity price (optional)"
         },
         "data_description": {
           "battery_soc": "The entity that reports your home battery's state of charge (%), e.g. your inverter's battery SoC sensor. Only \"%\"-unit sensors are listed.",
@@ -63,7 +64,8 @@
           "battery_nightly_target": "The entity that reports your target battery state of charge for overnight charging (%), if you run an automation that computes one. Only \"%\"-unit sensors are listed. Optional -- leave empty if you don't have this.",
           "pv_forecast_daytime_today": "The entity that reports today's forecasted PV production for a specific daytime window (kWh), if you run an automation that computes one. Only \"kWh\"-unit sensors are listed. Optional -- leave empty if you don't have this.",
           "pv_forecast_daytime_tomorrow": "The entity that reports tomorrow's forecasted PV production for a specific daytime window (kWh), if you run an automation that computes one. Only \"kWh\"-unit sensors are listed. Optional -- leave empty if you don't have this.",
-          "pv_history_period_days": "The select entity used to choose how many days of history the household consumption averages are based on (e.g. a Home Assistant dropdown helper). Only select entities are listed. Optional -- not used yet, this just gets it ready for an upcoming release."
+          "pv_history_period_days": "The select entity used to choose how many days of history the household consumption averages are based on (e.g. a Home Assistant dropdown helper). Only select entities are listed. Optional -- not used yet, this just gets it ready for an upcoming release.",
+          "spot_electricity_price": "The entity that reports the current spot electricity price (kr/kWh), e.g. from the Strømligning integration. Only \"kr/kWh\"-unit sensors are listed. Optional -- leave empty if you don't have this."
         }
       },
       "ev_charging": {
@@ -81,6 +83,16 @@
     },
     "error": {
       "required": "This field is required."
+    }
+  },
+  "issues": {
+    "missing_solcast_solar": {
+      "title": "Solcast PV Forecast is not installed",
+      "description": "PwMngt's \"PV forecast today\" and \"PV forecast tomorrow\" fields (Options -> Solar PV Plant) expect a whole-plant solar forecast sensor (kWh), which normally comes from the **Solcast PV Forecast** integration. Without it there's nothing to pick for those two required fields, and the Solar PV Plant wizard can't be completed.\n\nInstall and set up Solcast PV Forecast (via HACS, or search for it directly in Settings -> Devices & services -> Add integration), then revisit PwMngt's options to pick its forecast sensor. This warning clears itself automatically once Solcast PV Forecast is installed."
+    },
+    "missing_stromligning": {
+      "title": "Strømligning is not installed",
+      "description": "PwMngt's \"Spot electricity price\" sensor mirrors an entity from the **Strømligning** integration. Without it, that sensor stays unavailable -- there's no field in Options to point it elsewhere, since it's tied directly to Strømligning's own price entity.\n\nInstall and set up Strømligning (via HACS, or search for it directly in Settings -> Devices & services -> Add integration) to get a live spot price. This warning clears itself automatically once Strømligning is installed."
     }
   }
 }

@@ -132,10 +132,6 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["Full", "Reduced (electric heating)"],
         default_option="Full",
     ),
-    # Note: "stromafregning" (input_select.stromafregning, Fixed/Variable
-    # price) has no PwM equivalent -- superseded by sensor.pwm_spot_electricity_price,
-    # which mirrors the Stromligning integration's own price for the
-    # configured product (see PwM_HUB_MIRROR_SENSORS in sensor.py).
     # Old key="tarif_sikring" (input_select.tarif_sikring)
     # Old name="Tarifsikring størrelse (Ampere)"
     PwMngtSelectEntityDescription(

@@ -21,18 +21,10 @@ from .devices import CHARGERS, charger_device_info, hub_device_info
 LOGGER = logging.getLogger(__name__)
 
 # Shown once, under the main "PwM" hub device's "Configuration" tab --
-# not tied to a specific charger. Empty for now: "el_fastpris_aftale_i_orer"
-# and "el_spotpris_tillaeg_i_orer" used to live here, but PwM no longer
-# needs its own fixed-price/surcharge fields -- sensor.pwm_spot_electricity_price
-# mirrors the Stromligning integration's price for whatever product is
-# configured there (fixed or variable), so PwM doesn't model billing plans
-# itself (see PwM_HUB_MIRROR_SENSORS in sensor.py).
 PwM_CONFIG_NUMBERS: list[PwMngtNumberEntityDescription] = []
 
 # Shown under the device's "Diagnostic" tab, this is
-# not something a user is meant to change from the dashboard, but it's kept
-# as a writable number (not a sensor) so Node-RED or PwMngt's own internal
-# yaml/js scripts can still set it via number.set_value.
+# not something a user is meant to change from the dashboard
 PwM_CHARGER_DIAGNOSTIC_NUMBERS: list[PwMngtNumberEntityDescription] = [
     # Old key="ladeboks_1_antal_faser" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks 1 antal faser" (Ladeboks 2 ... equivalent for Charger2)

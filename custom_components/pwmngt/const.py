@@ -13,6 +13,20 @@ PLATFORMS = ["sensor", "binary_sensor", "number", "select", "button", "text"]
 UPDATE_SIGNAL = f"{DOMAIN}_SIGNAL_UPDATE"
 
 # ---------------------------------------------------------------------------
+# External integrations PwMngt effectively depends on today, even though
+# nothing in Home Assistant's own integration model lets a custom
+# component declare "requires this other custom integration to be
+# installed". Instead PwMngt raises a Home Assistant Repair (Settings ->
+# System -> Repairs) when either is missing, so a new install gets a
+# clear, actionable nudge instead of silently-unavailable sensors and a
+# Solar PV Plant wizard that can't be completed. See
+# _async_check_dependencies in __init__.py.
+# ---------------------------------------------------------------------------
+
+DEPENDENCY_SOLCAST_SOLAR = "solcast_solar"
+DEPENDENCY_STROMLIGNING = "stromligning"
+
+# ---------------------------------------------------------------------------
 # Entity abstraction layer.
 #
 # PwMngt used to assume a fixed naming convention for other integrations'
@@ -61,6 +75,14 @@ ENTITY_KEY_PV_FORECAST_DAYTIME_TOMORROW = "pv_forecast_daytime_tomorrow"
 # see config_flow.py's _SOLAR_PV_PLANT_SELECT_FIELDS instead. Wired into
 # Options now so it's ready before that engine lands.
 ENTITY_KEY_PV_HISTORY_PERIOD_DAYS = "pv_history_period_days"
+
+# Hub segment. Used to be hardcoded to
+# "sensor.stromligning_current_price_vat_2" (see PwM_HUB_MIRROR_SENSORS
+# in sensor.py) -- but that exact entity_id depends on which
+# Strømligning product/VAT setup is configured, so it isn't reliable
+# across installs. Now a user-picked entity_map field like the Solar PV
+# Plant ones, even though the sensor itself lives on the Hub device.
+ENTITY_KEY_SPOT_ELECTRICITY_PRICE = "spot_electricity_price"
 
 # ---------------------------------------------------------------------------
 # Segments: optional areas of PwMngt a given installation may not need.

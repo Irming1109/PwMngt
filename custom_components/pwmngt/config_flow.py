@@ -33,6 +33,7 @@ from .const import (
     ENTITY_KEY_PV_FORECAST_DAYTIME_TODAY,
     ENTITY_KEY_PV_FORECAST_DAYTIME_TOMORROW,
     ENTITY_KEY_PV_HISTORY_PERIOD_DAYS,
+    ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
     SEGMENT_EV_CHARGING,
     SEGMENT_POOL,
     SEGMENT_PV_SURPLUS,
@@ -63,6 +64,13 @@ _SOLAR_PV_PLANT_FIELDS = [
     (ENTITY_KEY_BATTERY_NIGHTLY_TARGET, "%", False),
     (ENTITY_KEY_PV_FORECAST_DAYTIME_TODAY, "kWh", False),
     (ENTITY_KEY_PV_FORECAST_DAYTIME_TOMORROW, "kWh", False),
+    # Hub value, not really "Solar PV Plant" -- lives here anyway rather
+    # than a dedicated page, same as ENTITY_KEY_PV_HISTORY_PERIOD_DAYS
+    # above. Optional: without it the "Spot electricity price" sensor just
+    # stays unavailable (and the missing-Stromligning Repair, see
+    # __init__.py, already flags the underlying dependency), so this
+    # shouldn't block finishing the wizard.
+    (ENTITY_KEY_SPOT_ELECTRICITY_PRICE, "kr/kWh", False),
 ]
 
 # Fields on the same page that pick a `select` entity rather than a
@@ -163,16 +171,53 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
     optional segment, visited only if that segment was enabled on page 1.
     They're scaffolding for now -- no fields yet, just a page that exists
     in the wizard so the structure is in place before the content is.
+
+    Each page's picks are saved into the config entry's options as soon as
+    that page is submitted (see _save_progress), not only once the whole
+    wizard reaches the end -- so leaving the wizard partway through (e.g.
+    to go set up a source integration first) doesn't lose what was already
+    filled in.
     """
 
     def __init__(self) -> None:
         super().__init__()
         # Collected across pages, written out as the final options dict
-        # once the wizard reaches the end (see _finish).
+        # once the wizard reaches the end (see _finish). Also written out
+        # incrementally after each page -- see _save_progress.
         self._data: dict[str, Any] = {}
         # Optional segment steps still left to show, in fixed order,
         # populated from the page-1 selection.
         self._pending_segments: list[str] = []
+
+    def _save_progress(self) -> None:
+        """Persist whatever's been collected so far into the config
+        entry's options immediately, not just once the whole wizard is
+        completed.
+
+        Home Assistant's options flows normally only write anything out
+        once, right at the end (see _finish's async_create_entry) -- if
+        the user closes/cancels partway through, nothing is saved at all.
+        That's fine for a short flow, but PwMngt's wizard can legitimately
+        need a mid-flow detour (e.g. going to set up an integration a
+        mirror source depends on before picking it here), so each page's
+        picks are written out as soon as that page is submitted. A field
+        not yet touched this session falls back to what's already in
+        self.config_entry.options, so this never wipes out an earlier
+        page's (or an earlier wizard run's) saved values.
+        """
+        self.hass.config_entries.async_update_entry(
+            self.config_entry,
+            options={
+                CONF_SEGMENTS: self._data.get(
+                    CONF_SEGMENTS,
+                    list(self.config_entry.options.get(CONF_SEGMENTS, [])),
+                ),
+                CONF_ENTITY_MAP: self._data.get(
+                    CONF_ENTITY_MAP,
+                    dict(self.config_entry.options.get(CONF_ENTITY_MAP, {})),
+                ),
+            },
+        )
 
     async def _do_update(
         self, *args, **kwargs  # pylint: disable=unused-argument
@@ -193,6 +238,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             ]
             self._data[CONF_SEGMENTS] = selected_segments
             self._pending_segments = list(selected_segments)
+            self._save_progress()
             return await self.async_step_solar_pv_plant()
 
         current_segments = self.config_entry.options.get(CONF_SEGMENTS, [])
@@ -275,6 +321,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                 for key, _required in _SOLAR_PV_PLANT_SELECT_FIELDS:
                     entity_map[key] = user_input.get(key) or None
                 self._data[CONF_ENTITY_MAP] = entity_map
+                self._save_progress()
                 return await self._advance()
 
         # No `default=` at all when there's no value yet -- NOT default=""

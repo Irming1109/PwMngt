@@ -38,6 +38,7 @@ from .const import (
     ENTITY_KEY_BATTERY_NIGHTLY_TARGET,
     ENTITY_KEY_PV_FORECAST_DAYTIME_TODAY,
     ENTITY_KEY_PV_FORECAST_DAYTIME_TOMORROW,
+    ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
 )
 from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
 
@@ -87,8 +88,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         LOGGER.info("Added PV energy-integration sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
-    for description, source_entity_id in PwM_HUB_MIRROR_SENSORS:
-        entity = PwMngtHubMirrorSensor(description, entry, source_entity_id)
+    for description, entity_map_key in PwM_HUB_MIRROR_SENSORS:
+        entity = PwMngtHubMirrorSensor(description, entry, entity_map_key)
         LOGGER.info("Added hub mirror sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
@@ -663,21 +664,22 @@ PwM_PV_INTEGRAL_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 
 
 # ---------------------------------------------------------------------------
-# Hub-device sensors that live-mirror a fixed external entity (not
-# scaffolding -- real values from day one). Unlike PwM_PV_MIRROR_SENSORS,
-# the source entity_id here doesn't depend on any PwMngt configuration --
-# it's owned entirely by another integration.
+# Hub-device sensors that live-mirror another entity's state, where the
+# source entity_id is picked by the user in Options -> Solar PV Plant (see
+# PwM_PV_MIRROR_SENSORS' comment above for why -- entity names aren't
+# reliable across different users' Home Assistant setups). Same tuple
+# shape and wiring as PwM_PV_MIRROR_SENSORS: second element is the
+# ENTITY_KEY_* entity_map lookup key, resolved to an actual entity_id
+# per-entry in PwMngtHubMirrorSensor.__init__.
 # ---------------------------------------------------------------------------
 
 PwM_HUB_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
-    # Old key="el_kobspris_variabel" (sensor.el_kobspris_variabel)
-    # Was a template that hand-combined the Energi Data Service spot price
-    # with tariffs looked up from its "tariffs" attribute (nordpool_spotpris
-    # was also referenced but never actually used in the result). The
-    # Stromligning integration -- configured with the real EnergiFyn
-    # product ("Strom til kostpris") -- computes this exact figure natively
-    # (verified live: its 5 component sensors sum to the exact current
-    # price), so this just mirrors it instead of recalculating it.
+    # Old key="el_kobspris_variabel"
+    # The Stromligning integration, configured with the real product,
+    # computes this exact figure natively. Used to be hardcoded to
+    # "sensor.stromligning_current_price_vat_2" -- but that exact
+    # entity_id depends on which Stromligning product/VAT setup is
+    # configured, so it's a user-picked entity_map field instead now.
     (
         SensorEntityDescription(
             key="spot_electricity_price",
@@ -686,7 +688,7 @@ PwM_HUB_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
             state_class=SensorStateClass.MEASUREMENT,
             native_unit_of_measurement="kr/kWh",
         ),
-        "sensor.stromligning_current_price_vat_2",
+        ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
     ),
 ]
 
@@ -862,24 +864,37 @@ class PwMngtPvMirrorSensor(_PwMngtMirrorSensor):
 
 
 class PwMngtHubMirrorSensor(_PwMngtMirrorSensor):
-    """A PwM hub-device sensor that live-mirrors a fixed external entity's
-    state -- for values sourced entirely from another integration (e.g.
-    Stromligning), where PwMngt itself has nothing per-install to
-    configure, unlike PwMngtPvMirrorSensor's inverter-name-based lookup.
+    """A PwM hub-device sensor that live-mirrors another entity's state,
+    where the source entity_id is picked by the user in Options -> Solar
+    PV Plant (see PwM_HUB_MIRROR_SENSORS above) -- same lookup pattern as
+    PwMngtPvMirrorSensor, just on the Hub device instead of the PV device.
     """
 
     def __init__(
         self,
         description: SensorEntityDescription,
         entry: ConfigEntry,
-        source_entity_id: str,
+        entity_map_key: str,
     ) -> None:
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
         self._attr_device_info = hub_device_info(entry)
         self._attr_native_value = None
         self._attr_available = False
-        self._source_entity_id = source_entity_id
+
+        entity_map = entry.options.get(CONF_ENTITY_MAP, {})
+        self._source_entity_id = entity_map.get(entity_map_key) or None
+        if self._source_entity_id is None:
+            # Not picked yet (e.g. an entry created before this field
+            # existed, or the user hasn't set it) -- nothing to mirror
+            # until it's set via the integration's options ("Configure" ->
+            # Power Management). The missing-Stromligning Repair (see
+            # __init__.py) already flags the likely underlying cause.
+            LOGGER.warning(
+                "PwMngt: no source entity configured for '%s' (set it under "
+                "Options -> Solar PV Plant), it will stay unavailable",
+                self.entity_description.key,
+            )
 
 
 class PwMngtPvSumSensor(SensorEntity):
