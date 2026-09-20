@@ -27,9 +27,12 @@ from .const import (
     ENTITY_KEY_PV_DIRECT_CONSUMPTION,
     ENTITY_KEY_PV_TOTAL_CONSUMPTION,
     ENTITY_KEY_GRID_POWER,
-    ENTITY_KEY_PV1_FORECAST_TODAY,
-    ENTITY_KEY_PV2_FORECAST_TODAY,
-    ENTITY_KEY_PV3_FORECAST_TODAY,
+    ENTITY_KEY_PV_FORECAST_TODAY,
+    ENTITY_KEY_PV_FORECAST_TOMORROW,
+    ENTITY_KEY_BATTERY_NIGHTLY_TARGET,
+    ENTITY_KEY_PV_FORECAST_DAYTIME_TODAY,
+    ENTITY_KEY_PV_FORECAST_DAYTIME_TOMORROW,
+    ENTITY_KEY_PV_HISTORY_PERIOD_DAYS,
     SEGMENT_EV_CHARGING,
     SEGMENT_POOL,
     SEGMENT_PV_SURPLUS,
@@ -53,9 +56,24 @@ _SOLAR_PV_PLANT_FIELDS = [
     (ENTITY_KEY_PV_DIRECT_CONSUMPTION, "W", True),
     (ENTITY_KEY_PV_TOTAL_CONSUMPTION, "kWh", True),
     (ENTITY_KEY_GRID_POWER, "W", True),
-    (ENTITY_KEY_PV1_FORECAST_TODAY, "kWh", True),
-    (ENTITY_KEY_PV2_FORECAST_TODAY, "kWh", False),
-    (ENTITY_KEY_PV3_FORECAST_TODAY, "kWh", False),
+    (ENTITY_KEY_PV_FORECAST_TODAY, "kWh", True),
+    (ENTITY_KEY_PV_FORECAST_TOMORROW, "kWh", True),
+    # Diagnostic values -- optional, since they depend on automations not
+    # every install runs (see sensor.py's PwM_PV_MIRROR_SENSORS comment).
+    (ENTITY_KEY_BATTERY_NIGHTLY_TARGET, "%", False),
+    (ENTITY_KEY_PV_FORECAST_DAYTIME_TODAY, "kWh", False),
+    (ENTITY_KEY_PV_FORECAST_DAYTIME_TOMORROW, "kWh", False),
+]
+
+# Fields on the same page that pick a `select` entity rather than a
+# `sensor` -- these need _select_entity_picker (domain-only filter), not
+# _entity_picker (which filters by unit_of_measurement, meaningless for a
+# select). Currently just the history-period selector: nothing consumes it
+# yet (the consumption-averages calculation engine that will read it is a
+# later release), but it's wired into Options now so it's ready when that
+# lands. Each tuple is (entity_map_key, required).
+_SOLAR_PV_PLANT_SELECT_FIELDS = [
+    (ENTITY_KEY_PV_HISTORY_PERIOD_DAYS, False),
 ]
 
 LOGGER = logging.getLogger(__name__)
@@ -95,6 +113,31 @@ def _entity_picker(hass, unit: str) -> selector.EntitySelector:
     return selector.EntitySelector(
         selector.EntitySelectorConfig(
             include_entities=_entity_ids_by_unit(hass, unit),
+        )
+    )
+
+
+def _entity_ids_by_domain(hass, domain: str) -> list[str]:
+    """List entity_ids in the given domain, excluding PwMngt's own.
+
+    Sibling to _entity_ids_by_unit, for entities that don't carry a
+    meaningful unit_of_measurement to filter on (e.g. `select` entities).
+    """
+    registry = er.async_get(hass)
+    entity_ids = []
+    for state in hass.states.async_all(domain):
+        entry = registry.async_get(state.entity_id)
+        if entry is not None and entry.platform == DOMAIN:
+            continue
+        entity_ids.append(state.entity_id)
+    return sorted(entity_ids)
+
+
+def _select_entity_picker(hass) -> selector.EntitySelector:
+    """Build an entity picker restricted to `select` domain entities."""
+    return selector.EntitySelector(
+        selector.EntitySelectorConfig(
+            include_entities=_entity_ids_by_domain(hass, "select"),
         )
     )
 
@@ -218,9 +261,18 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                 for key, _unit, required in _SOLAR_PV_PLANT_FIELDS
                 if required and not user_input.get(key)
             }
+            errors.update(
+                {
+                    key: "required"
+                    for key, required in _SOLAR_PV_PLANT_SELECT_FIELDS
+                    if required and not user_input.get(key)
+                }
+            )
             if not errors:
                 entity_map = dict(self.config_entry.options.get(CONF_ENTITY_MAP, {}))
                 for key, _unit, _required in _SOLAR_PV_PLANT_FIELDS:
+                    entity_map[key] = user_input.get(key) or None
+                for key, _required in _SOLAR_PV_PLANT_SELECT_FIELDS:
                     entity_map[key] = user_input.get(key) or None
                 self._data[CONF_ENTITY_MAP] = entity_map
                 return await self._advance()
@@ -244,6 +296,13 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                 else vol.Optional(key)
             )
             schema_dict[marker] = _entity_picker(self.hass, unit)
+        for key, _required in _SOLAR_PV_PLANT_SELECT_FIELDS:
+            marker = (
+                vol.Optional(key, default=values[key])
+                if values.get(key)
+                else vol.Optional(key)
+            )
+            schema_dict[marker] = _select_entity_picker(self.hass)
         schema = vol.Schema(schema_dict)
 
         return self.async_show_form(

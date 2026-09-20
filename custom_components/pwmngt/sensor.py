@@ -33,9 +33,11 @@ from .const import (
     ENTITY_KEY_PV_DIRECT_CONSUMPTION,
     ENTITY_KEY_PV_TOTAL_CONSUMPTION,
     ENTITY_KEY_GRID_POWER,
-    ENTITY_KEY_PV1_FORECAST_TODAY,
-    ENTITY_KEY_PV2_FORECAST_TODAY,
-    ENTITY_KEY_PV3_FORECAST_TODAY,
+    ENTITY_KEY_PV_FORECAST_TODAY,
+    ENTITY_KEY_PV_FORECAST_TOMORROW,
+    ENTITY_KEY_BATTERY_NIGHTLY_TARGET,
+    ENTITY_KEY_PV_FORECAST_DAYTIME_TODAY,
+    ENTITY_KEY_PV_FORECAST_DAYTIME_TOMORROW,
 )
 from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
 
@@ -88,6 +90,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     for description, source_entity_id in PwM_HUB_MIRROR_SENSORS:
         entity = PwMngtHubMirrorSensor(description, entry, source_entity_id)
         LOGGER.info("Added hub mirror sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    for description in PwM_CONSUMPTION_DATA_SENSORS:
+        entity = PwMngtConsumptionDataSensor(description, entry)
+        LOGGER.info("Added PV consumption-data sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
     for charger in CHARGERS:
@@ -466,45 +473,76 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
         ),
         ENTITY_KEY_GRID_POWER,
     ),
-    # Old key="forecast_pv1_i_dag" (sensor.forecast_pv1_i_dag), from Node-RED.
+    # Replaces the old per-string pv1/pv2/pv3_forecast_today mirrors --
+    # most installs only have a single, whole-plant forecast entity (e.g.
+    # from a Forecast.Solar-style integration), not one per PV string, so
+    # a single field is what actually matches what people have to map.
     (
         SensorEntityDescription(
-            key="pv1_forecast_today",
-            name="PV1 forecast today",
+            key="pv_forecast_today",
+            name="PV forecast today",
             icon="mdi:weather-sunny",
             device_class=SensorDeviceClass.ENERGY,
             state_class=SensorStateClass.MEASUREMENT,
             native_unit_of_measurement="kWh",
         ),
-        ENTITY_KEY_PV1_FORECAST_TODAY,
+        ENTITY_KEY_PV_FORECAST_TODAY,
     ),
-    # Old key="forecast_pv2_i_dag" (sensor.forecast_pv2_i_dag), from Node-RED.
-    # NOTE: the Node-RED source for this one had no state_class set (unlike
-    # its PV1/PV3 siblings, which both use "measurement") -- almost
-    # certainly just an omission on that node, since it's the same kind of
-    # value. Declared as "measurement" here too for consistency.
     (
         SensorEntityDescription(
-            key="pv2_forecast_today",
-            name="PV2 forecast today",
+            key="pv_forecast_tomorrow",
+            name="PV forecast tomorrow",
             icon="mdi:weather-sunny",
             device_class=SensorDeviceClass.ENERGY,
             state_class=SensorStateClass.MEASUREMENT,
             native_unit_of_measurement="kWh",
         ),
-        ENTITY_KEY_PV2_FORECAST_TODAY,
+        ENTITY_KEY_PV_FORECAST_TOMORROW,
     ),
-    # Old key="forecast_pv3_i_dag" (sensor.forecast_pv3_i_dag), from Node-RED.
+    # Diagnostic sensors -- auxiliary values used by Kasper's own
+    # automations rather than headline PV-plant metrics, so these get
+    # entity_category=DIAGNOSTIC (tucked under "Diagnostic" on the device
+    # page, hidden from the main entity list by default). Optional in the
+    # wizard too -- not every install runs the automations that produce
+    # them.
+    # Old key="batteri target" (sensor.batteri_target), from Node-RED.
     (
         SensorEntityDescription(
-            key="pv3_forecast_today",
-            name="PV3 forecast today",
-            icon="mdi:weather-sunny",
+            key="battery_nightly_target",
+            name="Battery nightly target",
+            icon="mdi:battery-clock-outline",
+            device_class=SensorDeviceClass.BATTERY,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="%",
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+        ENTITY_KEY_BATTERY_NIGHTLY_TARGET,
+    ),
+    # Old key="solproduktion 11_16" (sensor.solproduktion_11_16), from Node-RED.
+    (
+        SensorEntityDescription(
+            key="pv_forecast_daytime_today",
+            name="PV forecast daytime today",
+            icon="mdi:sun-clock-outline",
             device_class=SensorDeviceClass.ENERGY,
             state_class=SensorStateClass.MEASUREMENT,
             native_unit_of_measurement="kWh",
+            entity_category=EntityCategory.DIAGNOSTIC,
         ),
-        ENTITY_KEY_PV3_FORECAST_TODAY,
+        ENTITY_KEY_PV_FORECAST_DAYTIME_TODAY,
+    ),
+    # Old key="solproduktion_imorgen_11_16" (sensor.solproduktion_imorgen_11_16), from Node-RED.
+    (
+        SensorEntityDescription(
+            key="pv_forecast_daytime_tomorrow",
+            name="PV forecast daytime tomorrow",
+            icon="mdi:sun-clock-outline",
+            device_class=SensorDeviceClass.ENERGY,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="kWh",
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+        ENTITY_KEY_PV_FORECAST_DAYTIME_TOMORROW,
     ),
 ]
 
@@ -651,6 +689,71 @@ PwM_HUB_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
         "sensor.stromligning_current_price_vat_2",
     ),
 ]
+
+
+# ---------------------------------------------------------------------------
+# PV-device "consumption data" sensor (read-only, scaffolding only).
+#
+# Ports over Kasper's Node-RED household-consumption-average setup (his
+# "Beregn 8-16 & 6-9 & 17-06" / "Beregn gennemsnitsforbrug 17-21" /
+# "Beregn gennemsnitsforbrug d\u00f8gn" functions): several rolling averages
+# of household consumption over different time-of-day windows, plus the
+# per-category (pool heating / mining / EV charger / heat pump) daytime
+# consumption used to compute the "adjusted" daytime average. Recomputing
+# these natively needs a 30-day rolling history and time-based triggers
+# (kl 16:01/21:01/00:01, plus ENTITY_KEY_PV_HISTORY_PERIOD_DAYS changing)
+# that haven't been built yet -- for now this just bundles all 12 values as
+# attributes on a single diagnostic entity, same scaffolding pattern as
+# PwMngtHubBalanceSensor above. The actual calculation logic lands in a
+# later release.
+# ---------------------------------------------------------------------------
+
+PwM_CONSUMPTION_DATA_ATTRIBUTES: list[str] = [
+    "daytime_average",
+    "daytime_average_adjusted",
+    "early_morning_average",
+    "morning_average",
+    "late_morning_average",
+    "evening_average",
+    "nighttime_average",
+    "full_day_average",
+    "pool_heating_consumption",
+    "mining_consumption",
+    "car_charger_consumption",
+    "heat_pump_consumption",
+]
+
+PwM_CONSUMPTION_DATA_SENSORS: list[SensorEntityDescription] = [
+    SensorEntityDescription(
+        key="consumption_data",
+        name="Consumption data",
+        icon="mdi:chart-timeline-variant",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+]
+
+
+class PwMngtConsumptionDataSensor(SensorEntity):
+    """A scaffolded, read-only PwMngt PV-device sensor bundling the 12
+    consumption-average values above as attributes. No live value yet --
+    see the comment block above PwM_CONSUMPTION_DATA_ATTRIBUTES.
+    """
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+
+    def __init__(
+        self,
+        description: SensorEntityDescription,
+        entry: ConfigEntry,
+    ) -> None:
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
+        self._attr_device_info = pv_device_info(entry)
+        self._attr_native_value = None
+        self._attr_extra_state_attributes = {
+            key: None for key in PwM_CONSUMPTION_DATA_ATTRIBUTES
+        }
 
 
 # Attribute names Home Assistant itself derives from an entity's own

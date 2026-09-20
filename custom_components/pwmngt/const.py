@@ -47,9 +47,20 @@ ENTITY_KEY_PV3_POWER = "pv3_power"
 ENTITY_KEY_PV_DIRECT_CONSUMPTION = "pv_direct_consumption"
 ENTITY_KEY_PV_TOTAL_CONSUMPTION = "pv_total_consumption"
 ENTITY_KEY_GRID_POWER = "grid_power"
-ENTITY_KEY_PV1_FORECAST_TODAY = "pv1_forecast_today"
-ENTITY_KEY_PV2_FORECAST_TODAY = "pv2_forecast_today"
-ENTITY_KEY_PV3_FORECAST_TODAY = "pv3_forecast_today"
+ENTITY_KEY_PV_FORECAST_TODAY = "pv_forecast_today"
+ENTITY_KEY_PV_FORECAST_TOMORROW = "pv_forecast_tomorrow"
+ENTITY_KEY_BATTERY_NIGHTLY_TARGET = "battery_nightly_target"
+ENTITY_KEY_PV_FORECAST_DAYTIME_TODAY = "pv_forecast_daytime_today"
+ENTITY_KEY_PV_FORECAST_DAYTIME_TOMORROW = "pv_forecast_daytime_tomorrow"
+
+# History-period select entity used by the (upcoming) native
+# consumption-averages calculation engine to decide how many days of
+# rolling history to average over. Kasper already has a "select" helper
+# for this in his own HA (select.pwm_pv_history_period_days) -- not a
+# sensor, so it isn't part of _SOLAR_PV_PLANT_FIELDS' unit-based picker,
+# see config_flow.py's _SOLAR_PV_PLANT_SELECT_FIELDS instead. Wired into
+# Options now so it's ready before that engine lands.
+ENTITY_KEY_PV_HISTORY_PERIOD_DAYS = "pv_history_period_days"
 
 # ---------------------------------------------------------------------------
 # Segments: optional areas of PwMngt a given installation may not need.
