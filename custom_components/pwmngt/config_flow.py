@@ -9,6 +9,7 @@ from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
+from homeassistant.data_entry_flow import SectionConfig, section
 from homeassistant.helpers.event import async_call_later
 
 from . import async_setup_entry, async_unload_entry
@@ -34,6 +35,8 @@ from .const import (
     ENTITY_KEY_PV_FORECAST_DAYTIME_TOMORROW,
     ENTITY_KEY_PV_HISTORY_PERIOD_DAYS,
     ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
+    DEPENDENCY_SOLCAST_SOLAR,
+    DEPENDENCY_STROMLIGNING,
     SEGMENT_EV_CHARGING,
     SEGMENT_POOL,
     SEGMENT_PV_SURPLUS,
@@ -83,6 +86,102 @@ _SOLAR_PV_PLANT_FIELDS = [
 _SOLAR_PV_PLANT_SELECT_FIELDS = [
     (ENTITY_KEY_PV_HISTORY_PERIOD_DAYS, False),
 ]
+
+# Index of every Solar PV Plant field (both lists above) by entity_map key,
+# so the section/schema-building code in async_step_solar_pv_plant can look
+# up "is this a sensor field (needs a unit-filtered picker) or a select
+# field (needs the select-domain picker), and is it required" without
+# caring which of the two source lists a given key came from.
+_FIELD_INDEX: dict[str, dict[str, Any]] = {
+    key: {"kind": "entity", "unit": unit, "required": required}
+    for key, unit, required in _SOLAR_PV_PLANT_FIELDS
+}
+_FIELD_INDEX.update(
+    {
+        key: {"kind": "select", "required": required}
+        for key, required in _SOLAR_PV_PLANT_SELECT_FIELDS
+    }
+)
+
+# Visual grouping for the Solar PV Plant page, per Kasper's request --
+# purely cosmetic (see the `section()` usage in async_step_solar_pv_plant),
+# doesn't change the entity_map's shape or any field's required-ness.
+# Each entry is (group_key, collapsed_by_default, [entity_map keys in this
+# group, in display order]). Keep in sync with _SOLAR_PV_PLANT_FIELDS /
+# _SOLAR_PV_PLANT_SELECT_FIELDS above -- every key from both lists must
+# appear in exactly one group here.
+_SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
+    (
+        "core",
+        False,
+        [
+            ENTITY_KEY_BATTERY_SOC,
+            ENTITY_KEY_BATTERY_PV_CHARGED,
+            ENTITY_KEY_BATTERY_PV_DISCHARGED,
+            ENTITY_KEY_BATTERY_POWER,
+            ENTITY_KEY_PV1_POWER,
+            ENTITY_KEY_PV2_POWER,
+            ENTITY_KEY_PV3_POWER,
+            ENTITY_KEY_PV_DIRECT_CONSUMPTION,
+            ENTITY_KEY_PV_TOTAL_CONSUMPTION,
+            ENTITY_KEY_GRID_POWER,
+        ],
+    ),
+    (
+        "solar_forecast",
+        False,
+        [
+            ENTITY_KEY_PV_FORECAST_TODAY,
+            ENTITY_KEY_PV_FORECAST_TOMORROW,
+        ],
+    ),
+    (
+        "diagnostic_and_other",
+        True,
+        [
+            ENTITY_KEY_BATTERY_NIGHTLY_TARGET,
+            ENTITY_KEY_PV_FORECAST_DAYTIME_TODAY,
+            ENTITY_KEY_PV_FORECAST_DAYTIME_TOMORROW,
+            ENTITY_KEY_PV_HISTORY_PERIOD_DAYS,
+            ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
+        ],
+    ),
+]
+
+# Auto-detected default sources: entity_map_key -> (integration domain,
+# translation_key) for a field whose one real-world source always creates
+# it under the same, stable, non-user-facing identifier -- so it can be
+# pre-filled instead of always requiring a manual pick (see
+# _auto_detect_entity_id). translation_key -- not the display name -- is
+# what's matched: it's that source integration's own internal identifier
+# for the entity description, so a renamed entity or a non-English Home
+# Assistant locale (where the shown name wouldn't match at all) doesn't
+# break the match. Both entries verified live against Kasper's own
+# installs: Solcast PV Forecast's sensor.solcast_pv_forecast_forecast_today
+# /_tomorrow carry translation_key "total_kwh_forecast_today"/
+# "total_kwh_forecast_tomorrow"; Stromligning's
+# sensor.stromligning_current_price_vat_2 carries translation_key
+# "current_price_vat".
+_AUTO_DETECT_SOURCES: dict[str, tuple[str, str]] = {
+    ENTITY_KEY_PV_FORECAST_TODAY: (
+        DEPENDENCY_SOLCAST_SOLAR,
+        "total_kwh_forecast_today",
+    ),
+    ENTITY_KEY_PV_FORECAST_TOMORROW: (
+        DEPENDENCY_SOLCAST_SOLAR,
+        "total_kwh_forecast_tomorrow",
+    ),
+    # Verified live against Kasper's real Stromligning install:
+    # sensor.stromligning_current_price_vat_2 carries platform
+    # "stromligning" and translation_key "current_price_vat" -- that's
+    # Stromligning's own internal identifier for "current price incl.
+    # VAT" (Danish name "Aktuel inkl. moms"), stable regardless of which
+    # VAT/product variant the entity_id itself ends up suffixed with.
+    ENTITY_KEY_SPOT_ELECTRICITY_PRICE: (
+        DEPENDENCY_STROMLIGNING,
+        "current_price_vat",
+    ),
+}
 
 LOGGER = logging.getLogger(__name__)
 
@@ -148,6 +247,29 @@ def _select_entity_picker(hass) -> selector.EntitySelector:
             include_entities=_entity_ids_by_domain(hass, "select"),
         )
     )
+
+
+def _auto_detect_entity_id(hass, platform: str, translation_key: str) -> str | None:
+    """Find the single entity_id from a given integration whose
+    translation_key matches, so a field with a predictable source (see
+    _AUTO_DETECT_SOURCES) can be pre-filled instead of always requiring a
+    manual pick.
+
+    Deliberately conservative: returns None (no guess) unless exactly one
+    match exists. Home Assistant allows installing the same integration
+    more than once (e.g. two Solcast PV Forecast entries for two
+    rooftops), which would produce two identically-keyed entities --
+    guessing one of those could silently wire PwMngt up to the wrong
+    site, so an ambiguous match is treated the same as no match at all and
+    left for the user to pick by hand, same as if nothing were installed.
+    """
+    registry = er.async_get(hass)
+    matches = [
+        entry.entity_id
+        for entry in registry.entities.values()
+        if entry.platform == platform and entry.translation_key == translation_key
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 class PwMngtOptionsFlow(config_entries.OptionsFlow):
@@ -286,6 +408,23 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         so a field like pv2_power can be skipped (not everyone has a second
         PV string) while e.g. battery_soc still can't be.
 
+        A few fields (PV forecast today/tomorrow, and spot electricity
+        price) get pre-filled automatically the first time this page is
+        shown, if their one known real-world source integration is
+        installed and unambiguous -- see _AUTO_DETECT_SOURCES. That's just
+        the default shown; the user can still pick something else, and an
+        existing pick is never overwritten by a fresh auto-detect.
+
+        The page's fields are visually split into three collapsible
+        sections (see _SOLAR_PV_PLANT_GROUPS) using Home Assistant's
+        `section()` form helper -- purely a display grouping, it doesn't
+        change what gets saved into the entity map at all. Home Assistant
+        hands each section's picks back as its own nested dict under the
+        group's key, so they're flattened back into one flat dict right at
+        the top of the submit-handling below before anything else (error
+        checking, entity_map writes) runs, same as if sections didn't
+        exist.
+
         Known limitation: this covers a field that was never touched. If a
         field already holds a value (so it does get a `default=`) and the
         user actively clears it via the picker's own "x", Home Assistant's
@@ -300,26 +439,62 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         errors: dict[str, str] = {}
         values = dict(self.config_entry.options.get(CONF_ENTITY_MAP, {}))
 
+        # Pre-fill a field the user hasn't picked yet if its one known
+        # real-world source is installed and unambiguous (see
+        # _AUTO_DETECT_SOURCES) -- never overrides an existing pick. Runs
+        # every time this step is reached (including on submit, where it's
+        # immediately superseded by the actually-submitted value below),
+        # so a source integration that shows up later gets picked up next
+        # time Options is opened, without anything to trigger by hand.
+        for key, (platform, translation_key) in _AUTO_DETECT_SOURCES.items():
+            if not values.get(key):
+                detected = _auto_detect_entity_id(self.hass, platform, translation_key)
+                if detected:
+                    values[key] = detected
+
         if user_input is not None:
-            values.update(user_input)
+            # Each section comes back as its own nested dict keyed by the
+            # group's own key (see _SOLAR_PV_PLANT_GROUPS / schema-building
+            # below) -- flatten before any of the existing flat-key logic
+            # runs, so nothing past this point needs to know sections
+            # exist at all.
+            flat_input: dict[str, Any] = {}
+            for group_key, _collapsed, _field_keys in _SOLAR_PV_PLANT_GROUPS:
+                flat_input.update(user_input.get(group_key) or {})
+
+            values.update(flat_input)
             errors = {
                 key: "required"
                 for key, _unit, required in _SOLAR_PV_PLANT_FIELDS
-                if required and not user_input.get(key)
+                if required and not flat_input.get(key)
             }
             errors.update(
                 {
                     key: "required"
                     for key, required in _SOLAR_PV_PLANT_SELECT_FIELDS
-                    if required and not user_input.get(key)
+                    if required and not flat_input.get(key)
                 }
             )
-            if not errors:
+            if errors:
+                # Home Assistant's frontend doesn't forward per-field
+                # errors down into a section's own nested form (verified
+                # against the frontend's ha-form-expandable component), so
+                # a field-specific error above never actually renders next
+                # to that field once it's inside a section -- and every
+                # field here now is. "base" is the one error key that
+                # always renders (as a banner at the top of the page), so
+                # it's set too whenever anything's missing -- the only
+                # visible signal the user actually gets. None of the
+                # fields in the collapsed section are required (see
+                # _SOLAR_PV_PLANT_GROUPS), so a required field is always at
+                # least somewhere already-expanded on screen.
+                errors["base"] = "required_in_section"
+            else:
                 entity_map = dict(self.config_entry.options.get(CONF_ENTITY_MAP, {}))
                 for key, _unit, _required in _SOLAR_PV_PLANT_FIELDS:
-                    entity_map[key] = user_input.get(key) or None
+                    entity_map[key] = flat_input.get(key) or None
                 for key, _required in _SOLAR_PV_PLANT_SELECT_FIELDS:
-                    entity_map[key] = user_input.get(key) or None
+                    entity_map[key] = flat_input.get(key) or None
                 self._data[CONF_ENTITY_MAP] = entity_map
                 self._save_progress()
                 return await self._advance()
@@ -335,21 +510,25 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         # key out of the submitted data entirely when the user never
         # touches it, so voluptuous never runs the selector's validator on
         # it at all -- which is what actually makes a field skippable.
+        # Verified this still holds for a field nested inside a section --
+        # the frontend applies the same default-or-omit logic recursively.
         schema_dict: dict[Any, Any] = {}
-        for key, unit, _required in _SOLAR_PV_PLANT_FIELDS:
-            marker = (
-                vol.Optional(key, default=values[key])
-                if values.get(key)
-                else vol.Optional(key)
+        for group_key, collapsed, field_keys in _SOLAR_PV_PLANT_GROUPS:
+            group_schema_dict: dict[Any, Any] = {}
+            for key in field_keys:
+                field = _FIELD_INDEX[key]
+                marker = (
+                    vol.Optional(key, default=values[key])
+                    if values.get(key)
+                    else vol.Optional(key)
+                )
+                if field["kind"] == "entity":
+                    group_schema_dict[marker] = _entity_picker(self.hass, field["unit"])
+                else:
+                    group_schema_dict[marker] = _select_entity_picker(self.hass)
+            schema_dict[vol.Required(group_key)] = section(
+                vol.Schema(group_schema_dict), SectionConfig(collapsed=collapsed)
             )
-            schema_dict[marker] = _entity_picker(self.hass, unit)
-        for key, _required in _SOLAR_PV_PLANT_SELECT_FIELDS:
-            marker = (
-                vol.Optional(key, default=values[key])
-                if values.get(key)
-                else vol.Optional(key)
-            )
-            schema_dict[marker] = _select_entity_picker(self.hass)
         schema = vol.Schema(schema_dict)
 
         return self.async_show_form(
