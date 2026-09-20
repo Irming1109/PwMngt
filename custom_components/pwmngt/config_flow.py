@@ -190,12 +190,23 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         for. More fields land here as PwMngt's entity map grows (see
         ENTITY_KEY_* in const.py).
 
-        The picker itself (see _entity_picker) always allows a field to be
-        left blank -- that's just Home Assistant's native entity selector
-        behaviour. Whether blank is actually *allowed* for a given field is
+        A field can be left untouched/blank -- see the schema-building
+        comment below for why that only works when it has no `default=` at
+        all. Whether blank is actually *allowed* for a given field is
         enforced here instead, per _SOLAR_PV_PLANT_FIELDS' "required" flag,
         so a field like pv2_power can be skipped (not everyone has a second
         PV string) while e.g. battery_soc still can't be.
+
+        Known limitation: this covers a field that was never touched. If a
+        field already holds a value (so it does get a `default=`) and the
+        user actively clears it via the picker's own "x", Home Assistant's
+        EntitySelector still rejects the resulting "" at the schema-
+        validation layer, before this function even runs -- same
+        underlying issue, just for the "clear an existing pick" path
+        rather than the "never picked anything" path this fixes. Not yet
+        hit in practice (PV2/PV3 are the only optional fields, and nobody
+        without a second/third string would have set one to begin with),
+        so left as a follow-up rather than guessed at now.
         """
         errors: dict[str, str] = {}
         values = dict(self.config_entry.options.get(CONF_ENTITY_MAP, {}))
@@ -214,14 +225,26 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                 self._data[CONF_ENTITY_MAP] = entity_map
                 return await self._advance()
 
-        schema = vol.Schema(
-            {
-                vol.Optional(
-                    key, default=values.get(key) or ""
-                ): _entity_picker(self.hass, unit)
-                for key, unit, _required in _SOLAR_PV_PLANT_FIELDS
-            }
-        )
+        # No `default=` at all when there's no value yet -- NOT default=""
+        # or default=None. Home Assistant's EntitySelector validates
+        # whatever value actually gets submitted (cv.entity_id_or_uuid),
+        # and it rejects "" outright ("Entity  is neither a valid entity ID
+        # nor a valid UUID") -- there's no such thing as a "blank but
+        # valid" entity value as far as that selector is concerned. A
+        # `vol.Optional(key)` with no default is different: Home
+        # Assistant's frontend (compute-initial-ha-form-data.ts) leaves the
+        # key out of the submitted data entirely when the user never
+        # touches it, so voluptuous never runs the selector's validator on
+        # it at all -- which is what actually makes a field skippable.
+        schema_dict: dict[Any, Any] = {}
+        for key, unit, _required in _SOLAR_PV_PLANT_FIELDS:
+            marker = (
+                vol.Optional(key, default=values[key])
+                if values.get(key)
+                else vol.Optional(key)
+            )
+            schema_dict[marker] = _entity_picker(self.hass, unit)
+        schema = vol.Schema(schema_dict)
 
         return self.async_show_form(
             step_id="solar_pv_plant", data_schema=schema, errors=errors
