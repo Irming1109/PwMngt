@@ -653,11 +653,34 @@ PwM_HUB_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 ]
 
 
+# Attribute names Home Assistant itself derives from an entity's own
+# properties (icon, unit_of_measurement, device_class, etc. -- set via
+# each mirror's own SensorEntityDescription) rather than from
+# extra_state_attributes. They still show up in a source entity's
+# state.attributes dict, so they have to be filtered back out when
+# copying "everything else" from the source -- otherwise the source's
+# friendly_name/icon/unit would leak in and clash with the mirror's own.
+_MIRROR_SKIP_ATTRIBUTES = {
+    "assumed_state",
+    "attribution",
+    "device_class",
+    "entity_picture",
+    "friendly_name",
+    "icon",
+    "state_class",
+    "supported_features",
+    "unit_of_measurement",
+}
+
+
 class _PwMngtMirrorSensor(SensorEntity):
     """Shared base for PwMngt sensors that live-mirror another entity's
-    state 1:1. A subclass sets self._source_entity_id in __init__ (None if
-    there's nothing to mirror yet) before this class's async_added_to_hass
-    runs.
+    state 1:1 -- including its extra attributes (e.g. an inverter's own
+    diagnostic attributes on a power sensor), minus the handful of
+    "standard" ones each mirror already defines itself (see
+    _MIRROR_SKIP_ATTRIBUTES). A subclass sets self._source_entity_id in
+    __init__ (None if there's nothing to mirror yet) before this class's
+    async_added_to_hass runs.
     """
 
     _attr_has_entity_name = True
@@ -683,16 +706,23 @@ class _PwMngtMirrorSensor(SensorEntity):
 
     @callback
     def _apply_source_state(self, source_state) -> None:
-        """Copy the source entity's state onto this entity."""
+        """Copy the source entity's state and extra attributes onto this
+        entity."""
         if source_state is None or source_state.state in ("unknown", "unavailable"):
             self._attr_native_value = None
             self._attr_available = source_state is not None
+            self._attr_extra_state_attributes = {}
         else:
             try:
                 self._attr_native_value = float(source_state.state)
             except ValueError:
                 self._attr_native_value = source_state.state
             self._attr_available = True
+            self._attr_extra_state_attributes = {
+                key: value
+                for key, value in source_state.attributes.items()
+                if key not in _MIRROR_SKIP_ATTRIBUTES
+            }
         self.async_write_ha_state()
 
 
