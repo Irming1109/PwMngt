@@ -42,8 +42,7 @@
               "pv3_power": "PV3 power (optional)",
               "pv_direct_consumption": "PV direct consumption",
               "pv_total_consumption": "PV total consumption",
-              "grid_power": "Grid",
-              "forced_charge": "Forced charge toggle (optional)"
+              "grid_power": "Grid"
             },
             "data_description": {
               "battery_soc": "The entity that reports your home battery's state of charge (%), e.g. your inverter's battery SoC sensor. Only \"%\"-unit sensors are listed.",
@@ -55,8 +54,7 @@
               "pv3_power": "The entity that reports PV string 3's current power output (W). Only \"W\"-unit sensors are listed. Optional -- leave empty if you don't have a third PV string.",
               "pv_direct_consumption": "The entity that reports power currently consumed directly from PV production (W), without going through the battery. Only \"W\"-unit sensors are listed.",
               "pv_total_consumption": "The entity that reports total cumulative PV consumption (kWh). Only \"kWh\"-unit sensors are listed.",
-              "grid_power": "The entity that reports current power flow to/from the grid (W). Only \"W\"-unit sensors are listed.",
-              "forced_charge": "An input_boolean or switch you turn on to force-charge the battery from the grid. When on, Power balance skips battery power in its calculation. Only input_boolean/switch entities are listed. Optional -- leave empty if you don't have this."
+              "grid_power": "The entity that reports current power flow to/from the grid (W). Only \"W\"-unit sensors are listed."
             }
           },
           "solar_forecast": {
@@ -94,7 +92,6 @@
           "pv_direct_consumption": "PV direct consumption",
           "pv_total_consumption": "PV total consumption",
           "grid_power": "Grid",
-          "forced_charge": "Forced charge toggle (optional)",
           "pv_forecast_today": "PV forecast today",
           "pv_forecast_tomorrow": "PV forecast tomorrow",
           "spot_electricity_price": "Spot electricity price"
@@ -110,7 +107,6 @@
           "pv_direct_consumption": "The entity that reports power currently consumed directly from PV production (W), without going through the battery. Only \"W\"-unit sensors are listed.",
           "pv_total_consumption": "The entity that reports total cumulative PV consumption (kWh). Only \"kWh\"-unit sensors are listed.",
           "grid_power": "The entity that reports current power flow to/from the grid (W). Only \"W\"-unit sensors are listed.",
-          "forced_charge": "An input_boolean or switch you turn on to force-charge the battery from the grid. When on, Power balance skips battery power in its calculation. Only input_boolean/switch entities are listed. Optional -- leave empty if you don't have this.",
           "pv_forecast_today": "The entity that reports today's forecasted PV production for the whole plant (kWh), e.g. from a solar forecast integration. Only \"kWh\"-unit sensors are listed. Pre-filled automatically if Solcast PV Forecast is installed and unambiguous -- pick a different entity if you don't want that.",
           "pv_forecast_tomorrow": "The entity that reports tomorrow's forecasted PV production for the whole plant (kWh), e.g. from a solar forecast integration. Only \"kWh\"-unit sensors are listed. Pre-filled automatically if Solcast PV Forecast is installed and unambiguous -- pick a different entity if you don't want that.",
           "spot_electricity_price": "The entity that reports the current spot electricity price (kr/kWh), e.g. from the Strømligning integration. Only \"kr/kWh\"-unit sensors are listed."

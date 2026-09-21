@@ -13,6 +13,7 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, EntityCategory
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import (
     async_track_state_change_event,
@@ -41,7 +42,6 @@ from .const import (
     ENTITY_KEY_PV_FORECAST_TODAY,
     ENTITY_KEY_PV_FORECAST_TOMORROW,
     ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
-    ENTITY_KEY_FORCED_CHARGE,
 )
 from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
 
@@ -296,9 +296,11 @@ class PwMngtChargerSensor(SensorEntity):
 #   -> attribute "balance_15_min_corrected_with_chargers"
 # Old key="balance_30_min" (sensor.balance_30_min) -> attribute "balance_30_min"
 #
-# "_corrected"/"_corrected_with_chargers" are placeholders equal to
-# "balance_15_min" for now -- mining and EV-charger correction aren't
-# wired up yet (PwM_CHARGER_SENSORS' Power is still scaffolding).
+# "_corrected" is a placeholder equal to "balance_15_min" for now --
+# mining correction isn't implemented yet. "_corrected_with_chargers" is
+# genuinely computed from PwM Charger1/2's Power sensors, but reads the
+# same as "balance_15_min" in practice until those sensors have live
+# values (still scaffolding -- see PwM_CHARGER_SENSORS).
 PwM_BALANCE_DATA_ATTRIBUTES: list[str] = [
     "balance_30_sec",
     "balance_1_min",
@@ -336,10 +338,14 @@ class PwMngtBalanceDataSensor(SensorEntity):
     """A PwM hub sensor bundling the 7 balance values above as attributes.
 
     Every 10 seconds, samples Grid power plus Battery power (skipped
-    while the optional forced-charge toggle is on) into a rolling
+    while the Forced charge placeholder sensor -- see
+    PwM_PV_PLACEHOLDER_SENSORS -- reports "on") into a rolling
     180-sample (30-minute) window, then averages the window's most recent
     N samples for each attribute in PwM_BALANCE_DATA_ATTRIBUTES and negates
-    it, so a positive balance means surplus power. Each average divides by
+    it, so a positive balance means surplus power. balance_15_min_corrected_
+    with_chargers adds back the last 15 minutes' average combined charger
+    power (PwM Charger1/2's Power sensors), so it reads what the balance
+    would be without the EV chargers' own draw. Each average divides by
     its full window size even before 180 samples have accumulated (e.g.
     fresh after a Home Assistant restart), so early readings are pulled
     toward zero until the window fills up -- same behavior as the
@@ -363,13 +369,25 @@ class PwMngtBalanceDataSensor(SensorEntity):
             key: None for key in PwM_BALANCE_DATA_ATTRIBUTES
         }
         self._samples: deque[float] = deque(maxlen=180)
+        self._charger_samples: deque[float] = deque(maxlen=180)
+        # PwM Charger1/2's own Power sensors, resolved by unique_id (see
+        # _read_charger_power_total) since they're not entity_map fields
+        # either. Missing/not-yet-live chargers contribute 0.
+        self._charger_unique_ids = [
+            f"{entry.entry_id}_{charger['id']}_power" for charger in CHARGERS
+        ]
+        self._charger_entity_ids: list[str | None] = [None] * len(
+            self._charger_unique_ids
+        )
 
         entity_map = entry.options.get(CONF_ENTITY_MAP, {})
         self._grid_entity_id = entity_map.get(ENTITY_KEY_GRID_POWER) or None
         self._battery_entity_id = entity_map.get(ENTITY_KEY_BATTERY_POWER) or None
-        self._forced_charge_entity_id = (
-            entity_map.get(ENTITY_KEY_FORCED_CHARGE) or None
-        )
+        # Not an entity_map field -- PwMngt's own Forced charge placeholder
+        # sensor (see PwM_PV_PLACEHOLDER_SENSORS), resolved by unique_id
+        # since its entity_id isn't predictable ahead of registration.
+        self._forced_charge_unique_id = f"{entry.entry_id}_pv_forced_charge"
+        self._forced_charge_entity_id: str | None = None
 
         if not self._grid_entity_id or not self._battery_entity_id:
             LOGGER.warning(
@@ -407,22 +425,55 @@ class PwMngtBalanceDataSensor(SensorEntity):
         if not self._is_forced_charging():
             status += battery_power
         self._samples.append(status)
+        self._charger_samples.append(self._read_charger_power_total())
 
         recent = list(self._samples)
+        charger_recent = list(self._charger_samples)
         values = {
             key: round(-(sum(recent[-window:]) / window))
             for key, window in _BALANCE_WINDOW_SAMPLES.items()
         }
         values["balance_15_min_corrected"] = values["balance_15_min"]
-        values["balance_15_min_corrected_with_chargers"] = values["balance_15_min"]
+        kor_bil_window = _BALANCE_WINDOW_SAMPLES["balance_15_min"]
+        combined = sum(recent[-kor_bil_window:]) - sum(charger_recent[-kor_bil_window:])
+        values["balance_15_min_corrected_with_chargers"] = round(
+            -(combined / kor_bil_window)
+        )
 
         self._attr_native_value = values["balance_30_sec"]
         self._attr_extra_state_attributes = values
         self._attr_available = True
         self.async_write_ha_state()
 
+    def _read_charger_power_total(self) -> float:
+        """Sum of all configured chargers' current Power reading.
+
+        Resolved lazily by unique_id, since PwM Charger1/2's entity_ids
+        aren't predictable ahead of registration. A charger with no live
+        reading yet (still scaffolding -- see PwM_CHARGER_SENSORS)
+        contributes 0 rather than blocking the whole calculation.
+        """
+        registry = er.async_get(self.hass)
+        total = 0.0
+        for index, unique_id in enumerate(self._charger_unique_ids):
+            entity_id = self._charger_entity_ids[index]
+            if not entity_id:
+                entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
+                self._charger_entity_ids[index] = entity_id
+            if not entity_id:
+                continue
+            total += self._read_float(entity_id) or 0.0
+        return total
+
     def _is_forced_charging(self) -> bool:
-        """Whether the optional forced-charge toggle is currently on."""
+        """Whether PwMngt's own Forced charge placeholder currently
+        reports "on". Always False until the logic that sets it (see
+        PwM_PV_PLACEHOLDER_SENSORS) is built.
+        """
+        if not self._forced_charge_entity_id:
+            self._forced_charge_entity_id = er.async_get(
+                self.hass
+            ).async_get_entity_id("sensor", DOMAIN, self._forced_charge_unique_id)
         if not self._forced_charge_entity_id:
             return False
         state = self.hass.states.get(self._forced_charge_entity_id)
@@ -635,6 +686,18 @@ PwM_PV_PLACEHOLDER_SENSORS: list[SensorEntityDescription] = [
         device_class=SensorDeviceClass.ENERGY,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement="kWh",
+        entity_category=EntityCategory.DIAGNOSTIC,
+    ),
+    # Old key="tvangslad_batteri" (input_boolean.tvangslad_batteri), from
+    # Node-RED. Not user-mapped -- PwMngt will set this itself once the
+    # battery forced-charge logic is built. PwMngtBalanceDataSensor reads
+    # it to decide whether to skip Battery power in its calculation.
+    SensorEntityDescription(
+        key="forced_charge",
+        name="Forced charge",
+        icon="mdi:battery-lock",
+        device_class=SensorDeviceClass.ENUM,
+        options=["on", "off"],
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
 ]

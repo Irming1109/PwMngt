@@ -61,12 +61,6 @@ ENTITY_KEY_PV_FORECAST_TOMORROW = "pv_forecast_tomorrow"
 # though the sensor itself lives on the Hub device.
 ENTITY_KEY_SPOT_ELECTRICITY_PRICE = "spot_electricity_price"
 
-# Optional forced-charge toggle (input_boolean/switch), e.g. "tvangslad".
-# When on, PwMngtHubBalanceSensor's calculation skips Battery power, so a
-# deliberate forced charge doesn't skew the balance reading. Without it,
-# Battery power always counts.
-ENTITY_KEY_FORCED_CHARGE = "forced_charge"
-
 # ---------------------------------------------------------------------------
 # Segments: optional areas of PwMngt a given installation may not need.
 # "Power Management" itself isn't in this list -- it's mandatory and always

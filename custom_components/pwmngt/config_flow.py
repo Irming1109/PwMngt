@@ -31,7 +31,6 @@ from .const import (
     ENTITY_KEY_PV_FORECAST_TODAY,
     ENTITY_KEY_PV_FORECAST_TOMORROW,
     ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
-    ENTITY_KEY_FORCED_CHARGE,
     DEPENDENCY_SOLCAST_SOLAR,
     DEPENDENCY_STROMLIGNING,
     SEGMENT_EV_CHARGING,
@@ -66,24 +65,6 @@ _FIELD_UNIT_BY_KEY: dict[str, str] = {
     key: unit for key, unit, _required in _SOLAR_PV_PLANT_FIELDS
 }
 
-# Non-numeric Solar PV Plant fields (page 2): (entity_map key, allowed
-# entity domains, required). Picked with an EntitySelector filtered by
-# domain instead of unit -- see _toggle_entity_picker.
-_SOLAR_PV_PLANT_TOGGLE_FIELDS: list[tuple[str, list[str], bool]] = [
-    (ENTITY_KEY_FORCED_CHARGE, ["input_boolean", "switch"], False),
-]
-
-# Required-ness for every Solar PV Plant field, numeric and toggle alike.
-_FIELD_REQUIRED_BY_KEY: dict[str, bool] = {
-    **{key: required for key, _unit, required in _SOLAR_PV_PLANT_FIELDS},
-    **{key: required for key, _domains, required in _SOLAR_PV_PLANT_TOGGLE_FIELDS},
-}
-
-# Allowed entity domains for each toggle field above, by entity_map key.
-_FIELD_DOMAINS_BY_KEY: dict[str, list[str]] = {
-    key: domains for key, domains, _required in _SOLAR_PV_PLANT_TOGGLE_FIELDS
-}
-
 # Visual grouping for the Solar PV Plant page -- cosmetic only (see
 # `section()` in async_step_solar_pv_plant), doesn't change the entity
 # map's shape or any field's required-ness. Each entry is (group_key,
@@ -104,7 +85,6 @@ _SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
             ENTITY_KEY_PV_DIRECT_CONSUMPTION,
             ENTITY_KEY_PV_TOTAL_CONSUMPTION,
             ENTITY_KEY_GRID_POWER,
-            ENTITY_KEY_FORCED_CHARGE,
         ],
     ),
     (
@@ -177,30 +157,6 @@ def _entity_picker(hass, unit: str) -> selector.EntitySelector:
     return selector.EntitySelector(
         selector.EntitySelectorConfig(
             include_entities=_entity_ids_by_unit(hass, unit),
-        )
-    )
-
-
-def _entity_ids_by_domain(hass, domains: list[str]) -> list[str]:
-    """Entity_ids from any of the given domains, excluding PwMngt's own."""
-    registry = er.async_get(hass)
-    entity_ids = []
-    for domain in domains:
-        for state in hass.states.async_all(domain):
-            entry = registry.async_get(state.entity_id)
-            if entry is not None and entry.platform == DOMAIN:
-                continue
-            entity_ids.append(state.entity_id)
-    return sorted(entity_ids)
-
-
-def _toggle_entity_picker(hass, domains: list[str]) -> selector.EntitySelector:
-    """Entity picker restricted to the given domains (e.g. input_boolean,
-    switch), for a non-numeric on/off field.
-    """
-    return selector.EntitySelector(
-        selector.EntitySelectorConfig(
-            include_entities=_entity_ids_by_domain(hass, domains),
         )
     )
 
@@ -337,9 +293,8 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         Known limitation: a field that already holds a value and gets
         cleared via the picker's own "x" makes Home Assistant's
         EntitySelector reject the resulting "" before this function even
-        runs. Not yet hit in practice (PV2/PV3 and Forced charge toggle
-        are the only optional fields, and nobody without a second/third
-        string, or without a forced-charge automation, would have set
+        runs. Not yet hit in practice (PV2/PV3 are the only optional
+        fields, and nobody without a second/third string would have set
         one).
         """
         errors: dict[str, str] = {}
@@ -363,7 +318,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             values.update(flat_input)
             errors = {
                 key: "required"
-                for key, required in _FIELD_REQUIRED_BY_KEY.items()
+                for key, _unit, required in _SOLAR_PV_PLANT_FIELDS
                 if required and not flat_input.get(key)
             }
             if errors:
@@ -375,7 +330,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                 errors["base"] = "required_in_section"
             else:
                 entity_map = dict(self.config_entry.options.get(CONF_ENTITY_MAP, {}))
-                for key in _FIELD_REQUIRED_BY_KEY:
+                for key, _unit, _required in _SOLAR_PV_PLANT_FIELDS:
                     entity_map[key] = flat_input.get(key) or None
                 self._data[CONF_ENTITY_MAP] = entity_map
                 self._save_progress()
@@ -395,11 +350,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                     if values.get(key)
                     else vol.Optional(key)
                 )
-                if key in _FIELD_UNIT_BY_KEY:
-                    picker = _entity_picker(self.hass, _FIELD_UNIT_BY_KEY[key])
-                else:
-                    picker = _toggle_entity_picker(self.hass, _FIELD_DOMAINS_BY_KEY[key])
-                group_schema_dict[marker] = picker
+                group_schema_dict[marker] = _entity_picker(self.hass, _FIELD_UNIT_BY_KEY[key])
             schema_dict[vol.Required(group_key)] = section(
                 vol.Schema(group_schema_dict), SectionConfig(collapsed=collapsed)
             )
