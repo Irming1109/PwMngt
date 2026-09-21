@@ -1,4 +1,6 @@
 import logging
+from collections import deque
+from datetime import timedelta
 from typing import Callable
 
 from homeassistant.components.sensor import (
@@ -12,7 +14,10 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_track_state_change_event,
+    async_track_time_interval,
+)
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 from homeassistant.util import slugify as util_slugify
@@ -36,6 +41,7 @@ from .const import (
     ENTITY_KEY_PV_FORECAST_TODAY,
     ENTITY_KEY_PV_FORECAST_TOMORROW,
     ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
+    ENTITY_KEY_FORCED_CHARGE,
 )
 from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
 
@@ -60,9 +66,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         LOGGER.info("Added sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
-    for description in PwM_HUB_SENSORS:
-        entity = PwMngtHubBalanceSensor(description, entry)
-        LOGGER.info("Added hub sensor with entity_id '%s'", entity.entity_id)
+    for description in PwM_BALANCE_DATA_SENSORS:
+        entity = PwMngtBalanceDataSensor(description, entry)
+        LOGGER.info("Added balance-data sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
     for description, entity_map_key in PwM_PV_MIRROR_SENSORS:
@@ -269,10 +275,15 @@ class PwMngtChargerSensor(SensorEntity):
 
 
 # ---------------------------------------------------------------------------
-# Hub-level "power balance" sensor (read-only, scaffolding only). Bundles
-# 7 net-power-balance values (averaged/corrected over different windows)
-# as attributes on a single entity rather than 7 separate sensors -- none
-# need their own History/Statistics graph, they're read programmatically.
+# Hub-level "power balance" sensor. Bundles 7 net-power-balance values
+# (averaged over different windows) as attributes on a single entity
+# rather than 7 separate sensors -- none need their own History/Statistics
+# graph, they're read programmatically.
+#
+# Naming convention: a "*_data" key/name marks a sensor whose value is
+# maintained by an ongoing internal trigger (here, a 10-second timer)
+# rather than mirroring one external entity. PwM_CONSUMPTION_DATA_SENSORS
+# further down follows the same convention.
 #
 # Old key="balance_30_sek" (sensor.balance_30_sek) -> attribute "balance_30_sec"
 # Old key="balance_1_min" (sensor.balance_1_min) -> attribute "balance_1_min"
@@ -285,8 +296,10 @@ class PwMngtChargerSensor(SensorEntity):
 #   -> attribute "balance_15_min_corrected_with_chargers"
 # Old key="balance_30_min" (sensor.balance_30_min) -> attribute "balance_30_min"
 #
-# No value_fn wired up yet -- state and every attribute report None.
-PwM_HUB_BALANCE_ATTRIBUTES: list[str] = [
+# "_corrected"/"_corrected_with_chargers" are placeholders equal to
+# "balance_15_min" for now -- mining and EV-charger correction aren't
+# wired up yet (PwM_CHARGER_SENSORS' Power is still scaffolding).
+PwM_BALANCE_DATA_ATTRIBUTES: list[str] = [
     "balance_30_sec",
     "balance_1_min",
     "balance_5_min",
@@ -296,21 +309,41 @@ PwM_HUB_BALANCE_ATTRIBUTES: list[str] = [
     "balance_30_min",
 ]
 
-PwM_HUB_SENSORS: list[SensorEntityDescription] = [
+PwM_BALANCE_DATA_SENSORS: list[SensorEntityDescription] = [
     SensorEntityDescription(
-        key="power_balance",
-        name="Power balance",
+        key="balance_data",
+        name="Balance data",
         icon="mdi:scale-balance",
         device_class=SensorDeviceClass.POWER,
         native_unit_of_measurement="W",
     ),
 ]
 
+# How often PwMngtBalanceDataSensor samples Grid+Battery power, and how many
+# of those samples each rolling window covers (10 s/sample, so 3 = 30 sec,
+# 180 = 30 min).
+_BALANCE_SAMPLE_INTERVAL = timedelta(seconds=10)
+_BALANCE_WINDOW_SAMPLES: dict[str, int] = {
+    "balance_30_sec": 3,
+    "balance_1_min": 6,
+    "balance_5_min": 30,
+    "balance_15_min": 90,
+    "balance_30_min": 180,
+}
 
-class PwMngtHubBalanceSensor(SensorEntity):
-    """A scaffolded, read-only PwMngt hub sensor bundling the 7 balance
-    values above as attributes. No live value yet -- see the comment block
-    above PwM_HUB_BALANCE_ATTRIBUTES.
+
+class PwMngtBalanceDataSensor(SensorEntity):
+    """A PwM hub sensor bundling the 7 balance values above as attributes.
+
+    Every 10 seconds, samples Grid power plus Battery power (skipped
+    while the optional forced-charge toggle is on) into a rolling
+    180-sample (30-minute) window, then averages the window's most recent
+    N samples for each attribute in PwM_BALANCE_DATA_ATTRIBUTES and negates
+    it, so a positive balance means surplus power. Each average divides by
+    its full window size even before 180 samples have accumulated (e.g.
+    fresh after a Home Assistant restart), so early readings are pulled
+    toward zero until the window fills up -- same behavior as the
+    Node-RED "Balance" function this was ported from.
     """
 
     _attr_has_entity_name = True
@@ -325,9 +358,87 @@ class PwMngtHubBalanceSensor(SensorEntity):
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
         self._attr_device_info = hub_device_info(entry)
         self._attr_native_value = None
+        self._attr_available = False
         self._attr_extra_state_attributes = {
-            key: None for key in PwM_HUB_BALANCE_ATTRIBUTES
+            key: None for key in PwM_BALANCE_DATA_ATTRIBUTES
         }
+        self._samples: deque[float] = deque(maxlen=180)
+
+        entity_map = entry.options.get(CONF_ENTITY_MAP, {})
+        self._grid_entity_id = entity_map.get(ENTITY_KEY_GRID_POWER) or None
+        self._battery_entity_id = entity_map.get(ENTITY_KEY_BATTERY_POWER) or None
+        self._forced_charge_entity_id = (
+            entity_map.get(ENTITY_KEY_FORCED_CHARGE) or None
+        )
+
+        if not self._grid_entity_id or not self._battery_entity_id:
+            LOGGER.warning(
+                "PwMngt: no source entity configured for '%s' (set Grid "
+                "and Battery power under Options -> Solar PV Plant), it "
+                "will stay unavailable",
+                self.entity_description.key,
+            )
+
+    async def async_added_to_hass(self) -> None:
+        """Start sampling every 10 seconds, if Grid and Battery power are
+        configured.
+        """
+        await super().async_added_to_hass()
+
+        if not self._grid_entity_id or not self._battery_entity_id:
+            return
+
+        self.async_on_remove(
+            async_track_time_interval(
+                self.hass, self._sample, _BALANCE_SAMPLE_INTERVAL
+            )
+        )
+        self._sample(None)
+
+    @callback
+    def _sample(self, _now) -> None:
+        """Take one 10-second sample and recompute the rolling averages."""
+        grid_power = self._read_float(self._grid_entity_id)
+        battery_power = self._read_float(self._battery_entity_id)
+        if grid_power is None or battery_power is None:
+            return
+
+        status = grid_power
+        if not self._is_forced_charging():
+            status += battery_power
+        self._samples.append(status)
+
+        recent = list(self._samples)
+        values = {
+            key: round(-(sum(recent[-window:]) / window))
+            for key, window in _BALANCE_WINDOW_SAMPLES.items()
+        }
+        values["balance_15_min_corrected"] = values["balance_15_min"]
+        values["balance_15_min_corrected_with_chargers"] = values["balance_15_min"]
+
+        self._attr_native_value = values["balance_30_sec"]
+        self._attr_extra_state_attributes = values
+        self._attr_available = True
+        self.async_write_ha_state()
+
+    def _is_forced_charging(self) -> bool:
+        """Whether the optional forced-charge toggle is currently on."""
+        if not self._forced_charge_entity_id:
+            return False
+        state = self.hass.states.get(self._forced_charge_entity_id)
+        return state is not None and state.state == "on"
+
+    def _read_float(self, entity_id: str) -> float | None:
+        """Current state of `entity_id` as a float, or None if it's
+        missing, unavailable, or not numeric.
+        """
+        state = self.hass.states.get(entity_id)
+        if state is None or state.state in ("unknown", "unavailable"):
+            return None
+        try:
+            return float(state.state)
+        except ValueError:
+            return None
 
 
 # ---------------------------------------------------------------------------
@@ -674,7 +785,8 @@ PwM_HUB_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 # ---------------------------------------------------------------------------
 # PV-device "consumption data" sensor (read-only, scaffolding only).
 # Bundles 12 household-consumption-average values as attributes on a
-# single diagnostic entity, same pattern as PwMngtHubBalanceSensor above.
+# single diagnostic entity -- a "*_data" sensor, same naming convention
+# and pattern as PwMngtBalanceDataSensor above.
 # No calculation logic yet -- state and every attribute report None.
 #
 # Old Node-RED functions: "Beregn 8-16 & 6-9 & 17-06" / "Beregn

@@ -75,10 +75,10 @@ def _async_check_dependencies(hass: HomeAssistant) -> None:
       today"/"PV forecast tomorrow" fields in Options -> Solar PV Plant --
       without it there's nothing to pick for those two fields, and the
       wizard can't be completed at all (they're required).
-    - Strømligning (stromligning): backs the "Spot electricity price"
-      entity_map field in Options -> Solar PV Plant (see
-      PwM_HUB_MIRROR_SENSORS in sensor.py) -- without it there's nothing
-      to auto-detect or pick for that field.
+    - Strømligning (stromligning): backs the required "Spot electricity
+      price" field in Options -> Solar PV Plant (see PwM_HUB_MIRROR_SENSORS
+      in sensor.py) -- without it there's nothing to pick for that field,
+      and the wizard can't be completed at all.
 
     Checked on every setup (fresh install, every Home Assistant restart,
     and every Options-flow-triggered reload -- see
