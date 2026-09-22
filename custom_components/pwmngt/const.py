@@ -51,7 +51,7 @@ ENTITY_KEY_PV_FORECAST_TOMORROW = "pv_forecast_tomorrow"
 
 # battery_nightly_target, pv_forecast_daytime_today and
 # pv_forecast_daytime_tomorrow are not entity_map fields -- PwMngt
-# computes them internally (see sensor.py's PwM_PV_PLACEHOLDER_SENSORS).
+# computes them internally (see sensor.py's PwM_PV_SCAFFOLD_SENSORS).
 
 # pv_history_period_days is also not an entity_map field -- it's a fixed
 # entity (select.pwm_pv_history_period_days) the user sets through his own
