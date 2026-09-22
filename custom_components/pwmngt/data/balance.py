@@ -9,7 +9,9 @@ writes out what it returns.
 
 import logging
 from collections import deque
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -20,12 +22,15 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_time_interval
+from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
+from homeassistant.util import dt as dt_util
 
 from ..const import (
     CONF_ENTITY_MAP,
     DOMAIN,
     ENTITY_KEY_BATTERY_POWER,
     ENTITY_KEY_GRID_POWER,
+    RESTORE_MAX_AGE,
 )
 from ..devices import CHARGERS, hub_device_info
 from ..helpers.state_helper import read_float_state
@@ -93,6 +98,39 @@ _BALANCE_WINDOW_SAMPLES: dict[str, int] = {
 }
 
 
+@dataclass
+class PwMngtBalanceStoredData(ExtraStoredData):
+    """What PwMngtBalanceDataSensor needs restored across a Home
+    Assistant restart: its raw sample history, so the rolling averages
+    don't have to rebuild from empty (see RESTORE_MAX_AGE for the
+    cutoff). This rides Home Assistant's own restore-state cache via
+    RestoreEntity.extra_restore_state_data/async_get_last_extra_data --
+    deliberately NOT stored as a visible extra_state_attributes entry,
+    since up to 180 raw numbers per list would clutter the entity's
+    attributes (and get written to the recorder) for no benefit to
+    anyone reading them.
+    """
+
+    samples: list[float]
+    charger_samples: list[float]
+    last_sample_time: str | None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "samples": self.samples,
+            "charger_samples": self.charger_samples,
+            "last_sample_time": self.last_sample_time,
+        }
+
+    @classmethod
+    def from_dict(cls, restored: dict[str, Any]) -> "PwMngtBalanceStoredData":
+        return cls(
+            samples=list(restored.get("samples") or []),
+            charger_samples=list(restored.get("charger_samples") or []),
+            last_sample_time=restored.get("last_sample_time"),
+        )
+
+
 def calculate_balance(
     status_samples: list[float],
     charger_samples: list[float],
@@ -107,9 +145,13 @@ def calculate_balance(
     anything about Home Assistant.
 
     Each average divides by its full window size even before enough
-    samples have accumulated (e.g. fresh after a Home Assistant restart),
-    so early readings are pulled toward zero until the window fills up --
-    same startup behavior as the original Node-RED function.
+    samples have accumulated, so early readings are pulled toward zero
+    until the window fills up -- same startup behavior as the original
+    Node-RED function. In practice this now only shows up on a fresh
+    install or after a long-enough gap that PwMngtBalanceDataSensor
+    discards its restored history (see RESTORE_MAX_AGE) -- a normal
+    Home Assistant restart restores the sample history instead of
+    starting from empty.
     """
     values = {
         key: round(-(sum(status_samples[-window:]) / window))
@@ -128,7 +170,7 @@ def calculate_balance(
     return values
 
 
-class PwMngtBalanceDataSensor(SensorEntity):
+class PwMngtBalanceDataSensor(RestoreEntity, SensorEntity):
     """A PwM hub sensor bundling the 7 balance values above as attributes.
 
     Every 10 seconds, a timer trigger (_sample) reads Grid power plus
@@ -139,6 +181,11 @@ class PwMngtBalanceDataSensor(SensorEntity):
     That's the whole shape: trigger -> calculate_balance() -> update
     attributes -- the same as Node-RED's inject -> function -> ha-sensor
     nodes this was ported from.
+
+    The rolling sample history survives a Home Assistant restart --
+    see PwMngtBalanceStoredData and RESTORE_MAX_AGE -- so the longer
+    windows (5/15/30 min) don't read artificially low for up to half
+    an hour after every restart while they refill from empty.
     """
 
     _attr_has_entity_name = True
@@ -159,6 +206,7 @@ class PwMngtBalanceDataSensor(SensorEntity):
         }
         self._samples: deque[float] = deque(maxlen=180)
         self._charger_samples: deque[float] = deque(maxlen=180)
+        self._last_sample_time: datetime | None = None
         # PwM Charger1/2's own Power sensors, resolved by unique_id (see
         # _read_charger_power_total) since they're not entity_map fields
         # either. Missing/not-yet-live chargers contribute 0.
@@ -182,11 +230,30 @@ class PwMngtBalanceDataSensor(SensorEntity):
                 self.entity_description.key,
             )
 
+    @property
+    def extra_restore_state_data(self) -> PwMngtBalanceStoredData:
+        """What to hand to Home Assistant's restore-state cache --
+        see PwMngtBalanceStoredData."""
+        return PwMngtBalanceStoredData(
+            samples=list(self._samples),
+            charger_samples=list(self._charger_samples),
+            last_sample_time=(
+                self._last_sample_time.isoformat()
+                if self._last_sample_time
+                else None
+            ),
+        )
+
     async def async_added_to_hass(self) -> None:
-        """Start sampling every 10 seconds, if Grid and Battery power are
-        configured.
+        """Restore the sample history from before a restart (if recent
+        enough, see RESTORE_MAX_AGE), then start sampling every 10
+        seconds, if Grid and Battery power are configured.
         """
         await super().async_added_to_hass()
+
+        restored = await self.async_get_last_extra_data()
+        if restored is not None:
+            self._restore_samples(PwMngtBalanceStoredData.from_dict(restored.as_dict()))
 
         if not self._grid_entity_id or not self._battery_entity_id:
             return
@@ -197,6 +264,37 @@ class PwMngtBalanceDataSensor(SensorEntity):
             )
         )
         self._sample(None)
+
+    def _restore_samples(self, data: PwMngtBalanceStoredData) -> None:
+        """Repopulate the rolling sample history from a previous run's
+        PwMngtBalanceStoredData, unless it's too old to trust (see
+        RESTORE_MAX_AGE) -- e.g. a long power outage, not just a normal
+        restart.
+        """
+        if data.last_sample_time is None:
+            return
+
+        last_sample_time = dt_util.parse_datetime(data.last_sample_time)
+        if last_sample_time is None:
+            return
+
+        age = dt_util.utcnow() - last_sample_time
+        if age > RESTORE_MAX_AGE:
+            LOGGER.info(
+                "PwMngt: balance sample history is %s old, too stale to "
+                "restore -- starting fresh",
+                age,
+            )
+            return
+
+        self._samples.extend(data.samples[-180:])
+        self._charger_samples.extend(data.charger_samples[-180:])
+        self._last_sample_time = last_sample_time
+        LOGGER.info(
+            "PwMngt: restored %d balance sample(s) from before restart (%s old)",
+            len(self._samples),
+            age,
+        )
 
     @callback
     def _sample(self, _now) -> None:
@@ -216,6 +314,7 @@ class PwMngtBalanceDataSensor(SensorEntity):
             status += battery_power
         self._samples.append(status)
         self._charger_samples.append(self._read_charger_power_total())
+        self._last_sample_time = dt_util.utcnow()
 
         values = calculate_balance(list(self._samples), list(self._charger_samples))
 

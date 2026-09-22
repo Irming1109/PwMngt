@@ -1,5 +1,7 @@
 """Const used in the integration."""
 
+from datetime import timedelta
+
 # Startup banner
 STARTUP = "start info"
 
@@ -80,3 +82,18 @@ CONF_SEGMENTS = "segments"
 SEGMENT_EV_CHARGING = "ev_charging"
 SEGMENT_POOL = "pool"
 SEGMENT_PV_SURPLUS = "pv_surplus"
+
+# ---------------------------------------------------------------------------
+# Restore-state handling, shared across the hub.
+#
+# If Home Assistant was down longer than this, any RestoreEntity's stashed
+# state is too stale to resume into -- it would splice pre-outage and
+# post-outage readings together as if no time had passed. Past this age,
+# affected entities should start fresh instead of resuming from the
+# restored state (e.g. data/balance.py's PwMngtBalanceDataSensor). This is
+# a hub-wide constant so every "_restore"-style mechanism in PwMngt applies
+# the same cutoff -- don't give a restore mechanism its own local copy of
+# this value.
+# ---------------------------------------------------------------------------
+
+RESTORE_MAX_AGE = timedelta(hours=3)
