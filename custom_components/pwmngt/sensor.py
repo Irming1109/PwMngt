@@ -40,6 +40,7 @@ from .const import (
 )
 from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
 from .data.balance import PwM_BALANCE_DATA_SENSORS, PwMngtBalanceDataSensor
+from .data.charger_consumption import PwMngtChargerConsumptionSensor
 from .data.consumption import PwM_CONSUMPTION_DATA_SENSORS, PwMngtConsumptionDataSensor
 from .data.consumption_status import (
     PwM_CONSUMPTION_STATUS_SENSORS,
@@ -115,7 +116,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     for charger in CHARGERS:
         for description in PwM_CHARGER_SENSORS:
-            entity = PwMngtChargerSensor(description, entry, charger)
+            if description.key == "consumption":
+                # Real behaviour (reset-aware since-midnight accumulator)
+                # -- see data/charger_consumption.py. Every other charger
+                # sensor below stays pure scaffolding for now.
+                entity = PwMngtChargerConsumptionSensor(description, entry, charger)
+            else:
+                entity = PwMngtChargerSensor(description, entry, charger)
             LOGGER.info("Added charger sensor with entity_id '%s'", entity.entity_id)
             sensors.append(entity)
 
@@ -204,11 +211,23 @@ PwM_CHARGER_SENSORS: list[SensorEntityDescription] = [
     ),
     # Old key="ladeboks_1_forbrug" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks 1 forbrug" (Ladeboks 2 ... equivalent for Charger2)
+    # Real behaviour, unlike every other entry in this list -- see
+    # PwMngtChargerConsumptionSensor in data/charger_consumption.py
+    # (instantiated for this key specifically in async_setup_entry below).
     SensorEntityDescription(
         key="consumption",
         name="Consumption",
         icon="mdi:lightning-bolt",
         native_unit_of_measurement="kWh",
+        # Deliberately no state_class: this resets to 0 every local
+        # midnight by design (see PwMngtChargerConsumptionSensor), so
+        # TOTAL_INCREASING would be wrong (HA's statistics engine treats
+        # any decrease on that state_class as an unplanned device reset
+        # and tries to bridge across it into one ever-growing lifetime
+        # figure -- not what a daily "since midnight" value should do).
+        # SensorStateClass.TOTAL with a last_reset timestamp would be the
+        # correct way to get long-term statistics/Energy-dashboard
+        # support later; not needed for anything asked for so far.
     ),
     # Old key="ladeboks_1_km" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks 1 km" (Ladeboks 2 ... equivalent for Charger2)

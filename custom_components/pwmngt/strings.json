@@ -126,7 +126,11 @@
       },
       "ev_charging": {
         "title": "EV Charging",
-        "description": "Coming soon -- this segment doesn't have any configurable fields yet."
+        "description": "For each charger that isn't set to \"Not installed\" (Charger1/2 type, under the PwM hub device's Configuration tab), enter the entity that reports its own added-energy counter -- e.g. a Wallbox portal's \"Added energy\" sensor. Leave blank if not available yet.",
+        "data": {
+          "charger1": "Charger1 consumption source entity",
+          "charger2": "Charger2 consumption source entity"
+        }
       },
       "pool": {
         "title": "Pool",

@@ -13,6 +13,7 @@ from homeassistant.data_entry_flow import SectionConfig, section
 from homeassistant.helpers.event import async_call_later
 
 from . import async_setup_entry, async_unload_entry
+from .devices import CHARGERS
 from .const import (
     DOMAIN,
     CONF_DEFAULT_NAME,
@@ -376,8 +377,90 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         )
 
     async def async_step_ev_charging(self, user_input: Any | None = None):
-        """Page 3: EV Charging abstraction layer (scaffolding for now)."""
-        return await self._scaffold_step("ev_charging", user_input)
+        """Page 3: EV Charging -- one field per installed charger, asking
+        which entity reports that charger's own added-energy counter
+        (see PwMngtChargerConsumptionSensor in data/charger_consumption.py).
+
+        Charger type itself isn't asked here -- that's select.charger1_type
+        / select.charger2_type (PwM_CONFIG_SELECTS in select.py), already
+        a persistent, user-editable entity in its own right (Kasper's
+        call: one source of truth, not a second copy inside this wizard).
+        This step only reads their current value to decide which field(s)
+        to show, then writes the typed entity_id to each installed
+        charger's own "consumption_source_entity" text entity
+        (PwM_CHARGER_CONFIG_TEXTS in text.py) via a service call -- that
+        text entity stays the actual source of truth, this is just a
+        convenient place to edit it. A charger set to "Not installed"
+        gets no field here, but its text entity (and the rest of its
+        device) still exists and stays visible under its own
+        Configuration tab regardless -- only this wizard page hides it.
+        """
+        installed = self._installed_chargers()
+
+        if not installed:
+            return await self._scaffold_step("ev_charging", user_input)
+
+        if user_input is not None:
+            for charger in installed:
+                entity_id = self._charger_text_entity_id(charger)
+                if entity_id is None:
+                    continue
+                await self.hass.services.async_call(
+                    "text",
+                    "set_value",
+                    {
+                        "entity_id": entity_id,
+                        "value": user_input.get(charger["id"], ""),
+                    },
+                    blocking=True,
+                )
+            return await self._advance()
+
+        schema_dict = {
+            vol.Optional(
+                charger["id"], default=self._charger_text_current_value(charger)
+            ): str
+            for charger in installed
+        }
+        return self.async_show_form(
+            step_id="ev_charging", data_schema=vol.Schema(schema_dict)
+        )
+
+    def _installed_chargers(self) -> list[dict]:
+        """Chargers whose select.<id>_type currently isn't "Not
+        installed" -- reads the live select entity's state, see the
+        docstring on async_step_ev_charging for why type isn't asked
+        again here."""
+        registry = er.async_get(self.hass)
+        result = []
+        for charger in CHARGERS:
+            type_entity_id = registry.async_get_entity_id(
+                "select", DOMAIN, f"{self.config_entry.entry_id}_{charger['id']}_type"
+            )
+            state = self.hass.states.get(type_entity_id) if type_entity_id else None
+            if state is not None and state.state != "Not installed":
+                result.append(charger)
+        return result
+
+    def _charger_text_entity_id(self, charger: dict) -> str | None:
+        """entity_id of this charger's "consumption_source_entity" text
+        entity (PwM_CHARGER_CONFIG_TEXTS in text.py), or None if the text
+        platform hasn't registered it yet."""
+        registry = er.async_get(self.hass)
+        unique_id = (
+            f"{self.config_entry.entry_id}_{charger['id']}_"
+            "consumption_source_entity"
+        )
+        return registry.async_get_entity_id("text", DOMAIN, unique_id)
+
+    def _charger_text_current_value(self, charger: dict) -> str:
+        """Current value of that text entity, for pre-filling the field
+        -- "" if it doesn't exist yet or has no value."""
+        entity_id = self._charger_text_entity_id(charger)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state in ("unknown", "unavailable"):
+            return ""
+        return state.state
 
     async def async_step_pool(self, user_input: Any | None = None):
         """Page 4: Pool abstraction layer (scaffolding for now)."""

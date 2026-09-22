@@ -46,6 +46,28 @@ PwM_CHARGER_CONFIG_TEXTS: list[PwMngtTextEntityDescription] = [
         default_value="",
         visible_when_charger_type="Easee",
     ),
+    # New (no Node-RED equivalent by this name -- Claus's flow read a
+    # fixed entity_id, sensor.wallbox_portal_added_energy, hardcoded in
+    # his function node). The entity that reports this charger's own
+    # added-energy counter, read by PwMngtChargerConsumptionSensor
+    # (data/charger_consumption.py) to compute its since-midnight
+    # consumption. Deliberately a plain typed entity_id, not part of
+    # entry.options[CONF_ENTITY_MAP] like every other PwMngt source --
+    # CONF_ENTITY_MAP fields are all picked via _entity_picker()'s
+    # EntitySelector in the Options wizard, but this needs to exist as
+    # its own persistent, always-visible entity (Kasper's call) so it can
+    # also be pre-filled/edited from the EV Charging wizard page without
+    # a second, disconnected source of truth. No visible_when_charger_type
+    # -- unlike charger_identification, this stays visible under the
+    # charger's own Configuration tab regardless of charger type; only
+    # the Options wizard's own field hides/shows based on charger type.
+    PwMngtTextEntityDescription(
+        key="consumption_source_entity",
+        name="Consumption source entity",
+        icon="mdi:ev-station",
+        entity_category=EntityCategory.CONFIG,
+        default_value="",
+    ),
 ]
 
 
