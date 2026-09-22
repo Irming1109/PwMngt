@@ -31,6 +31,7 @@ from .const import (
     ENTITY_KEY_PV_FORECAST_TODAY,
     ENTITY_KEY_PV_FORECAST_TOMORROW,
     ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
+    ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL,
     DEPENDENCY_SOLCAST_SOLAR,
     DEPENDENCY_STROMLIGNING,
     SEGMENT_EV_CHARGING,
@@ -58,6 +59,13 @@ _SOLAR_PV_PLANT_FIELDS = [
     # Hub value (Stromligning spot price) -- lives here rather than a
     # dedicated page.
     (ENTITY_KEY_SPOT_ELECTRICITY_PRICE, "kr/kWh", True),
+    # Consumption tracking -- required even though only the "property"
+    # category (data/consumption_status.py) exists so far (Kasper's call:
+    # every install should have this wired up from the start, not just
+    # the ones migrating this segment first). See that module's
+    # docstring for why this must be a raw, ever-increasing counter
+    # rather than a Daily Utility Meter helper.
+    (ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL, "kWh", True),
 ]
 
 # Unit of measurement for each field above, by entity_map key.
@@ -100,6 +108,13 @@ _SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
         False,
         [
             ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
+        ],
+    ),
+    (
+        "consumption",
+        False,
+        [
+            ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL,
         ],
     ),
 ]

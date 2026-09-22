@@ -40,6 +40,11 @@ from .const import (
 )
 from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
 from .data.balance import PwM_BALANCE_DATA_SENSORS, PwMngtBalanceDataSensor
+from .data.consumption import PwM_CONSUMPTION_DATA_SENSORS, PwMngtConsumptionDataSensor
+from .data.consumption_status import (
+    PwM_CONSUMPTION_STATUS_SENSORS,
+    PwMngtConsumptionStatusSensor,
+)
 from .helpers.state_helper import read_float_state
 
 LOGGER = logging.getLogger(__name__)
@@ -101,6 +106,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     for description in PwM_CONSUMPTION_DATA_SENSORS:
         entity = PwMngtConsumptionDataSensor(description, entry)
         LOGGER.info("Added PV consumption-data sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    for description in PwM_CONSUMPTION_STATUS_SENSORS:
+        entity = PwMngtConsumptionStatusSensor(description, entry)
+        LOGGER.info("Added PV consumption-status sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
     for charger in CHARGERS:
@@ -439,8 +449,8 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 # ---------------------------------------------------------------------------
 # PV-device sensors for values PwMngt computes internally itself, rather
 # than mirror an external entity -- same scaffold-now-compute-later
-# pattern as PwM_CONSUMPTION_DATA_SENSORS below. Each stays at
-# native_value=None ("unknown") until that calculation lands.
+# pattern as PwMngtConsumptionDataSensor in data/consumption.py. Each
+# stays at native_value=None ("unknown") until that calculation lands.
 # ---------------------------------------------------------------------------
 
 PwM_PV_SCAFFOLD_SENSORS: list[SensorEntityDescription] = [
@@ -492,7 +502,7 @@ PwM_PV_SCAFFOLD_SENSORS: list[SensorEntityDescription] = [
 class PwMngtScaffoldSensor(SensorEntity):
     """A PV-device sensor for a value PwMngt computes internally itself
     (see PwM_PV_SCAFFOLD_SENSORS). Stays at native_value=None until
-    then, same pattern as PwMngtConsumptionDataSensor further down.
+    then, same pattern as PwMngtConsumptionDataSensor in data/consumption.py.
     """
 
     _attr_has_entity_name = True
@@ -632,65 +642,9 @@ PwM_HUB_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 
 
 # ---------------------------------------------------------------------------
-# PV-device "consumption data" sensor (read-only, scaffolding only).
-# Bundles 12 household-consumption-average values as attributes on a
-# single diagnostic entity -- a "*_data" sensor, same naming convention
-# and pattern as PwMngtBalanceDataSensor in data/balance.py.
-# No calculation logic yet -- state and every attribute report None.
-#
-# Old Node-RED functions: "Beregn 8-16 & 6-9 & 17-06" / "Beregn
-# gennemsnitsforbrug 17-21" / "Beregn gennemsnitsforbrug døgn".
-# Recomputing natively needs a 30-day rolling history and time-based
-# triggers (kl 16:01/21:01/00:01, plus select.pwm_pv_history_period_days
-# changing).
+# PV-device "consumption data" sensor -- moved to data/consumption.py
+# (PwM_CONSUMPTION_DATA_SENSORS, PwMngtConsumptionDataSensor), imported above.
 # ---------------------------------------------------------------------------
-
-PwM_CONSUMPTION_DATA_ATTRIBUTES: list[str] = [
-    "daytime_average",
-    "daytime_average_adjusted",
-    "early_morning_average",
-    "morning_average",
-    "late_morning_average",
-    "evening_average",
-    "nighttime_average",
-    "full_day_average",
-    "pool_heating_consumption",
-    "mining_consumption",
-    "car_charger_consumption",
-    "heat_pump_consumption",
-]
-
-PwM_CONSUMPTION_DATA_SENSORS: list[SensorEntityDescription] = [
-    SensorEntityDescription(
-        key="consumption_data",
-        name="Consumption data",
-        icon="mdi:chart-timeline-variant",
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-]
-
-
-class PwMngtConsumptionDataSensor(SensorEntity):
-    """A scaffolded, read-only PwMngt PV-device sensor bundling the 12
-    consumption-average values above as attributes. No live value yet --
-    see the comment block above PwM_CONSUMPTION_DATA_ATTRIBUTES.
-    """
-
-    _attr_has_entity_name = True
-    _attr_should_poll = False
-
-    def __init__(
-        self,
-        description: SensorEntityDescription,
-        entry: ConfigEntry,
-    ) -> None:
-        self.entity_description = description
-        self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
-        self._attr_device_info = pv_device_info(entry)
-        self._attr_native_value = None
-        self._attr_extra_state_attributes = {
-            key: None for key in PwM_CONSUMPTION_DATA_ATTRIBUTES
-        }
 
 
 # Attribute names Home Assistant itself derives from an entity's own

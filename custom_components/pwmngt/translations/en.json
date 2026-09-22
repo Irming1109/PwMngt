@@ -42,7 +42,7 @@
               "pv3_power": "PV3 power (optional)",
               "pv_direct_consumption": "PV direct consumption",
               "pv_total_consumption": "PV total consumption",
-              "grid_power": "Grid"
+              "grid_power": "Grid power"
             },
             "data_description": {
               "battery_soc": "The entity that reports your home battery's state of charge (%), e.g. your inverter's battery SoC sensor. Only \"%\"-unit sensors are listed.",
@@ -76,6 +76,15 @@
             "data_description": {
               "spot_electricity_price": "The entity that reports the current spot electricity price (kr/kWh), e.g. from the Strømligning integration. Only \"kr/kWh\"-unit sensors are listed."
             }
+          },
+          "consumption": {
+            "name": "Consumption tracking",
+            "data": {
+              "property_consumption_total": "Total property consumption"
+            },
+            "data_description": {
+              "property_consumption_total": "The entity that reports the whole property's cumulative energy consumption (kWh) as a raw, ever-increasing lifetime counter -- e.g. your inverter's own lifetime consumption sensor. Only \"kWh\"-unit sensors are listed. Do not point this at a Daily Utility Meter helper -- PwMngt tracks its own local-midnight reset internally, so it needs the raw, never-resetting counter instead."
+            }
           }
         },
         "data": {
@@ -91,10 +100,12 @@
           "pv3_power": "PV3 power (optional)",
           "pv_direct_consumption": "PV direct consumption",
           "pv_total_consumption": "PV total consumption",
-          "grid_power": "Grid",
+          "grid_power": "Grid power",
           "pv_forecast_today": "PV forecast today",
           "pv_forecast_tomorrow": "PV forecast tomorrow",
-          "spot_electricity_price": "Spot electricity price"
+          "spot_electricity_price": "Spot electricity price",
+          "consumption": "Consumption tracking",
+          "property_consumption_total": "Total property consumption"
         },
         "data_description": {
           "battery_soc": "The entity that reports your home battery's state of charge (%), e.g. your inverter's battery SoC sensor. Only \"%\"-unit sensors are listed.",
@@ -109,7 +120,8 @@
           "grid_power": "The entity that reports current power flow to/from the grid (W). Only \"W\"-unit sensors are listed.",
           "pv_forecast_today": "The entity that reports today's forecasted PV production for the whole plant (kWh), e.g. from a solar forecast integration. Only \"kWh\"-unit sensors are listed. Pre-filled automatically if Solcast PV Forecast is installed and unambiguous -- pick a different entity if you don't want that.",
           "pv_forecast_tomorrow": "The entity that reports tomorrow's forecasted PV production for the whole plant (kWh), e.g. from a solar forecast integration. Only \"kWh\"-unit sensors are listed. Pre-filled automatically if Solcast PV Forecast is installed and unambiguous -- pick a different entity if you don't want that.",
-          "spot_electricity_price": "The entity that reports the current spot electricity price (kr/kWh), e.g. from the Strømligning integration. Only \"kr/kWh\"-unit sensors are listed."
+          "spot_electricity_price": "The entity that reports the current spot electricity price (kr/kWh), e.g. from the Strømligning integration. Only \"kr/kWh\"-unit sensors are listed.",
+          "property_consumption_total": "The entity that reports the whole property's cumulative energy consumption (kWh) as a raw, ever-increasing lifetime counter -- e.g. your inverter's own lifetime consumption sensor. Only \"kWh\"-unit sensors are listed. Do not point this at a Daily Utility Meter helper -- PwMngt tracks its own local-midnight reset internally, so it needs the raw, never-resetting counter instead."
         }
       },
       "ev_charging": {

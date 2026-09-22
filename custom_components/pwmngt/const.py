@@ -61,6 +61,14 @@ ENTITY_KEY_PV_FORECAST_TOMORROW = "pv_forecast_tomorrow"
 # though the sensor itself lives on the Hub device.
 ENTITY_KEY_SPOT_ELECTRICITY_PRICE = "spot_electricity_price"
 
+# Consumption tracking -- entity_map field(s) feeding
+# data/consumption_status.py's since-local-midnight snapshots, which in
+# turn feed data/consumption.py's rolling averages once those are built.
+# Each is a raw, ever-increasing lifetime counter (kWh) -- NOT a Daily
+# Utility Meter helper -- PwMngt captures its own local-midnight
+# baseline internally instead of relying on one configured in YAML.
+ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL = "property_consumption_total"
+
 # ---------------------------------------------------------------------------
 # Segments: optional areas of PwMngt a given installation may not need.
 # "Power Management" itself isn't in this list -- it's mandatory and always
