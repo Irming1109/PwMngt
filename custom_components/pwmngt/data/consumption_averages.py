@@ -1,10 +1,10 @@
-"""Consumption data: the PV device's household-consumption-average sensor.
+"""Consumption averages: the PV device's household-consumption-average sensor.
 
 See the package docstring in data/__init__.py for the general shape.
 Unlike data/balance.py, there's no calculate_* function here yet -- the
 averaging logic itself isn't built (see the comment above
-PwM_CONSUMPTION_DATA_ATTRIBUTES for what it'll need), so this module is
-just PwMngtConsumptionDataSensor's scaffolding for now. Add a plain
+PwM_CONSUMPTION_AVERAGES_ATTRIBUTES for what it'll need), so this module is
+just PwMngtConsumptionAveragesSensor's scaffolding for now. Add a plain
 calculate_* function alongside it once that logic lands, the same way
 calculate_balance() sits next to PwMngtBalanceDataSensor in data/balance.py.
 """
@@ -16,7 +16,7 @@ from homeassistant.const import EntityCategory
 from ..devices import pv_device_info
 
 # ---------------------------------------------------------------------------
-# PV-device "consumption data" sensor (read-only, scaffolding only).
+# PV-device "consumption averages" sensor (read-only, scaffolding only).
 # Bundles 12 household-consumption-average values as attributes on a
 # single diagnostic entity -- a "*_data" sensor, same naming convention
 # and pattern as PwMngtBalanceDataSensor in data/balance.py.
@@ -29,7 +29,7 @@ from ..devices import pv_device_info
 # changing).
 # ---------------------------------------------------------------------------
 
-PwM_CONSUMPTION_DATA_ATTRIBUTES: list[str] = [
+PwM_CONSUMPTION_AVERAGES_ATTRIBUTES: list[str] = [
     "daytime_average",
     "daytime_average_adjusted",
     "early_morning_average",
@@ -44,20 +44,20 @@ PwM_CONSUMPTION_DATA_ATTRIBUTES: list[str] = [
     "heat_pump_consumption",
 ]
 
-PwM_CONSUMPTION_DATA_SENSORS: list[SensorEntityDescription] = [
+PwM_CONSUMPTION_AVERAGES_SENSORS: list[SensorEntityDescription] = [
     SensorEntityDescription(
-        key="consumption_data",
-        name="Consumption data",
+        key="consumption_averages",
+        name="Consumption averages",
         icon="mdi:chart-timeline-variant",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
 ]
 
 
-class PwMngtConsumptionDataSensor(SensorEntity):
+class PwMngtConsumptionAveragesSensor(SensorEntity):
     """A scaffolded, read-only PwMngt PV-device sensor bundling the 12
     consumption-average values above as attributes. No live value yet --
-    see the comment block above PwM_CONSUMPTION_DATA_ATTRIBUTES.
+    see the comment block above PwM_CONSUMPTION_AVERAGES_ATTRIBUTES.
     """
 
     _attr_has_entity_name = True
@@ -73,5 +73,5 @@ class PwMngtConsumptionDataSensor(SensorEntity):
         self._attr_device_info = pv_device_info(entry)
         self._attr_native_value = None
         self._attr_extra_state_attributes = {
-            key: None for key in PwM_CONSUMPTION_DATA_ATTRIBUTES
+            key: None for key in PwM_CONSUMPTION_AVERAGES_ATTRIBUTES
         }

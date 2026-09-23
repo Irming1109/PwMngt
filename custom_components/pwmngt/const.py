@@ -64,8 +64,8 @@ ENTITY_KEY_PV_FORECAST_TOMORROW = "pv_forecast_tomorrow"
 ENTITY_KEY_SPOT_ELECTRICITY_PRICE = "spot_electricity_price"
 
 # Consumption tracking -- entity_map field(s) feeding
-# data/consumption_status.py's since-local-midnight snapshots, which in
-# turn feed data/consumption.py's rolling averages once those are built.
+# data/consumption_snapshots.py's since-local-midnight snapshots, which in
+# turn feed data/consumption_averages.py's rolling averages once those are built.
 # Each is a raw, ever-increasing lifetime counter (kWh) -- NOT a Daily
 # Utility Meter helper -- PwMngt captures its own local-midnight
 # baseline internally instead of relying on one configured in YAML.

@@ -3,7 +3,7 @@ charger device, tracked from a raw source that resets itself whenever a
 new charging session starts.
 
 See the package docstring in data/__init__.py for the general shape.
-This is deliberately NOT built the same way as data/consumption_status.py:
+This is deliberately NOT built the same way as data/consumption_snapshots.py:
 that module assumes its source is a genuine, never-resetting lifetime
 counter (see its own docstring), and computes "since midnight" as a
 simple raw-minus-baseline snapshot taken at a handful of fixed times a
@@ -49,7 +49,7 @@ from ..helpers.state_helper import read_float_state
 
 LOGGER = logging.getLogger(__name__)
 
-# Only these two snapshots are needed -- unlike data/consumption_status.py's
+# Only these two snapshots are needed -- unlike data/consumption_snapshots.py's
 # property tracking (8 fixed times/day), Claus's Node-RED only ever reads
 # the charger-consumption equivalent (Forbrug_billadere) at kl 8 and 16,
 # for the household daytime-consumption correction. Add more here if a
@@ -89,7 +89,7 @@ class PwMngtChargerConsumptionSensor(RestoreEntity, SensorEntity):
     "consumption" key in sensor.py) -- native value is the running
     since-local-midnight kWh total from accumulate() above, with kl_8/
     kl_16 snapshot attributes for the future household-consumption
-    correction (data/consumption.py's planned car_charger_consumption --
+    correction (data/consumption_averages.py's planned car_charger_consumption --
     see total_charger_consumption() below).
 
     Tracks its source indirectly: it resolves this charger's own
@@ -97,7 +97,7 @@ class PwMngtChargerConsumptionSensor(RestoreEntity, SensorEntity):
     text.py) via the entity registry, reads whichever entity_id is
     currently typed into it, and tracks that entity's state changes --
     switching cleanly to a new source if the text entity's value changes,
-    and staying unavailable (like data/consumption_status.py does for an
+    and staying unavailable (like data/consumption_snapshots.py does for an
     unconfigured category) while it's empty.
     """
 
@@ -318,7 +318,7 @@ def total_charger_consumption(hass, entry: ConfigEntry, chargers: list[dict], ti
     (0 for one whose "consumption_source_entity" is empty/unset) -- the
     native replacement for Claus's combined Forbrug_billadere at that
     same time of day. Only used inside a calculation (see
-    data/consumption.py's planned car_charger_consumption) -- never
+    data/consumption_averages.py's planned car_charger_consumption) -- never
     presented as its own entity, per Kasper's call (neither his nor
     Claus's Node-RED presents the summed value anywhere either, only
     consumes it internally).

@@ -41,10 +41,10 @@ from .const import (
 from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
 from .data.balance import PwM_BALANCE_DATA_SENSORS, PwMngtBalanceDataSensor
 from .data.charger_consumption import PwMngtChargerConsumptionSensor
-from .data.consumption import PwM_CONSUMPTION_DATA_SENSORS, PwMngtConsumptionDataSensor
-from .data.consumption_status import (
-    PwM_CONSUMPTION_STATUS_SENSORS,
-    PwMngtConsumptionStatusSensor,
+from .data.consumption_averages import PwM_CONSUMPTION_AVERAGES_SENSORS, PwMngtConsumptionAveragesSensor
+from .data.consumption_snapshots import (
+    PwM_CONSUMPTION_SNAPSHOTS_SENSORS,
+    PwMngtConsumptionSnapshotsSensor,
 )
 from .helpers.state_helper import read_float_state
 
@@ -104,14 +104,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         LOGGER.info("Added PV scaffold sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
-    for description in PwM_CONSUMPTION_DATA_SENSORS:
-        entity = PwMngtConsumptionDataSensor(description, entry)
-        LOGGER.info("Added PV consumption-data sensor with entity_id '%s'", entity.entity_id)
+    for description in PwM_CONSUMPTION_AVERAGES_SENSORS:
+        entity = PwMngtConsumptionAveragesSensor(description, entry)
+        LOGGER.info("Added PV consumption-averages sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
-    for description in PwM_CONSUMPTION_STATUS_SENSORS:
-        entity = PwMngtConsumptionStatusSensor(description, entry)
-        LOGGER.info("Added PV consumption-status sensor with entity_id '%s'", entity.entity_id)
+    for description in PwM_CONSUMPTION_SNAPSHOTS_SENSORS:
+        entity = PwMngtConsumptionSnapshotsSensor(description, entry)
+        LOGGER.info("Added PV consumption-snapshots sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
     for charger in CHARGERS:
@@ -468,7 +468,7 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 # ---------------------------------------------------------------------------
 # PV-device sensors for values PwMngt computes internally itself, rather
 # than mirror an external entity -- same scaffold-now-compute-later
-# pattern as PwMngtConsumptionDataSensor in data/consumption.py. Each
+# pattern as PwMngtConsumptionAveragesSensor in data/consumption_averages.py. Each
 # stays at native_value=None ("unknown") until that calculation lands.
 # ---------------------------------------------------------------------------
 
@@ -521,7 +521,7 @@ PwM_PV_SCAFFOLD_SENSORS: list[SensorEntityDescription] = [
 class PwMngtScaffoldSensor(SensorEntity):
     """A PV-device sensor for a value PwMngt computes internally itself
     (see PwM_PV_SCAFFOLD_SENSORS). Stays at native_value=None until
-    then, same pattern as PwMngtConsumptionDataSensor in data/consumption.py.
+    then, same pattern as PwMngtConsumptionAveragesSensor in data/consumption_averages.py.
     """
 
     _attr_has_entity_name = True
@@ -661,8 +661,8 @@ PwM_HUB_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 
 
 # ---------------------------------------------------------------------------
-# PV-device "consumption data" sensor -- moved to data/consumption.py
-# (PwM_CONSUMPTION_DATA_SENSORS, PwMngtConsumptionDataSensor), imported above.
+# PV-device "consumption averages" sensor -- moved to data/consumption_averages.py
+# (PwM_CONSUMPTION_AVERAGES_SENSORS, PwMngtConsumptionAveragesSensor), imported above.
 # ---------------------------------------------------------------------------
 
 

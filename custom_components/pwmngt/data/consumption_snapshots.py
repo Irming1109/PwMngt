@@ -1,20 +1,21 @@
-"""Consumption status: since-local-midnight snapshots of raw, ever-
-increasing consumption counters, sampled at fixed times of day.
+"""Consumption snapshots: since-local-midnight snapshots of raw,
+ever-increasing consumption counters, sampled at fixed times of day.
 
 See the package docstring in data/__init__.py for the general shape.
-PwMngtConsumptionStatusSensor is the Home Assistant wiring: a handful of
-fixed daily alarms (one per sample time, per category) call
+PwMngtConsumptionSnapshotsSensor is the Home Assistant wiring: a handful
+of fixed daily alarms (one per sample time, per category) call
 calculate_since_midnight() below and store the result as an attribute.
-data/consumption.py's rolling averages (PwMngtConsumptionDataSensor) are
-the actual consumer of these snapshots, once that calculation logic is
-built -- same relationship the Node-RED original had between its
-"forbrug status" flow and its "gennemsnitsforbrug" flow.
+data/consumption_averages.py's rolling averages
+(PwMngtConsumptionAveragesSensor) are the actual consumer of these
+snapshots, once that calculation logic is built -- same relationship the
+Node-RED original had between its "forbrug status" flow and its
+"gennemsnitsforbrug" flow.
 
 Why "since local midnight" at all: the source entities are raw, ever-
 increasing lifetime counters (kWh totals that never reset) -- not the
 Daily Utility Meter helpers the Node-RED flow read from. Home Assistant's
 own `utility_meter` platform reset those to 0 at every local midnight for
-free; PwMngtConsumptionStatusSensor replicates just that one behavior
+free; PwMngtConsumptionSnapshotsSensor replicates just that one behavior
 itself (captures each category's counter value at local midnight as a
 baseline, then reports every later reading as raw-minus-baseline), so an
 installation doesn't need a hand-configured YAML helper just to feed this
@@ -64,16 +65,16 @@ _CATEGORIES: list[tuple[str, str]] = [
     ("property", ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL),
 ]
 
-PwM_CONSUMPTION_STATUS_ATTRIBUTES: list[str] = [
+PwM_CONSUMPTION_SNAPSHOTS_ATTRIBUTES: list[str] = [
     f"{category}_kl_{time_key}"
     for category, _ in _CATEGORIES
     for time_key, _, _ in _SAMPLE_TIMES
 ]
 
-PwM_CONSUMPTION_STATUS_SENSORS: list[SensorEntityDescription] = [
+PwM_CONSUMPTION_SNAPSHOTS_SENSORS: list[SensorEntityDescription] = [
     SensorEntityDescription(
-        key="consumption_status_data",
-        name="Consumption status data",
+        key="consumption_snapshots",
+        name="Consumption snapshots",
         icon="mdi:clipboard-clock-outline",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
@@ -89,9 +90,9 @@ def calculate_since_midnight(raw_value: float, midnight_baseline: float) -> floa
     return round(raw_value - midnight_baseline, 3)
 
 
-class PwMngtConsumptionStatusSensor(RestoreEntity, SensorEntity):
+class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
     """A PwM PV-device sensor bundling since-local-midnight consumption
-    snapshots (see PwM_CONSUMPTION_STATUS_ATTRIBUTES) as attributes, one
+    snapshots (see PwM_CONSUMPTION_SNAPSHOTS_ATTRIBUTES) as attributes, one
     set per configured category.
 
     Each category gets its own local-midnight alarm (captures that day's
@@ -116,7 +117,7 @@ class PwMngtConsumptionStatusSensor(RestoreEntity, SensorEntity):
         self._attr_native_value = None
         self._attr_available = False
         self._attr_extra_state_attributes = {
-            key: None for key in PwM_CONSUMPTION_STATUS_ATTRIBUTES
+            key: None for key in PwM_CONSUMPTION_SNAPSHOTS_ATTRIBUTES
         }
 
         entity_map = entry.options.get(CONF_ENTITY_MAP, {})
@@ -134,7 +135,7 @@ class PwMngtConsumptionStatusSensor(RestoreEntity, SensorEntity):
 
         last_state = await self.async_get_last_state()
         if last_state is not None:
-            for key in PwM_CONSUMPTION_STATUS_ATTRIBUTES:
+            for key in PwM_CONSUMPTION_SNAPSHOTS_ATTRIBUTES:
                 if key in last_state.attributes:
                     self._attr_extra_state_attributes[key] = last_state.attributes[key]
             for category, _ in _CATEGORIES:

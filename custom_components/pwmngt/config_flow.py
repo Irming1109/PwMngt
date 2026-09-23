@@ -61,7 +61,7 @@ _SOLAR_PV_PLANT_FIELDS = [
     # dedicated page.
     (ENTITY_KEY_SPOT_ELECTRICITY_PRICE, "kr/kWh", True),
     # Consumption tracking -- required even though only the "property"
-    # category (data/consumption_status.py) exists so far (Kasper's call:
+    # category (data/consumption_snapshots.py) exists so far (Kasper's call:
     # every install should have this wired up from the start, not just
     # the ones migrating this segment first). See that module's
     # docstring for why this must be a raw, ever-increasing counter
