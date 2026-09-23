@@ -126,7 +126,7 @@
       },
       "ev_charging": {
         "title": "EV Charging",
-        "description": "Pick each charger's type. For a charger not set to \"Not installed\", also enter the entity that reports its own added-energy counter -- e.g. a Wallbox portal's \"Added energy\" sensor. Leave the consumption field blank if not available yet. Both fields mirror the charger's own select/text entity under the PwM hub device's Configuration tab. Installing a charger that didn't have a consumption field yet re-shows this page with that field added, before moving on.",
+        "description": "Pick each charger's type. For a charger not set to \"Not installed\", also enter the entity that reports its own added-energy counter -- e.g. a Wallbox portal's \"Added energy\" sensor. Both fields mirror the charger's own select/text entity under the PwM hub device's Configuration tab and stay visible for every charger -- filling in the consumption field for a \"Not installed\" charger just has no effect yet.",
         "data": {
           "charger1_type": "Charger1 type",
           "charger1": "Charger1 consumption source entity",

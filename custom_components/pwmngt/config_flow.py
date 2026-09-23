@@ -399,20 +399,20 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         text.py). Submitting here writes through to both via a service
         call; neither field is stored in the config entry's options.
 
-        The type field is always shown, for every charger -- it's what
-        lets a charger be installed in the first place. The consumption
-        field for a charger is only shown while that charger's type isn't
-        "Not installed". If a submission just installed a charger that
-        didn't have its consumption field shown yet, this step re-shows
-        itself with that field now included instead of advancing --
-        Kasper's call: silently losing the chance to fill it in until the
-        wizard is reopened was confusing (it looked like the field simply
-        never appeared). Only once a submission's set of installed
-        chargers matches what its own schema was already showing does the
-        wizard actually move on.
+        Both fields are always shown, for every charger, regardless of
+        its type -- tried hiding the consumption field while a charger
+        is "Not installed" first, but Home Assistant's options-flow
+        pages are static per render (no field can react to another
+        field's still-being-edited value, and nothing can trigger a
+        submit on the user's behalf), so it either stayed stuck showing
+        the wrong thing until a second Submit, or never visibly reacted
+        at all if you only changed the dropdown without submitting.
+        Kasper's call: always-visible is simpler, and matches how the
+        text entity already behaves everywhere else (it exists and
+        stays visible under its own Configuration tab no matter the
+        charger's type) -- filling it in for a "Not installed" charger
+        just has no effect yet.
         """
-        installed_before = self._installed_chargers()
-
         if user_input is not None:
             for charger in CHARGERS:
                 type_entity_id = self._charger_type_entity_id(charger)
@@ -426,30 +426,18 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                         },
                         blocking=True,
                     )
-                if charger["id"] not in user_input:
-                    continue
                 text_entity_id = self._charger_text_entity_id(charger)
-                if text_entity_id is None:
-                    continue
-                await self.hass.services.async_call(
-                    "text",
-                    "set_value",
-                    {
-                        "entity_id": text_entity_id,
-                        "value": user_input.get(charger["id"], ""),
-                    },
-                    blocking=True,
-                )
-
-            installed = self._installed_chargers()
-            newly_installed = [c for c in installed if c not in installed_before]
-            if not newly_installed:
-                return await self._advance()
-            # Else: fall through and re-render below with `installed`
-            # (not installed_before), so the newly-installed charger's
-            # consumption field shows up now.
-        else:
-            installed = installed_before
+                if text_entity_id is not None:
+                    await self.hass.services.async_call(
+                        "text",
+                        "set_value",
+                        {
+                            "entity_id": text_entity_id,
+                            "value": user_input.get(charger["id"], ""),
+                        },
+                        blocking=True,
+                    )
+            return await self._advance()
 
         schema_dict: dict[Any, Any] = {}
         for charger in CHARGERS:
@@ -465,28 +453,15 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             )
-            if charger in installed:
-                schema_dict[
-                    vol.Optional(
-                        charger["id"], default=self._charger_text_current_value(charger)
-                    )
-                ] = str
+            schema_dict[
+                vol.Optional(
+                    charger["id"], default=self._charger_text_current_value(charger)
+                )
+            ] = str
 
         return self.async_show_form(
             step_id="ev_charging", data_schema=vol.Schema(schema_dict)
         )
-
-    def _installed_chargers(self) -> list[dict]:
-        """Chargers whose select.<id>_type currently isn't "Not
-        installed" -- reads the live select entity's state, see
-        async_step_ev_charging for how that field is shown/written."""
-        result = []
-        for charger in CHARGERS:
-            entity_id = self._charger_type_entity_id(charger)
-            state = self.hass.states.get(entity_id) if entity_id else None
-            if state is not None and state.state != "Not installed":
-                result.append(charger)
-        return result
 
     def _charger_type_entity_id(self, charger: dict) -> str | None:
         """entity_id of this charger's "<id>_type" select entity -- a
