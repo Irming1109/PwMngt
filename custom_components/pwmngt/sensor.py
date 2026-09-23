@@ -12,17 +12,12 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
-from homeassistant.util import slugify as util_slugify
 
-from .api import PwMngtAPI
-from .base import PwMngtSensorEntityDescription
 from .const import (
     DOMAIN,
-    API_OBJ,
     CONF_ENTITY_MAP,
     ENTITY_KEY_BATTERY_SOC,
     ENTITY_KEY_BATTERY_PV_CHARGED,
@@ -50,24 +45,9 @@ from .helpers.state_helper import read_float_state
 
 LOGGER = logging.getLogger(__name__)
 
-PwM_SENSORS = [
-    PwMngtSensorEntityDescription(
-        key="hello_world_str",
-        name="Hello world",
-        entity_category=None,
-        icon="mdi:flash",
-        value_fn=lambda pwmngt: pwmngt.get_hello_world2(),
-    ),
-]
-
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):   
     """Setup sensors."""
     sensors = []
-
-    for sensor in PwM_SENSORS:
-        entity = PwMngtSensor(sensor, hass, entry)
-        LOGGER.info("Added sensor with entity_id '%s'", entity.entity_id)
-        sensors.append(entity)
 
     for description in PwM_BALANCE_DATA_SENSORS:
         entity = PwMngtBalanceDataSensor(description, entry)
@@ -116,7 +96,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     for charger in CHARGERS:
         for description in PwM_CHARGER_SENSORS:
-            if description.key == "consumption":
+            if description.key == "consumption_data":
                 # Real behaviour (reset-aware since-midnight accumulator)
                 # -- see data/consumption_charger_data.py. Every other charger
                 # sensor below stays pure scaffolding for now.
@@ -128,64 +108,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     async_add_entities(sensors)
 
-
-class PwMngtSensor(SensorEntity):
-    _attr_has_entity_name = True
-
-    def __init__(self, description: PwMngtSensorEntityDescription, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        super().__init__()
-        self.entity_description = description
-        self._config = entry
-        self._hass = hass
-        self.api: PwMngtAPI = hass.data[DOMAIN][API_OBJ]
-
-        self._attr_unique_id = util_slugify(
-            f"{self.entity_description.key}_{self._config.entry_id}"
-        )
-        self._attr_should_poll = True
-
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, self._config.entry_id)},
-            "name": "PwM",
-            "manufacturer": "Power Management",
-        }
-
-        self._attr_native_unit_of_measurement = (
-            self.entity_description.unit_of_measurement
-        )
-
-        async_dispatcher_connect(
-            self._hass,
-            util_slugify(self.entity_description.update_signal),
-            self.handle_update,
-        )
-
-    async def handle_attributes(self) -> None:
-        """Handle attributes. No extra attributes yet -- placeholder for later."""
-
-    async def handle_update(self) -> None:
-        """Handle data update."""
-        try:
-            self._attr_native_value = self.entity_description.value_fn(
-                self._hass.data[DOMAIN][API_OBJ]
-            )
-
-            LOGGER.info(
-                "Setting value for '%s' to: %s",
-                self.entity_id,
-                self._attr_native_value,
-            )
-            await self.handle_attributes()
-            self._attr_available = True
- 
-        except Exception as e:
-            if self._attr_available:
-                LOGGER.error("The PwMngt API made an invalid response: %s", e)
-            self._attr_available = False
-
-    async def async_added_to_hass(self):
-        await self.handle_update()
-        return await super().async_added_to_hass()
 
 # ---------------------------------------------------------------------------
 # Charger status sensors (read-only, scaffolding only). No value_fn / API
@@ -215,8 +137,8 @@ PwM_CHARGER_SENSORS: list[SensorEntityDescription] = [
     # PwMngtChargerConsumptionSensor in data/consumption_charger_data.py
     # (instantiated for this key specifically in async_setup_entry below).
     SensorEntityDescription(
-        key="consumption",
-        name="Consumption",
+        key="consumption_data",
+        name="Consumption data",
         icon="mdi:lightning-bolt",
         native_unit_of_measurement="kWh",
         # Deliberately no state_class: this resets to 0 every local

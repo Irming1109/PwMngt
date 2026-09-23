@@ -4,19 +4,15 @@ from pathlib import Path
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.loader import async_get_integration
 
-import voluptuous as vol
-
 from .services import async_setup_services
-from .api import PwMngtAPI
 from .const import (
     DOMAIN,
     PLATFORMS,
-    API_OBJ,
     DEPENDENCY_SOLCAST_SOLAR,
     DEPENDENCY_STROMLIGNING,
 )
@@ -38,9 +34,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     await _async_register_frontend(hass)
 
-    api = PwMngtAPI(hass, entry)
-    hass.data[DOMAIN][API_OBJ] = api
-
     await async_setup_services(hass)
 
     # Forward config entry setup to the sensor platform
@@ -56,7 +49,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     LOGGER.info("Removing entry for %s", DOMAIN)
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
-        hass.data[DOMAIN].pop(API_OBJ, None)  # Ensure API_OBJ is removed
         return True
     return False
 

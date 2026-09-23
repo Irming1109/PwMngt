@@ -76,8 +76,8 @@ PwM_CONSUMPTION_SNAPSHOTS_ATTRIBUTES: list[str] = [
 
 PwM_CONSUMPTION_SNAPSHOTS_SENSORS: list[SensorEntityDescription] = [
     SensorEntityDescription(
-        key="consumption_snapshots",
-        name="Consumption snapshots",
+        key="consumption_snapshots_data",
+        name="Consumption snapshots data",
         icon="mdi:clipboard-clock-outline",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),

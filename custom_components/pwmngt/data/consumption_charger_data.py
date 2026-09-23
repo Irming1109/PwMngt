@@ -86,7 +86,7 @@ def accumulate(total_so_far: float, last_raw: float | None, new_raw: float) -> f
 
 class PwMngtChargerConsumptionSensor(RestoreEntity, SensorEntity):
     """A charger device's "Consumption" sensor (see PwM_CHARGER_SENSORS'
-    "consumption" key in sensor.py) -- native value is the running
+    "consumption_data" key in sensor.py) -- native value is the running
     since-local-midnight kWh total from accumulate() above, with kl_8/
     kl_16 snapshot attributes for the future household-consumption
     correction (data/consumption_averages_data.py's planned
@@ -414,7 +414,7 @@ def total_charger_consumption(hass, entry: ConfigEntry, chargers: list[dict], ti
     registry = er.async_get(hass)
     total = 0.0
     for charger in chargers:
-        unique_id = f"{entry.entry_id}_{charger['id']}_consumption"
+        unique_id = f"{entry.entry_id}_{charger['id']}_consumption_data"
         entity_id = registry.async_get_entity_id("sensor", DOMAIN, unique_id)
         if not entity_id:
             continue

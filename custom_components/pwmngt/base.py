@@ -19,48 +19,7 @@ every new or renamed entity across select.py, text.py, number.py,
 button.py and sensor.py.
 """
 
-from collections.abc import Callable
 from dataclasses import dataclass
-
-from homeassistant.components.binary_sensor import BinarySensorEntityDescription
-from homeassistant.components.sensor import SensorEntityDescription
-
-from .api import PwMngtAPI
-from .const import UPDATE_SIGNAL
-
-
-@dataclass
-class PwMngtBaseEntityDescriptionMixin:
-    """Describes a basic PwMngt entity."""
-
-    value_fn: Callable[[PwMngtAPI], bool | str | int | float]
-
-
-@dataclass
-class PwMngtSensorEntityDescription(
-    SensorEntityDescription, PwMngtBaseEntityDescriptionMixin
-):
-    """Describes a PwMngt sensor."""
-
-    unit_fn: Callable[[PwMngtAPI], None] = None
-    update_signal: str = UPDATE_SIGNAL
-
-
-@dataclass
-class PwMngtBinarySensorEntityDescription(
-    BinarySensorEntityDescription, PwMngtBaseEntityDescriptionMixin
-):
-    """Describes a PwMngt sensor."""
-
-    unit_fn: Callable[[PwMngtAPI], None] = None
-
-# ---------------------------------------------------------------------------
-# Scaffolding-only entity descriptions for charger entities (number/select/
-# text). These deliberately do NOT use PwMngtBaseEntityDescriptionMixin's
-# value_fn, because there is no backing API/data source yet -- entities just
-# hold a local default value until real functionality is wired up. Buttons
-# and sensors use Home Assistant's own EntityDescription classes directly.
-# ---------------------------------------------------------------------------
 
 from homeassistant.components.number import NumberEntityDescription
 from homeassistant.components.select import SelectEntityDescription

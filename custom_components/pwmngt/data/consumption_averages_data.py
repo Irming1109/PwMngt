@@ -45,8 +45,8 @@ PwM_CONSUMPTION_AVERAGES_ATTRIBUTES: list[str] = [
 
 PwM_CONSUMPTION_AVERAGES_SENSORS: list[SensorEntityDescription] = [
     SensorEntityDescription(
-        key="consumption_averages",
-        name="Consumption averages",
+        key="consumption_averages_data",
+        name="Consumption averages data",
         icon="mdi:chart-timeline-variant",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
