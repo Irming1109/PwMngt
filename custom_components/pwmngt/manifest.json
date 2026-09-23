@@ -1,7 +1,7 @@
 {
   "domain": "pwmngt",
   "name": "Power Management",
-  "version": "0.3.04",
+  "version": "0.3.05",
   "documentation": "https://github.com/Irming1109/PwMngt",
   "dependencies": [],
   "after_dependencies": [ "recorder" ],

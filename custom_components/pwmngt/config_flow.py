@@ -188,6 +188,38 @@ def _entity_picker(hass, unit: str) -> selector.EntitySelector:
     )
 
 
+def _entity_ids_by_device_class(hass, device_class: str) -> list[str]:
+    """Sensor entity_ids with the given device_class, excluding PwMngt's
+    own sensors (mirroring one of PwMngt's own would be circular).
+
+    Used instead of _entity_ids_by_unit for fields where the unit itself
+    can vary by source integration (e.g. an energy counter reported in
+    kWh by one Wallbox-style integration and Wh by another) -- matching
+    on device_class covers both, a single fixed unit wouldn't.
+    """
+    registry = er.async_get(hass)
+    entity_ids = []
+    for state in hass.states.async_all("sensor"):
+        if state.attributes.get("device_class") != device_class:
+            continue
+        entry = registry.async_get(state.entity_id)
+        if entry is not None and entry.platform == DOMAIN:
+            continue
+        entity_ids.append(state.entity_id)
+    return sorted(entity_ids)
+
+
+def _energy_entity_picker(hass) -> selector.EntitySelector:
+    """Entity picker restricted to sensors with device_class "energy" --
+    used for each charger's consumption source entity (e.g. a Wallbox
+    portal's "Added energy" sensor)."""
+    return selector.EntitySelector(
+        selector.EntitySelectorConfig(
+            include_entities=_entity_ids_by_device_class(hass, "energy"),
+        )
+    )
+
+
 def _auto_detect_entity_id(hass, platform: str, translation_key: str) -> str | None:
     """Find the single entity_id from `platform` whose translation_key
     matches, for pre-filling a field (see _AUTO_DETECT_SOURCES).
@@ -412,6 +444,14 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         stays visible under its own Configuration tab no matter the
         charger's type) -- filling it in for a "Not installed" charger
         just has no effect yet.
+
+        The consumption field is a searchable entity picker (like the
+        Solar PV Plant page's fields), restricted to sensors with
+        device_class "energy" -- it used to be a plain text box the user
+        had to type an entity_id into by hand. Same known limitation as
+        the Solar PV Plant page: no default= at all when there's no
+        value yet (EntitySelector rejects "" as invalid), so an
+        untouched/cleared field is simply left out of the schema instead.
         """
         if user_input is not None:
             for charger in CHARGERS:
@@ -453,11 +493,13 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             )
-            schema_dict[
-                vol.Optional(
-                    charger["id"], default=self._charger_text_current_value(charger)
-                )
-            ] = str
+            current_consumption_value = self._charger_text_current_value(charger)
+            consumption_marker = (
+                vol.Optional(charger["id"], default=current_consumption_value)
+                if current_consumption_value
+                else vol.Optional(charger["id"])
+            )
+            schema_dict[consumption_marker] = _energy_entity_picker(self.hass)
 
         return self.async_show_form(
             step_id="ev_charging", data_schema=vol.Schema(schema_dict)
