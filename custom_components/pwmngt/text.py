@@ -22,6 +22,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .base import PwMngtTextEntityDescription
 from .const import DOMAIN
@@ -85,8 +86,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     async_add_entities(entities)
 
 
-class PwMngtText(TextEntity):
-    """A scaffolded PwMngt text entity. No live behaviour yet."""
+class PwMngtText(TextEntity, RestoreEntity):
+    """A scaffolded PwMngt text entity. No live behaviour yet.
+
+    Restores its last value on startup -- see PwMngtSelect's docstring in
+    select.py for why this matters (a config entry reload would otherwise
+    silently reset it to description.default_value).
+    """
 
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -118,8 +124,14 @@ class PwMngtText(TextEntity):
         self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
-        """Start tracking the matching charger-type select, if any."""
+        """Restore the last value, then start tracking the matching
+        charger-type select, if any (see the class docstring for the
+        former, _start_visibility_tracking's own docstring for the
+        latter)."""
         await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is not None and last_state.state not in ("unknown", "unavailable"):
+            self._attr_native_value = last_state.state
         self._start_visibility_tracking()
 
     def _start_visibility_tracking(self) -> None:

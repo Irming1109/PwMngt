@@ -14,6 +14,7 @@ from homeassistant.components.number import NumberEntity, NumberMode
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .base import PwMngtNumberEntityDescription
 from .devices import CHARGERS, charger_device_info, hub_device_info
@@ -105,8 +106,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     async_add_entities(entities)
 
 
-class PwMngtNumber(NumberEntity):
-    """A scaffolded PwMngt number entity. No live behaviour yet."""
+class PwMngtNumber(NumberEntity, RestoreEntity):
+    """A scaffolded PwMngt number entity. No live behaviour yet.
+
+    Restores its last value on startup -- see PwMngtSelect's docstring in
+    select.py for why this matters (a config entry reload would otherwise
+    silently reset it to description.default_value).
+    """
 
     _attr_has_entity_name = True
     _attr_mode = NumberMode.BOX
@@ -127,6 +133,20 @@ class PwMngtNumber(NumberEntity):
             self._attr_unique_id = f"{entry.entry_id}_{charger['id']}_{description.key}"
             self._attr_device_info = charger_device_info(entry, charger)
         self._attr_native_value = description.default_value
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the last value -- see the class docstring."""
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is None:
+            return
+        try:
+            value = float(last_state.state)
+        except ValueError:
+            return
+        description = self.entity_description
+        if description.native_min_value <= value <= description.native_max_value:
+            self._attr_native_value = value
 
     async def async_set_native_value(self, value: float) -> None:
         """Store the value locally. Functionality is not implemented yet."""

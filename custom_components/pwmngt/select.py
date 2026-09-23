@@ -20,6 +20,7 @@ from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .base import PwMngtSelectEntityDescription
 from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
@@ -323,8 +324,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     async_add_entities(entities)
 
 
-class PwMngtSelect(SelectEntity):
-    """A scaffolded PwMngt select entity. No live behaviour yet."""
+class PwMngtSelect(SelectEntity, RestoreEntity):
+    """A scaffolded PwMngt select entity. No live behaviour yet.
+
+    Restores its last chosen option on startup -- without this, every
+    config entry reload (e.g. the automatic one ~2s after finishing the
+    options wizard, see PwMngtOptionsFlow._do_update) would silently
+    recreate the entity with description.default_option, discarding
+    whatever the user had picked (this bit charger1_type/charger2_type in
+    practice: picking a type on the EV Charging wizard page, then
+    finishing the wizard, reset it right back to "Wallbox").
+    """
 
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -349,6 +359,14 @@ class PwMngtSelect(SelectEntity):
             self._attr_unique_id = f"{entry.entry_id}_{charger['id']}_{description.key}"
             self._attr_device_info = charger_device_info(entry, charger)
         self._attr_current_option = description.default_option
+
+    async def async_added_to_hass(self) -> None:
+        """Restore the last chosen option -- see the class docstring for
+        why this matters here specifically."""
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is not None and last_state.state in self.entity_description.options:
+            self._attr_current_option = last_state.state
 
     async def async_select_option(self, option: str) -> None:
         """Store the chosen option locally. Functionality is not implemented yet."""
