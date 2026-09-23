@@ -14,6 +14,7 @@ from homeassistant.helpers.event import async_call_later
 
 from . import async_setup_entry, async_unload_entry
 from .devices import CHARGERS
+from .select import PwM_CONFIG_SELECTS
 from .const import (
     DOMAIN,
     CONF_DEFAULT_NAME,
@@ -149,6 +150,16 @@ LOGGER = logging.getLogger(__name__)
 # Fixed visit order for the optional segment pages (3-5). "Solar PV Plant"
 # isn't here -- mandatory, see PwMngtOptionsFlow.async_step_solar_pv_plant.
 _SEGMENT_STEP_ORDER = [SEGMENT_EV_CHARGING, SEGMENT_POOL, SEGMENT_PV_SURPLUS]
+
+# Charger id -> its "<id>_type" select description (PwM_CONFIG_SELECTS in
+# select.py), so the EV Charging page's type field can reuse the same
+# options/default instead of duplicating them.
+_CHARGER_TYPE_DESCRIPTIONS = {
+    charger["id"]: next(
+        d for d in PwM_CONFIG_SELECTS if d.key == f"{charger['id']}_type"
+    )
+    for charger in CHARGERS
+}
 
 
 def _entity_ids_by_unit(hass, unit: str) -> list[str]:
@@ -377,70 +388,110 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         )
 
     async def async_step_ev_charging(self, user_input: Any | None = None):
-        """Page 3: EV Charging -- one field per installed charger, asking
-        which entity reports that charger's own added-energy counter
-        (see PwMngtChargerConsumptionSensor in data/consumption_charger_data.py).
+        """Page 3: EV Charging -- per charger, interleaved as (type,
+        consumption source entity), i.e. Charger1 type, Charger1
+        consumption source, Charger2 type, Charger2 consumption source.
 
-        Charger type itself isn't asked here -- that's select.charger1_type
-        / select.charger2_type (PwM_CONFIG_SELECTS in select.py), already
-        a persistent, user-editable entity in its own right (Kasper's
-        call: one source of truth, not a second copy inside this wizard).
-        This step only reads their current value to decide which field(s)
-        to show, then writes the typed entity_id to each installed
-        charger's own "consumption_source_entity" text entity
-        (PwM_CHARGER_CONFIG_TEXTS in text.py) via a service call -- that
-        text entity stays the actual source of truth, this is just a
-        convenient place to edit it. A charger set to "Not installed"
-        gets no field here, but its text entity (and the rest of its
-        device) still exists and stays visible under its own
-        Configuration tab regardless -- only this wizard page hides it.
+        Both fields are convenience mirrors of a persistent entity that
+        stays the actual source of truth -- type mirrors select.<id>_type
+        (PwM_CONFIG_SELECTS in select.py), consumption source mirrors
+        text.<id>_consumption_source_entity (PwM_CHARGER_CONFIG_TEXTS in
+        text.py). Submitting here writes through to both via a service
+        call; neither field is stored in the config entry's options.
+
+        The type field is always shown, for every charger -- it's what
+        lets a charger be installed in the first place. The consumption
+        field for a charger is only shown while that charger's type (as
+        of when this page was rendered) isn't "Not installed" -- flipping
+        a charger's type to something else here reveals its consumption
+        field the next time this page is opened, not within the same
+        submission.
         """
-        installed = self._installed_chargers()
-
-        if not installed:
-            return await self._scaffold_step("ev_charging", user_input)
-
         if user_input is not None:
-            for charger in installed:
-                entity_id = self._charger_text_entity_id(charger)
-                if entity_id is None:
+            for charger in CHARGERS:
+                type_entity_id = self._charger_type_entity_id(charger)
+                if type_entity_id is not None:
+                    await self.hass.services.async_call(
+                        "select",
+                        "select_option",
+                        {
+                            "entity_id": type_entity_id,
+                            "option": user_input[f"{charger['id']}_type"],
+                        },
+                        blocking=True,
+                    )
+                if charger["id"] not in user_input:
+                    continue
+                text_entity_id = self._charger_text_entity_id(charger)
+                if text_entity_id is None:
                     continue
                 await self.hass.services.async_call(
                     "text",
                     "set_value",
                     {
-                        "entity_id": entity_id,
+                        "entity_id": text_entity_id,
                         "value": user_input.get(charger["id"], ""),
                     },
                     blocking=True,
                 )
             return await self._advance()
 
-        schema_dict = {
-            vol.Optional(
-                charger["id"], default=self._charger_text_current_value(charger)
-            ): str
-            for charger in installed
-        }
+        installed = self._installed_chargers()
+        schema_dict: dict[Any, Any] = {}
+        for charger in CHARGERS:
+            description = _CHARGER_TYPE_DESCRIPTIONS[charger["id"]]
+            schema_dict[
+                vol.Optional(
+                    f"{charger['id']}_type",
+                    default=self._charger_type_current_value(charger),
+                )
+            ] = selector.SelectSelector(
+                selector.SelectSelectorConfig(
+                    options=description.options,
+                    mode=selector.SelectSelectorMode.DROPDOWN,
+                )
+            )
+            if charger in installed:
+                schema_dict[
+                    vol.Optional(
+                        charger["id"], default=self._charger_text_current_value(charger)
+                    )
+                ] = str
+
         return self.async_show_form(
             step_id="ev_charging", data_schema=vol.Schema(schema_dict)
         )
 
     def _installed_chargers(self) -> list[dict]:
         """Chargers whose select.<id>_type currently isn't "Not
-        installed" -- reads the live select entity's state, see the
-        docstring on async_step_ev_charging for why type isn't asked
-        again here."""
-        registry = er.async_get(self.hass)
+        installed" -- reads the live select entity's state, see
+        async_step_ev_charging for how that field is shown/written."""
         result = []
         for charger in CHARGERS:
-            type_entity_id = registry.async_get_entity_id(
-                "select", DOMAIN, f"{self.config_entry.entry_id}_{charger['id']}_type"
-            )
-            state = self.hass.states.get(type_entity_id) if type_entity_id else None
+            entity_id = self._charger_type_entity_id(charger)
+            state = self.hass.states.get(entity_id) if entity_id else None
             if state is not None and state.state != "Not installed":
                 result.append(charger)
         return result
+
+    def _charger_type_entity_id(self, charger: dict) -> str | None:
+        """entity_id of this charger's "<id>_type" select entity -- a
+        hub-level PwM_CONFIG_SELECTS entity in select.py, despite being
+        keyed per-charger (see _CHARGER_TYPE_DESCRIPTIONS above)."""
+        registry = er.async_get(self.hass)
+        return registry.async_get_entity_id(
+            "select", DOMAIN, f"{self.config_entry.entry_id}_{charger['id']}_type"
+        )
+
+    def _charger_type_current_value(self, charger: dict) -> str:
+        """Current value of that select entity, for pre-filling the
+        field -- the description's own default if it doesn't exist yet
+        or has no value."""
+        entity_id = self._charger_type_entity_id(charger)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state in ("unknown", "unavailable"):
+            return _CHARGER_TYPE_DESCRIPTIONS[charger["id"]].default_option
+        return state.state
 
     def _charger_text_entity_id(self, charger: dict) -> str | None:
         """entity_id of this charger's "consumption_source_entity" text
@@ -508,6 +559,15 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
 
 
 class PwMngtConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """PwMngt's config flow.
+
+    manifest.json's "single_config_entry" keeps Home Assistant from
+    letting a second entry be added at all ("Add Entry" is disabled
+    once one exists) -- the architecture assumes exactly one PwMngt
+    instance (one Hub device, one PV Plant, etc.). Revisit this if a
+    second instance ever makes sense -- e.g. a separate "simulator"
+    instance for demos/debugging, which has been floated as an idea.
+    """
 
     @staticmethod
     @callback
