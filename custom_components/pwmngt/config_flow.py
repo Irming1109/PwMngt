@@ -401,12 +401,18 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
 
         The type field is always shown, for every charger -- it's what
         lets a charger be installed in the first place. The consumption
-        field for a charger is only shown while that charger's type (as
-        of when this page was rendered) isn't "Not installed" -- flipping
-        a charger's type to something else here reveals its consumption
-        field the next time this page is opened, not within the same
-        submission.
+        field for a charger is only shown while that charger's type isn't
+        "Not installed". If a submission just installed a charger that
+        didn't have its consumption field shown yet, this step re-shows
+        itself with that field now included instead of advancing --
+        Kasper's call: silently losing the chance to fill it in until the
+        wizard is reopened was confusing (it looked like the field simply
+        never appeared). Only once a submission's set of installed
+        chargers matches what its own schema was already showing does the
+        wizard actually move on.
         """
+        installed_before = self._installed_chargers()
+
         if user_input is not None:
             for charger in CHARGERS:
                 type_entity_id = self._charger_type_entity_id(charger)
@@ -434,9 +440,17 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                     },
                     blocking=True,
                 )
-            return await self._advance()
 
-        installed = self._installed_chargers()
+            installed = self._installed_chargers()
+            newly_installed = [c for c in installed if c not in installed_before]
+            if not newly_installed:
+                return await self._advance()
+            # Else: fall through and re-render below with `installed`
+            # (not installed_before), so the newly-installed charger's
+            # consumption field shows up now.
+        else:
+            installed = installed_before
+
         schema_dict: dict[Any, Any] = {}
         for charger in CHARGERS:
             description = _CHARGER_TYPE_DESCRIPTIONS[charger["id"]]
