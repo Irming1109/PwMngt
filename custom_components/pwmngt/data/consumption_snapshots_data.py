@@ -5,21 +5,24 @@ See the package docstring in data/__init__.py for the general shape.
 PwMngtConsumptionSnapshotsSensor is the Home Assistant wiring: a handful
 of fixed daily alarms (one per sample time, per category) call
 calculate_since_midnight() below and store the result as an attribute.
-data/consumption_averages.py's rolling averages
+data/consumption_averages_data.py's rolling averages
 (PwMngtConsumptionAveragesSensor) are the actual consumer of these
-snapshots, once that calculation logic is built -- same relationship the
-Node-RED original had between its "forbrug status" flow and its
-"gennemsnitsforbrug" flow.
+snapshots, once that calculation logic is built.
 
-Why "since local midnight" at all: the source entities are raw, ever-
-increasing lifetime counters (kWh totals that never reset) -- not the
-Daily Utility Meter helpers the Node-RED flow read from. Home Assistant's
-own `utility_meter` platform reset those to 0 at every local midnight for
-free; PwMngtConsumptionSnapshotsSensor replicates just that one behavior
-itself (captures each category's counter value at local midnight as a
-baseline, then reports every later reading as raw-minus-baseline), so an
-installation doesn't need a hand-configured YAML helper just to feed this
-integration.
+The source entities are raw, ever-increasing lifetime counters (kWh
+totals that never reset), not Daily Utility Meter helpers -- this
+module captures each category's counter value at local midnight as a
+baseline, then reports every later reading as raw-minus-baseline, so no
+hand-configured YAML helper is needed to feed this integration.
+
+When a category doesn't have a same-day baseline to resume from yet --
+a fresh install, a source configured for the first time, or a restored
+baseline from a previous day (Home Assistant was down across local
+midnight) -- _backfill_category_from_history() reconstructs today's
+baseline and any already-passed sample attributes from Recorder history
+instead of leaving them None. If Recorder has nothing to offer, everything
+starts blank as before -- _sample()'s own lazy-bootstrap fallback still
+covers that.
 """
 
 import logging
@@ -34,14 +37,14 @@ from homeassistant.util import dt as dt_util
 
 from ..const import CONF_ENTITY_MAP, ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL
 from ..devices import pv_device_info
+from ..helpers.history_helper import fetch_state_changes_since
 from ..helpers.state_helper import read_float_state
 
 LOGGER = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# Every category is sampled at the same 8 fixed times of day (the Node-RED
-# original's "Kør kl. X hver dag" injects), and each sample is stored as
-# "<category>_kl_<time_key>". Old global keys (Node-RED):
+# Every category is sampled at the same 8 fixed times of day, each stored
+# as "<category>_kl_<time_key>". Old global keys (Node-RED):
 # Husstand_status_kl_6/7/8/9/16/17/21/23_59.
 #
 # Only "property" (the whole property's total consumption) exists so far.
@@ -97,10 +100,11 @@ class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
 
     Each category gets its own local-midnight alarm (captures that day's
     baseline) plus one alarm per entry in _SAMPLE_TIMES (captures that
-    time's since-midnight snapshot via calculate_since_midnight()). The
-    per-category baseline and every snapshot survive a Home Assistant
-    restart via RestoreEntity -- restored from this entity's own previous
-    attributes, no separate storage needed.
+    time's since-midnight snapshot via calculate_since_midnight()).
+    Baseline and snapshots survive a restart via RestoreEntity, restored
+    from this entity's own previous attributes. Whenever a category
+    doesn't have a same-day baseline that way, it's reconstructed from
+    Recorder history instead -- see _backfill_category_from_history().
     """
 
     _attr_has_entity_name = True
@@ -129,8 +133,9 @@ class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
         self._midnight_baselines: dict[str, tuple[float, str]] = {}
 
     async def async_added_to_hass(self) -> None:
-        """Restore any previous snapshots and baselines, then start the
-        per-category daily alarms."""
+        """Restore any previous snapshots and baselines, backfill from
+        Recorder history whatever a category still doesn't have a same-day
+        baseline for, then start the per-category daily alarms."""
         await super().async_added_to_hass()
 
         last_state = await self.async_get_last_state()
@@ -152,14 +157,20 @@ class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
                         f"_midnight_baseline_date_{category}"
                     ] = baseline_date
 
+        today = dt_util.now().date().isoformat()
         for category, _ in _CATEGORIES:
-            if not self._category_entity_ids[category]:
+            entity_id = self._category_entity_ids[category]
+            if not entity_id:
                 LOGGER.warning(
                     "PwMngt: no source entity configured for consumption "
                     "status category '%s', it will stay unavailable",
                     category,
                 )
                 continue
+
+            baseline = self._midnight_baselines.get(category)
+            if baseline is None or baseline[1] != today:
+                await self._backfill_category_from_history(category, entity_id, today)
 
             self.async_on_remove(
                 async_track_time_change(
@@ -183,6 +194,70 @@ class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
 
         self._attr_available = True
         self.async_write_ha_state()
+
+    async def _backfill_category_from_history(
+        self, category: str, entity_id: str, today: str
+    ) -> None:
+        """Reconstruct this category's midnight baseline and any
+        already-passed sample attributes from Recorder history, for when
+        we don't have a same-day baseline yet -- a fresh install, a
+        source configured for the first time, or a restored baseline
+        from a previous day. Leaves everything as None if Recorder isn't
+        available or has no history yet -- _sample()'s own lazy-bootstrap
+        fallback still covers that case.
+        """
+        local_midnight = dt_util.start_of_local_day()
+        changes = await fetch_state_changes_since(
+            self.hass, entity_id, dt_util.as_utc(local_midnight)
+        )
+        if not changes:
+            return
+
+        baseline_value = read_float_state(changes[0])
+        if baseline_value is None:
+            return
+
+        self._midnight_baselines[category] = (baseline_value, today)
+        self._attr_extra_state_attributes[f"_midnight_baseline_{category}"] = baseline_value
+        self._attr_extra_state_attributes[f"_midnight_baseline_date_{category}"] = today
+
+        sample_times = [
+            (time_key, local_midnight.replace(hour=hour, minute=minute))
+            for time_key, hour, minute in _SAMPLE_TIMES
+        ]
+        now = dt_util.now()
+        current_value = baseline_value
+        sample_idx = 0
+
+        for state in changes[1:]:
+            changed_at = dt_util.as_local(state.last_changed)
+            while (
+                sample_idx < len(sample_times)
+                and sample_times[sample_idx][1] <= changed_at
+            ):
+                time_key, _ = sample_times[sample_idx]
+                self._attr_extra_state_attributes[f"{category}_kl_{time_key}"] = (
+                    calculate_since_midnight(current_value, baseline_value)
+                )
+                sample_idx += 1
+
+            value = read_float_state(state)
+            if value is not None:
+                current_value = value
+
+        while sample_idx < len(sample_times) and sample_times[sample_idx][1] <= now:
+            time_key, _ = sample_times[sample_idx]
+            self._attr_extra_state_attributes[f"{category}_kl_{time_key}"] = (
+                calculate_since_midnight(current_value, baseline_value)
+            )
+            sample_idx += 1
+
+        LOGGER.info(
+            "PwMngt: backfilled consumption-snapshot category '%s' from "
+            "history (midnight baseline %.3f)",
+            category,
+            baseline_value,
+        )
 
     def _make_midnight_handler(self, category: str):
         """A fresh closure per category, so each alarm captures the right
@@ -229,12 +304,12 @@ class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
         today = dt_util.now().date().isoformat()
         baseline = self._midnight_baselines.get(category)
         if baseline is None or baseline[1] != today:
-            # No baseline captured for today yet -- e.g. this sample fires
-            # before the first local-midnight alarm ever has (right after
-            # setup, or a restart during the night). Treat "now" as the
-            # baseline so this reports 0 rather than a huge/garbage number
-            # -- the same fallback Home Assistant's own utility_meter uses
-            # the first time it sees its source.
+            # No baseline captured for today yet -- e.g. this fires before
+            # the first local-midnight alarm has (right after setup, or a
+            # restart overnight). Treat "now" as the baseline so this
+            # reports 0 rather than a huge/garbage number -- same fallback
+            # Home Assistant's own utility_meter uses on first seeing its
+            # source.
             baseline = (raw_value, today)
             self._midnight_baselines[category] = baseline
             self._attr_extra_state_attributes[f"_midnight_baseline_{category}"] = raw_value

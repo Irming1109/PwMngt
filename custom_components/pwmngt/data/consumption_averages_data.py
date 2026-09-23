@@ -1,12 +1,11 @@
 """Consumption averages: the PV device's household-consumption-average sensor.
 
 See the package docstring in data/__init__.py for the general shape.
-Unlike data/balance.py, there's no calculate_* function here yet -- the
-averaging logic itself isn't built (see the comment above
-PwM_CONSUMPTION_AVERAGES_ATTRIBUTES for what it'll need), so this module is
-just PwMngtConsumptionAveragesSensor's scaffolding for now. Add a plain
-calculate_* function alongside it once that logic lands, the same way
-calculate_balance() sits next to PwMngtBalanceDataSensor in data/balance.py.
+Unlike data/balance_data.py, there's no calculate_* function yet -- the
+averaging logic isn't built (see the comment above
+PwM_CONSUMPTION_AVERAGES_ATTRIBUTES for what it needs). Add one alongside
+PwMngtConsumptionAveragesSensor once that logic lands, same as
+calculate_balance() sits next to PwMngtBalanceDataSensor in data/balance_data.py.
 """
 
 from homeassistant.components.sensor import SensorEntity, SensorEntityDescription
@@ -17,10 +16,10 @@ from ..devices import pv_device_info
 
 # ---------------------------------------------------------------------------
 # PV-device "consumption averages" sensor (read-only, scaffolding only).
-# Bundles 12 household-consumption-average values as attributes on a
-# single diagnostic entity -- a "*_data" sensor, same naming convention
-# and pattern as PwMngtBalanceDataSensor in data/balance.py.
-# No calculation logic yet -- state and every attribute report None.
+# Bundles 12 household-consumption-average values as attributes on one
+# diagnostic entity -- a "*_data" sensor, same convention as
+# PwMngtBalanceDataSensor in data/balance_data.py. No calculation logic
+# yet -- state and every attribute report None.
 #
 # Old Node-RED functions: "Beregn 8-16 & 6-9 & 17-06" / "Beregn
 # gennemsnitsforbrug 17-21" / "Beregn gennemsnitsforbrug døgn".

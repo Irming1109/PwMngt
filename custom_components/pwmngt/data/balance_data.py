@@ -1,10 +1,9 @@
 """Balance data: the PwM hub's live power-balance sensor.
 
 See the package docstring in data/__init__.py for the general shape.
-calculate_balance() below is the pure math -- the part ported straight
-from Node-RED's "Balance" function -- and PwMngtBalanceDataSensor is just
-the Home Assistant wiring: a 10-second trigger that feeds it samples and
-writes out what it returns.
+calculate_balance() below is the pure math, and PwMngtBalanceDataSensor
+is the Home Assistant wiring: a 10-second trigger that feeds it samples
+and writes out what it returns.
 """
 
 import logging
@@ -40,14 +39,13 @@ LOGGER = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Hub-level "power balance" sensor. Bundles 7 net-power-balance values
-# (averaged over different windows) as attributes on a single entity
-# rather than 7 separate sensors -- none need their own History/Statistics
-# graph, they're read programmatically.
+# (different averaging windows) as attributes on one entity instead of 7
+# separate sensors -- none need their own History/Statistics graph.
 #
-# Naming convention: a "*_data" key/name marks a sensor whose value is
-# maintained by an ongoing internal trigger (here, a 10-second timer)
-# rather than mirroring one external entity. PwM_CONSUMPTION_AVERAGES_SENSORS
-# in data/consumption_averages.py follows the same convention.
+# Naming convention: a "*_data" key/name means the value comes from an
+# ongoing internal trigger (here, a 10-second timer) rather than
+# mirroring one external entity -- same convention as
+# PwM_CONSUMPTION_AVERAGES_SENSORS in data/consumption_averages_data.py.
 #
 # Old key="balance_30_sek" (sensor.balance_30_sek) -> attribute "balance_30_sec"
 # Old key="balance_1_min" (sensor.balance_1_min) -> attribute "balance_1_min"
@@ -60,11 +58,12 @@ LOGGER = logging.getLogger(__name__)
 #   -> attribute "balance_15_min_corrected_with_chargers"
 # Old key="balance_30_min" (sensor.balance_30_min) -> attribute "balance_30_min"
 #
-# "_corrected" is a placeholder equal to "balance_15_min" for now --
-# mining correction isn't implemented yet. "_corrected_with_chargers" is
-# genuinely computed from PwM Charger1/2's Power sensors, but reads the
-# same as "balance_15_min" in practice until those sensors have live
-# values (still scaffolding -- see PwM_CHARGER_SENSORS in sensor.py).
+# "_corrected" is currently just "balance_15_min" (mining correction not
+# implemented yet). "_corrected_with_chargers" is genuinely computed from
+# PwM Charger1/2's Power sensors, but reads the same until those sensors
+# have live values (still scaffolding -- see PwM_CHARGER_SENSORS in
+# sensor.py).
+# ---------------------------------------------------------------------------
 PwM_BALANCE_DATA_ATTRIBUTES: list[str] = [
     "balance_30_sec",
     "balance_1_min",
@@ -100,15 +99,14 @@ _BALANCE_WINDOW_SAMPLES: dict[str, int] = {
 
 @dataclass
 class PwMngtBalanceStoredData(ExtraStoredData):
-    """What PwMngtBalanceDataSensor needs restored across a Home
-    Assistant restart: its raw sample history, so the rolling averages
-    don't have to rebuild from empty (see RESTORE_MAX_AGE for the
-    cutoff). This rides Home Assistant's own restore-state cache via
-    RestoreEntity.extra_restore_state_data/async_get_last_extra_data --
-    deliberately NOT stored as a visible extra_state_attributes entry,
-    since up to 180 raw numbers per list would clutter the entity's
-    attributes (and get written to the recorder) for no benefit to
-    anyone reading them.
+    """What PwMngtBalanceDataSensor restores across a Home Assistant
+    restart: its raw sample history, so the rolling averages don't
+    rebuild from empty (see RESTORE_MAX_AGE for the cutoff). Rides Home
+    Assistant's restore-state cache via
+    extra_restore_state_data/async_get_last_extra_data rather than
+    extra_state_attributes, since up to 180 raw numbers per list would
+    just clutter the entity (and get written to the recorder) for no
+    benefit.
     """
 
     samples: list[float]
@@ -137,21 +135,17 @@ def calculate_balance(
 ) -> dict[str, float]:
     """Pure calculation: turn raw samples into the 7 balance attributes.
 
-    No Home Assistant state is touched here -- give it two plain lists
-    (most recent sample last, up to 180 of them each) and it hands back a
-    plain dict of the 7 PwM_BALANCE_DATA_ATTRIBUTES values. This is the
-    Node-RED "Balance" function itself, ported line-for-line: same inputs
-    in, same values out, readable and testable on its own without knowing
-    anything about Home Assistant.
+    No Home Assistant state touched -- give it two plain lists (most
+    recent sample last, up to 180 of them each) and it returns a plain
+    dict of the 7 PwM_BALANCE_DATA_ATTRIBUTES values, testable on its
+    own.
 
     Each average divides by its full window size even before enough
     samples have accumulated, so early readings are pulled toward zero
-    until the window fills up -- same startup behavior as the original
-    Node-RED function. In practice this now only shows up on a fresh
-    install or after a long-enough gap that PwMngtBalanceDataSensor
-    discards its restored history (see RESTORE_MAX_AGE) -- a normal
-    Home Assistant restart restores the sample history instead of
-    starting from empty.
+    until the window fills -- in practice this only shows on a fresh
+    install, or after a gap long enough that PwMngtBalanceDataSensor
+    discards its restored history (see RESTORE_MAX_AGE); a normal
+    restart resumes from the restored sample history instead.
     """
     values = {
         key: round(-(sum(status_samples[-window:]) / window))
@@ -175,17 +169,14 @@ class PwMngtBalanceDataSensor(RestoreEntity, SensorEntity):
 
     Every 10 seconds, a timer trigger (_sample) reads Grid power plus
     Battery power (skipped while hub_properties.is_forced_charging()
-    reports True -- see that function for what it's reading), extends
-    this entity's rolling sample history, then hands that history to
-    calculate_balance() for the actual math and writes the result out.
-    That's the whole shape: trigger -> calculate_balance() -> update
-    attributes -- the same as Node-RED's inject -> function -> ha-sensor
-    nodes this was ported from.
+    reports True), extends this entity's rolling sample history, then
+    hands it to calculate_balance() for the math and writes the result
+    out.
 
-    The rolling sample history survives a Home Assistant restart --
-    see PwMngtBalanceStoredData and RESTORE_MAX_AGE -- so the longer
-    windows (5/15/30 min) don't read artificially low for up to half
-    an hour after every restart while they refill from empty.
+    The rolling sample history survives a Home Assistant restart -- see
+    PwMngtBalanceStoredData and RESTORE_MAX_AGE -- so the longer windows
+    (5/15/30 min) don't read artificially low for up to half an hour
+    after every restart while they refill from empty.
     """
 
     _attr_has_entity_name = True
@@ -343,4 +334,3 @@ class PwMngtBalanceDataSensor(RestoreEntity, SensorEntity):
                 continue
             total += read_float_state(self.hass.states.get(entity_id)) or 0.0
         return total
-

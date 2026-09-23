@@ -39,10 +39,10 @@ from .const import (
     ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
 )
 from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
-from .data.balance import PwM_BALANCE_DATA_SENSORS, PwMngtBalanceDataSensor
-from .data.charger_consumption import PwMngtChargerConsumptionSensor
-from .data.consumption_averages import PwM_CONSUMPTION_AVERAGES_SENSORS, PwMngtConsumptionAveragesSensor
-from .data.consumption_snapshots import (
+from .data.balance_data import PwM_BALANCE_DATA_SENSORS, PwMngtBalanceDataSensor
+from .data.consumption_charger_data import PwMngtChargerConsumptionSensor
+from .data.consumption_averages_data import PwM_CONSUMPTION_AVERAGES_SENSORS, PwMngtConsumptionAveragesSensor
+from .data.consumption_snapshots_data import (
     PwM_CONSUMPTION_SNAPSHOTS_SENSORS,
     PwMngtConsumptionSnapshotsSensor,
 )
@@ -118,7 +118,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         for description in PwM_CHARGER_SENSORS:
             if description.key == "consumption":
                 # Real behaviour (reset-aware since-midnight accumulator)
-                # -- see data/charger_consumption.py. Every other charger
+                # -- see data/consumption_charger_data.py. Every other charger
                 # sensor below stays pure scaffolding for now.
                 entity = PwMngtChargerConsumptionSensor(description, entry, charger)
             else:
@@ -212,7 +212,7 @@ PwM_CHARGER_SENSORS: list[SensorEntityDescription] = [
     # Old key="ladeboks_1_forbrug" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks 1 forbrug" (Ladeboks 2 ... equivalent for Charger2)
     # Real behaviour, unlike every other entry in this list -- see
-    # PwMngtChargerConsumptionSensor in data/charger_consumption.py
+    # PwMngtChargerConsumptionSensor in data/consumption_charger_data.py
     # (instantiated for this key specifically in async_setup_entry below).
     SensorEntityDescription(
         key="consumption",
@@ -301,7 +301,7 @@ class PwMngtChargerSensor(SensorEntity):
 
 
 # ---------------------------------------------------------------------------
-# Hub-level "power balance" sensor -- moved to data/balance.py
+# Hub-level "power balance" sensor -- moved to data/balance_data.py
 # (PwM_BALANCE_DATA_SENSORS, PwMngtBalanceDataSensor, calculate_balance()),
 # imported below.
 # ---------------------------------------------------------------------------
@@ -468,7 +468,7 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 # ---------------------------------------------------------------------------
 # PV-device sensors for values PwMngt computes internally itself, rather
 # than mirror an external entity -- same scaffold-now-compute-later
-# pattern as PwMngtConsumptionAveragesSensor in data/consumption_averages.py. Each
+# pattern as PwMngtConsumptionAveragesSensor in data/consumption_averages_data.py. Each
 # stays at native_value=None ("unknown") until that calculation lands.
 # ---------------------------------------------------------------------------
 
@@ -521,7 +521,7 @@ PwM_PV_SCAFFOLD_SENSORS: list[SensorEntityDescription] = [
 class PwMngtScaffoldSensor(SensorEntity):
     """A PV-device sensor for a value PwMngt computes internally itself
     (see PwM_PV_SCAFFOLD_SENSORS). Stays at native_value=None until
-    then, same pattern as PwMngtConsumptionAveragesSensor in data/consumption_averages.py.
+    then, same pattern as PwMngtConsumptionAveragesSensor in data/consumption_averages_data.py.
     """
 
     _attr_has_entity_name = True
@@ -661,7 +661,7 @@ PwM_HUB_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 
 
 # ---------------------------------------------------------------------------
-# PV-device "consumption averages" sensor -- moved to data/consumption_averages.py
+# PV-device "consumption averages" sensor -- moved to data/consumption_averages_data.py
 # (PwM_CONSUMPTION_AVERAGES_SENSORS, PwMngtConsumptionAveragesSensor), imported above.
 # ---------------------------------------------------------------------------
 

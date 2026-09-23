@@ -61,7 +61,7 @@ _SOLAR_PV_PLANT_FIELDS = [
     # dedicated page.
     (ENTITY_KEY_SPOT_ELECTRICITY_PRICE, "kr/kWh", True),
     # Consumption tracking -- required even though only the "property"
-    # category (data/consumption_snapshots.py) exists so far (Kasper's call:
+    # category (data/consumption_snapshots_data.py) exists so far (Kasper's call:
     # every install should have this wired up from the start, not just
     # the ones migrating this segment first). See that module's
     # docstring for why this must be a raw, ever-increasing counter
@@ -379,7 +379,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
     async def async_step_ev_charging(self, user_input: Any | None = None):
         """Page 3: EV Charging -- one field per installed charger, asking
         which entity reports that charger's own added-energy counter
-        (see PwMngtChargerConsumptionSensor in data/charger_consumption.py).
+        (see PwMngtChargerConsumptionSensor in data/consumption_charger_data.py).
 
         Charger type itself isn't asked here -- that's select.charger1_type
         / select.charger2_type (PwM_CONFIG_SELECTS in select.py), already
