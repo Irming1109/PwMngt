@@ -38,7 +38,7 @@ PwM_CONSUMPTION_AVERAGES_ATTRIBUTES: list[str] = [
     "nighttime_average",
     "full_day_average",
     "pool_heating_consumption",
-    "mining_consumption",
+    "pv_surplus_consumption",  # old: mining_consumption
     "car_charger_consumption",
     "heat_pump_consumption",
 ]

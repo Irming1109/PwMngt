@@ -58,11 +58,11 @@ LOGGER = logging.getLogger(__name__)
 #   -> attribute "balance_15_min_corrected_with_chargers"
 # Old key="balance_30_min" (sensor.balance_30_min) -> attribute "balance_30_min"
 #
-# "_corrected" is currently just "balance_15_min" (mining correction not
-# implemented yet). "_corrected_with_chargers" is genuinely computed from
-# PwM Charger1/2's Power sensors, but reads the same until those sensors
-# have live values (still scaffolding -- see PwM_CHARGER_SENSORS in
-# sensor.py).
+# "_corrected" is currently just "balance_15_min" (PV Surplus correction,
+# old: mining correction, not implemented yet). "_corrected_with_chargers"
+# is genuinely computed from PwM Charger1/2's Power sensors, but reads
+# the same until those sensors have live values (still scaffolding --
+# see PwM_CHARGER_SENSORS in sensor.py).
 # ---------------------------------------------------------------------------
 PwM_BALANCE_DATA_ATTRIBUTES: list[str] = [
     "balance_30_sec",

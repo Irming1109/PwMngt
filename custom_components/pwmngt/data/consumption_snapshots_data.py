@@ -48,9 +48,10 @@ LOGGER = logging.getLogger(__name__)
 # Husstand_status_kl_6/7/8/9/16/17/21/23_59.
 #
 # Only "property" (the whole property's total consumption) exists so far.
-# Add a category -- mining, chargers, pool heat, ground-source heat pump --
-# by adding one entry to _CATEGORIES and one ENTITY_KEY_* in const.py; the
-# sensor, the sampling and the restore logic below are all shared.
+# Add a category -- PV Surplus (old: mining), chargers, pool heat,
+# ground-source heat pump -- by adding one entry to _CATEGORIES and one
+# ENTITY_KEY_* in const.py; the sensor, the sampling and the restore
+# logic below are all shared.
 # ---------------------------------------------------------------------------
 
 _SAMPLE_TIMES: list[tuple[str, int, int]] = [
