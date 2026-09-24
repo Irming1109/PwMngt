@@ -936,7 +936,7 @@
   var SEGMENTS = {
     hub: {
       title: 'Hub', icon: 'hub', kind: 'hub',
-      description: "The integration's core device. Hosts the cross-cutting calculations every segment feeds into or draws from — live power balance and the household's since-midnight consumption snapshots.",
+      description: "The integration's core device — general configuration and the live power-balance calculation every segment's chargers feed into.",
       layers: {
         data: [
           {
@@ -949,29 +949,6 @@
               'balance_15_min_corrected', 'balance_15_min_corrected_with_chargers', 'balance_30_min'
             ],
             note: '"_corrected" doesn\'t subtract PV Surplus yet (not built). "_corrected_with_chargers" genuinely sums PwM Charger1/2\'s Power sensors, but reads the same as "_corrected" until those go live.'
-          },
-          {
-            file: 'consumption_snapshots_data.py', cls: 'PwMngtConsumptionSnapshotsSensor', deviceKey: 'pv',
-            triggers: [
-              { kind: 'time', text: 'Local midnight (00:00) per category — captures that day\'s baseline reading.' },
-              { kind: 'time', text: '8 fixed times/day per category: 06:00, 07:00, 08:00, 09:00, 16:00, 17:00, 21:00, 23:58.' }
-            ],
-            attributes: [
-              'property_kl_6', 'property_kl_7', 'property_kl_8', 'property_kl_9',
-              'property_kl_16', 'property_kl_17', 'property_kl_21', 'property_kl_23_59',
-              '_midnight_baseline_property (internal)', '_midnight_baseline_date_property (internal)'
-            ],
-            note: 'Grouped under Hub because its category list is designed to grow across every segment (PV Surplus, chargers, pool heat, heat pump) — a cross-cutting mechanism, not a PV-only one. The device chip above is the literal truth: this entity attaches to "PwM PV". Only the "property" (whole-household) category exists today.'
-          },
-          {
-            file: 'consumption_averages_data.py', cls: 'PwMngtConsumptionAveragesSensor', deviceKey: 'pv',
-            triggers: [],
-            attributes: [
-              'daytime_average', 'daytime_average_adjusted', 'early_morning_average', 'morning_average',
-              'late_morning_average', 'evening_average', 'nighttime_average', 'full_day_average',
-              'pool_heating_consumption', 'pv_surplus_consumption', 'car_charger_consumption', 'heat_pump_consumption'
-            ],
-            note: 'Pure scaffolding — no trigger wired up yet, so state and every attribute always read None. Grouped under Hub for the same cross-segment reason as consumption_snapshots_data.py just above — it also actually attaches to "PwM PV" (see the device chip). Will consume Hub\'s own snapshot data plus each segment\'s consumption once the averaging logic is built.'
           }
         ],
         properties: [],
@@ -996,7 +973,31 @@
       title: 'Solar PV Plant', icon: 'pv', kind: 'mandatory',
       description: "Maps your solar plant's core data — battery, PV production, grid power and spot price — into PwMngt. The only segment that's fully live today.",
       layers: {
-        data: [],
+        data: [
+          {
+            file: 'consumption_snapshots_data.py', cls: 'PwMngtConsumptionSnapshotsSensor', deviceKey: 'pv',
+            triggers: [
+              { kind: 'time', text: 'Local midnight (00:00) per category — captures that day\'s baseline reading.' },
+              { kind: 'time', text: '8 fixed times/day per category: 06:00, 07:00, 08:00, 09:00, 16:00, 17:00, 21:00, 23:58.' }
+            ],
+            attributes: [
+              'property_kl_6', 'property_kl_7', 'property_kl_8', 'property_kl_9',
+              'property_kl_16', 'property_kl_17', 'property_kl_21', 'property_kl_23_59',
+              '_midnight_baseline_property (internal)', '_midnight_baseline_date_property (internal)'
+            ],
+            note: 'Moved here from Hub (2026-09-24) — Kasper spotted in HA\'s own device registry that this entity actually lives on "PwM PV", matching where it\'s now filed. Its category list is still designed to grow across every future segment (PV Surplus, chargers, pool heat, heat pump); only the "property" (whole-household) category exists today.'
+          },
+          {
+            file: 'consumption_averages_data.py', cls: 'PwMngtConsumptionAveragesSensor', deviceKey: 'pv',
+            triggers: [],
+            attributes: [
+              'daytime_average', 'daytime_average_adjusted', 'early_morning_average', 'morning_average',
+              'late_morning_average', 'evening_average', 'nighttime_average', 'full_day_average',
+              'pool_heating_consumption', 'pv_surplus_consumption', 'car_charger_consumption', 'heat_pump_consumption'
+            ],
+            note: 'Pure scaffolding — no trigger wired up yet, so state and every attribute always read None. Moved here from Hub for the same reason as consumption_snapshots_data.py above — confirmed to live on "PwM PV". Will consume the snapshot data above plus each segment\'s consumption once the averaging logic is built.'
+          }
+        ],
         properties: [
           {
             file: 'pv_properties.py', cls: 'is_forced_charging()', readsDeviceKey: 'pv',
