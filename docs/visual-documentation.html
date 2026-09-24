@@ -733,14 +733,60 @@
 
   .detail-block h3 svg { width: 15px; height: 15px; color: var(--text-faint); }
 
-  .trigger-list, .wraps-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+  .trigger-list, .wraps-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
 
-  .trigger-item, .wraps-item {
+  .trigger-item {
     display: flex;
     gap: 10px;
     align-items: flex-start;
     font-size: 14px;
     line-height: 1.5;
+  }
+
+  .wraps-item {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .wraps-item:last-child { border-bottom: none; padding-bottom: 0; }
+
+  .wraps-entity { font-size: 14px; line-height: 1.55; color: var(--text); }
+
+  .wraps-meta { display: flex; flex-wrap: wrap; gap: 8px; }
+
+  .wraps-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    border-radius: 8px;
+    padding: 4px 10px;
+  }
+
+  .wraps-chip.type {
+    background: color-mix(in srgb, var(--props-color) 14%, var(--surface-2));
+    color: var(--props-color);
+    border: 1px solid color-mix(in srgb, var(--props-color) 40%, var(--border-strong));
+    font-weight: 600;
+  }
+
+  .wraps-chip.example {
+    background: var(--surface-2);
+    color: var(--text-muted);
+    border: 1px solid var(--border-strong);
+  }
+
+  .wraps-chip .wraps-chip-label {
+    font-family: 'Public Sans', system-ui, sans-serif;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 9.5px;
+    letter-spacing: 0.05em;
+    opacity: 0.75;
   }
 
   .trigger-kind {
@@ -955,9 +1001,12 @@
           {
             file: 'pv_properties.py', cls: 'is_forced_charging()', readsDeviceKey: 'pv',
             wraps: [
-              "PwMngt's own \"Forced charge\" scaffold sensor (sensor.<hub>_pv_forced_charge, filed under PwM_PV_SCAFFOLD_SENSORS in sensor.py) — read as a plain bool, failing safe to False if the entity isn't registered yet or has no real value yet."
-            ],
-            note: 'Renamed from hub_properties.py (2026-09-24) — Kasper noticed the old name was misleading, since is_forced_charging() reads a sensor that lives on "PwM PV", not "PwM". Now correctly filed under Solar PV Plant instead of Hub. Still imported from data/balance_data.py (a Hub-device file) to decide whether to skip Battery power in its calculation.'
+              {
+                entity: "PwMngt's own \"Forced charge\" scaffold sensor (sensor.&lt;hub&gt;_pv_forced_charge)",
+                type: 'ENUM sensor state → wrapped as Python bool',
+                example: '"on" → True &nbsp;/&nbsp; "off" or unregistered → False'
+              }
+            ]
           }
         ],
         helpers: []
@@ -1168,7 +1217,13 @@
     if (layerKey === 'properties') {
       html += '<div class="detail-block"><h3>' + ICON.properties + ' Entities wrapped</h3><ul class="wraps-list">';
       f.wraps.forEach(function (w) {
-        html += '<li class="wraps-item"><span>' + w + '</span></li>';
+        html += '<li class="wraps-item">';
+        html += '<div class="wraps-entity">' + w.entity + '</div>';
+        html += '<div class="wraps-meta">';
+        html += '<span class="wraps-chip type"><span class="wraps-chip-label">Type</span>' + w.type + '</span>';
+        html += '<span class="wraps-chip example"><span class="wraps-chip-label">e.g.</span>' + w.example + '</span>';
+        html += '</div>';
+        html += '</li>';
       });
       html += '</ul></div>';
     }
@@ -1181,7 +1236,7 @@
       html += '</div></div>';
     }
 
-    if (f.note) {
+    if (f.note && layerKey !== 'properties') {
       html += '<div class="note-block">' + ICON.info + '<span>' + f.note + '</span></div>';
     }
 
