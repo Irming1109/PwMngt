@@ -862,15 +862,7 @@
             note: 'Pure scaffolding — no trigger wired up yet, so state and every attribute always read None. Grouped under Hub for the same cross-segment reason as consumption_snapshots_data.py just above — it also actually attaches to "PwM PV" (see the device chip). Will consume Hub\'s own snapshot data plus each segment\'s consumption once the averaging logic is built.'
           }
         ],
-        properties: [
-          {
-            file: 'hub_properties.py', cls: 'is_forced_charging()', readsDeviceKey: 'pv',
-            wraps: [
-              "PwMngt's own \"Forced charge\" scaffold sensor (sensor.<hub>_pv_forced_charge) — read as a plain bool, failing safe to False if the entity isn't registered yet or has no real value yet."
-            ],
-            note: 'That scaffold sensor is filed under PwM_PV_SCAFFOLD_SENSORS in sensor.py — it lives on "PwM PV", not "PwM" (see the device chip above). This properties file sits in the Hub folder by naming convention, not because of the device it reads — flagged here so that mismatch doesn\'t look like an oversight.'
-          }
-        ],
+        properties: [],
         helpers: [
           {
             file: 'history_helper.py',
@@ -891,7 +883,19 @@
     solar_pv_plant: {
       title: 'Solar PV Plant', icon: 'pv', kind: 'mandatory',
       description: "Maps your solar plant's core data — battery, PV production, grid power and spot price — into PwMngt. The only segment that's fully live today.",
-      layers: { data: [], properties: [], helpers: [] }
+      layers: {
+        data: [],
+        properties: [
+          {
+            file: 'pv_properties.py', cls: 'is_forced_charging()', readsDeviceKey: 'pv',
+            wraps: [
+              "PwMngt's own \"Forced charge\" scaffold sensor (sensor.<hub>_pv_forced_charge, filed under PwM_PV_SCAFFOLD_SENSORS in sensor.py) — read as a plain bool, failing safe to False if the entity isn't registered yet or has no real value yet."
+            ],
+            note: 'Renamed from hub_properties.py (2026-09-24) — Kasper noticed the old name was misleading, since is_forced_charging() reads a sensor that lives on "PwM PV", not "PwM". Now correctly filed under Solar PV Plant instead of Hub. Still imported from data/balance_data.py (a Hub-device file) to decide whether to skip Battery power in its calculation.'
+          }
+        ],
+        helpers: []
+      }
     },
 
     ev_charging: {
