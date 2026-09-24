@@ -29,6 +29,11 @@
     --data-color: #0f7a6e;
     --props-color: #7a4fae;
     --helper-color: #b1650f;
+    --hub-color: #4a5a52;
+    --pv-color: #0f7a6e;
+    --ev-color: #6552d9;
+    --pool-color: #0f86b8;
+    --surplus-color: #c97a1f;
     --shadow: 0 1px 2px rgba(22, 33, 29, 0.04);
     --shadow-hover: 0 12px 24px -12px rgba(22, 33, 29, 0.28);
   }
@@ -61,6 +66,11 @@
       --data-color: #4fd0ba;
       --props-color: #c19cf0;
       --helper-color: #f0b15c;
+      --hub-color: #9db3a8;
+      --pv-color: #3ab6a1;
+      --ev-color: #a99cff;
+      --pool-color: #5fc7ec;
+      --surplus-color: #e3a04f;
       --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
       --shadow-hover: 0 16px 28px -12px rgba(0, 0, 0, 0.55);
     }
@@ -93,6 +103,11 @@
     --data-color: #4fd0ba;
     --props-color: #c19cf0;
     --helper-color: #f0b15c;
+    --hub-color: #9db3a8;
+    --pv-color: #3ab6a1;
+    --ev-color: #a99cff;
+    --pool-color: #5fc7ec;
+    --surplus-color: #e3a04f;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow-hover: 0 16px 28px -12px rgba(0, 0, 0, 0.55);
   }
@@ -140,7 +155,7 @@
   .topbar h1 {
     font-family: 'Sora', system-ui, sans-serif;
     font-weight: 700;
-    font-size: clamp(19px, 2.6vw, 23px);
+    font-size: clamp(20px, 2.9vw, 26px);
     margin: 0;
     letter-spacing: -0.01em;
     flex: 1 1 auto;
@@ -220,6 +235,8 @@
     all: unset;
     box-sizing: border-box;
     display: block;
+    position: relative;
+    overflow: hidden;
     width: 100%;
     text-align: left;
     background: var(--surface);
@@ -231,11 +248,24 @@
     transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
   }
 
+  .card-base::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    transform: scaleX(0);
+    transform-origin: left;
+    transition: transform 0.3s ease;
+  }
+
   .card-base:hover, .card-base:focus-visible {
     transform: translateY(-3px);
     box-shadow: var(--shadow-hover);
     border-color: var(--accent);
   }
+
+  .card-base:hover::before, .card-base:focus-visible::before { transform: scaleX(1); }
 
   .card-base:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   .card-base:active { transform: translateY(-1px); }
@@ -249,22 +279,33 @@
 
   .card-icon {
     flex-shrink: 0;
-    width: 34px;
-    height: 34px;
-    border-radius: 9px;
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
     background: var(--surface-2);
     color: var(--accent-strong);
+    transition: transform 0.25s cubic-bezier(.34,1.56,.64,1), background 0.16s ease, color 0.16s ease;
   }
 
-  .card-icon svg { width: 18px; height: 18px; }
+  .card-icon svg { width: 22px; height: 22px; }
+
+  .card-base:hover .card-icon, .card-base:focus-visible .card-icon {
+    transform: scale(1.1) rotate(-4deg);
+  }
+
+  .card-icon.icon-hub { background: color-mix(in srgb, var(--hub-color) 18%, var(--surface-2)); color: var(--hub-color); }
+  .card-icon.icon-pv { background: color-mix(in srgb, var(--pv-color) 18%, var(--surface-2)); color: var(--pv-color); }
+  .card-icon.icon-ev { background: color-mix(in srgb, var(--ev-color) 18%, var(--surface-2)); color: var(--ev-color); }
+  .card-icon.icon-pool { background: color-mix(in srgb, var(--pool-color) 18%, var(--surface-2)); color: var(--pool-color); }
+  .card-icon.icon-surplus { background: color-mix(in srgb, var(--surplus-color) 18%, var(--surface-2)); color: var(--surplus-color); }
 
   .card-title {
     font-family: 'Sora', system-ui, sans-serif;
     font-weight: 600;
-    font-size: 17px;
+    font-size: 18.5px;
     margin: 0 0 4px;
     color: var(--text);
   }
@@ -289,10 +330,16 @@
   }
 
   .active-dot {
-    width: 7px; height: 7px; border-radius: 50%;
+    width: 8px; height: 8px; border-radius: 50%;
     background: var(--active-dot);
     box-shadow: 0 0 0 3px color-mix(in srgb, var(--active-dot) 25%, transparent);
     flex-shrink: 0;
+    animation: pwm-pulse 2.4s ease-in-out infinite;
+  }
+
+  @keyframes pwm-pulse {
+    0%, 100% { box-shadow: 0 0 0 3px color-mix(in srgb, var(--active-dot) 25%, transparent); }
+    50% { box-shadow: 0 0 0 7px color-mix(in srgb, var(--active-dot) 8%, transparent); }
   }
 
   .card-desc {
@@ -342,19 +389,107 @@
     padding: 22px 24px;
   }
 
-  .seg-header .card-icon { width: 42px; height: 42px; }
-  .seg-header .card-icon svg { width: 22px; height: 22px; }
+  .seg-header .card-icon { width: 56px; height: 56px; border-radius: 14px; }
+  .seg-header .card-icon svg { width: 28px; height: 28px; }
 
   .seg-header-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
 
   .seg-header h2 {
     font-family: 'Sora', system-ui, sans-serif;
     font-weight: 700;
-    font-size: 21px;
+    font-size: 23px;
     margin: 0;
   }
 
   .seg-header p { margin: 0; color: var(--text-muted); font-size: 14.5px; line-height: 1.55; max-width: 64ch; }
+
+  /* ---------- Device map (Hub only) ---------- */
+
+  .device-map {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 22px 24px 26px;
+  }
+
+  .device-map-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11.5px;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin: 0 0 20px;
+    text-align: center;
+  }
+
+  .device-tree { display: flex; flex-direction: column; align-items: center; }
+
+  .device-node {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+    font-size: 13px;
+    padding: 9px 16px;
+    border-radius: 10px;
+    background: var(--surface-3);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    white-space: nowrap;
+    transition: transform 0.2s cubic-bezier(.34,1.56,.64,1);
+  }
+
+  .device-node:hover { transform: translateY(-2px) scale(1.03); }
+
+  .device-node svg { width: 15px; height: 15px; }
+
+  .device-node.root {
+    font-size: 14.5px;
+    padding: 11px 22px;
+    background: color-mix(in srgb, var(--hub-color) 16%, var(--surface-3));
+    border-color: var(--hub-color);
+    color: var(--hub-color);
+  }
+
+  .device-node.node-pv { border-color: color-mix(in srgb, var(--pv-color) 55%, var(--border-strong)); color: var(--pv-color); }
+  .device-node.node-ev { border-color: color-mix(in srgb, var(--ev-color) 55%, var(--border-strong)); color: var(--ev-color); }
+
+  .device-stem { width: 2px; height: 22px; background: var(--border-strong); }
+
+  .device-children {
+    display: inline-flex;
+    gap: 32px;
+    padding-top: 22px;
+    border-top: 2px solid var(--border-strong);
+  }
+
+  .device-child { display: flex; flex-direction: column; align-items: center; }
+
+  .device-map-caption {
+    margin: 18px 0 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-muted);
+    text-align: center;
+    max-width: 60ch;
+    margin-inline: auto;
+  }
+
+  .device-map-caption code {
+    font-family: 'IBM Plex Mono', monospace;
+    background: var(--surface-2);
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-size: 12px;
+  }
+
+  @media (max-width: 620px) {
+    .device-children { flex-wrap: wrap; justify-content: center; border-top: none; padding-top: 4px; gap: 14px; }
+    .device-children .device-stem { display: none; }
+    .device-tree > .device-stem { display: none; }
+  }
 
   /* ---------- Layer boxes ---------- */
 
@@ -375,16 +510,16 @@
     flex-direction: column;
   }
 
-  .layer-box-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .layer-box-head { display: flex; align-items: center; gap: 9px; margin-bottom: 4px; }
 
-  .layer-dot { width: 9px; height: 9px; border-radius: 3px; flex-shrink: 0; }
+  .layer-dot { width: 12px; height: 12px; border-radius: 4px; flex-shrink: 0; }
   .layer-dot.data { background: var(--data-color); }
   .layer-dot.properties { background: var(--props-color); }
   .layer-dot.helper { background: var(--helper-color); }
 
   .layer-box-head h3 {
     font-family: 'Sora', system-ui, sans-serif;
-    font-size: 14.5px;
+    font-size: 15px;
     font-weight: 600;
     margin: 0;
   }
@@ -427,11 +562,41 @@
   .file-row svg { width: 12px; height: 12px; color: var(--text-faint); flex-shrink: 0; transition: transform 0.14s ease, color 0.14s ease; }
   .file-row:hover svg, .file-row:focus-visible svg { transform: translateX(2px); color: var(--accent-strong); }
 
+  .file-row-name { display: flex; align-items: center; gap: 7px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-row-right { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+  .file-row-right svg.chev { color: var(--text-faint); }
+
   .empty-note {
     font-size: 13px;
     color: var(--text-faint);
     font-style: italic;
     padding: 6px 2px 16px;
+  }
+
+  /* ---------- Device chip ---------- */
+
+  .device-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 9px;
+    border-radius: 999px;
+    white-space: nowrap;
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    color: var(--text-muted);
+  }
+
+  .device-chip svg { width: 11px; height: 11px; flex-shrink: 0; color: inherit; }
+
+  .device-chip.cross {
+    border-style: dashed;
+    border-color: var(--surplus-color);
+    color: var(--surplus-color);
+    background: color-mix(in srgb, var(--surplus-color) 14%, var(--surface-2));
   }
 
   /* ---------- File detail (level 2) ---------- */
@@ -577,7 +742,9 @@
 
   [hidden] { display: none !important; }
 
-  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; animation: none !important; }
+  }
 </style>
 
 <div class="page">
@@ -613,10 +780,46 @@
     file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"></path><path d="M14 3v4h4"></path></svg>'
   };
 
+  /* ============== DEVICE TOPOLOGY ============== */
+  /* Ground truth: custom_components/pwmngt/devices.py. Every entity in
+     data/ sets self._attr_device_info to exactly one of hub_device_info(),
+     pv_device_info() or charger_device_info() -- that call is what
+     "deviceKey" below records, verified live (grep) each time this page
+     is rebuilt, never guessed from memory or from which segment a file
+     conceptually feels like it belongs to. */
+  var DEVICE_META = {
+    hub:     { label: 'PwM (Hub)',       icon: 'hub' },
+    pv:      { label: 'PwM PV',          icon: 'pv' },
+    charger: { label: 'PwM Charger1/2',  icon: 'ev' }
+  };
+
+  /* The device a segment "naturally" owns -- used only to flag when a
+     file's actual device (deviceKey / readsDeviceKey) differs from the
+     segment box it's grouped under, e.g. a Hub-grouped file that really
+     attaches to the PV device. null = segment has no device of its own
+     yet, so nothing can be flagged as cross-device there. */
+  var SEGMENT_HOME_DEVICE = {
+    hub: 'hub', solar_pv_plant: 'pv', ev_charging: 'charger',
+    pool: null, pv_surplus: null
+  };
+
+  function deviceChip(f, segKey) {
+    var key = f.deviceKey || f.readsDeviceKey;
+    if (!key) return '';
+    var meta = DEVICE_META[key];
+    var home = SEGMENT_HOME_DEVICE[segKey];
+    var cross = !!(home && key !== home);
+    var verb = f.deviceKey ? 'Attaches to' : 'Reads a sensor on';
+    var title = (cross ? 'Different device than this segment. ' : '') + verb + ': ' + meta.label;
+    return '<span class="device-chip' + (cross ? ' cross' : '') + '" title="' + title + '">' + ICON[meta.icon] + meta.label + '</span>';
+  }
+
   /* ============== CONTENT MODEL ============== */
   /* Read from the live PwMngt repo (custom_components/pwmngt) as of v0.3.06.
-     "device" notes the actual Home Assistant device an entity attaches to,
-     which can differ from the segment it's grouped under here (see Hub). */
+     "segment" is the wizard page a file is filed under here for
+     documentation purposes; "deviceKey"/"readsDeviceKey" is the literal HA
+     device from the code (see DEVICE_META above) -- they aren't always the
+     same device, and the device chip says so plainly whenever they're not. */
 
   var SEGMENTS = {
     hub: {
@@ -625,7 +828,7 @@
       layers: {
         data: [
           {
-            file: 'balance_data.py', cls: 'PwMngtBalanceDataSensor', device: 'PwM (Hub device)',
+            file: 'balance_data.py', cls: 'PwMngtBalanceDataSensor', deviceKey: 'hub',
             triggers: [
               { kind: 'interval', text: 'Every 10 seconds — samples Grid + Battery power (skipped while a forced-charge is in progress).' }
             ],
@@ -636,7 +839,7 @@
             note: '"_corrected" doesn\'t subtract PV Surplus yet (not built). "_corrected_with_chargers" genuinely sums PwM Charger1/2\'s Power sensors, but reads the same as "_corrected" until those go live.'
           },
           {
-            file: 'consumption_snapshots_data.py', cls: 'PwMngtConsumptionSnapshotsSensor', device: 'PwM PV (grouped under Hub — see note)',
+            file: 'consumption_snapshots_data.py', cls: 'PwMngtConsumptionSnapshotsSensor', deviceKey: 'pv',
             triggers: [
               { kind: 'time', text: 'Local midnight (00:00) per category — captures that day\'s baseline reading.' },
               { kind: 'time', text: '8 fixed times/day per category: 06:00, 07:00, 08:00, 09:00, 16:00, 17:00, 21:00, 23:58.' }
@@ -646,25 +849,26 @@
               'property_kl_16', 'property_kl_17', 'property_kl_21', 'property_kl_23_59',
               '_midnight_baseline_property (internal)', '_midnight_baseline_date_property (internal)'
             ],
-            note: 'Its entity technically lives on the "PwM PV" device, not "PwM" — grouped under Hub here because its category list is designed to grow across every segment (PV Surplus, chargers, pool heat, heat pump). Only the "property" (whole-household) category exists today.'
+            note: 'Grouped under Hub because its category list is designed to grow across every segment (PV Surplus, chargers, pool heat, heat pump) — a cross-cutting mechanism, not a PV-only one. The device chip above is the literal truth: this entity attaches to "PwM PV". Only the "property" (whole-household) category exists today.'
           },
           {
-            file: 'consumption_averages_data.py', cls: 'PwMngtConsumptionAveragesSensor', device: 'PwM PV (grouped under Hub — see note)',
+            file: 'consumption_averages_data.py', cls: 'PwMngtConsumptionAveragesSensor', deviceKey: 'pv',
             triggers: [],
             attributes: [
               'daytime_average', 'daytime_average_adjusted', 'early_morning_average', 'morning_average',
               'late_morning_average', 'evening_average', 'nighttime_average', 'full_day_average',
               'pool_heating_consumption', 'pv_surplus_consumption', 'car_charger_consumption', 'heat_pump_consumption'
             ],
-            note: 'Pure scaffolding — no trigger wired up yet, so state and every attribute always read None. Will consume Hub\'s own snapshot data plus each segment\'s consumption once the averaging logic is built.'
+            note: 'Pure scaffolding — no trigger wired up yet, so state and every attribute always read None. Grouped under Hub for the same cross-segment reason as consumption_snapshots_data.py just above — it also actually attaches to "PwM PV" (see the device chip). Will consume Hub\'s own snapshot data plus each segment\'s consumption once the averaging logic is built.'
           }
         ],
         properties: [
           {
-            file: 'hub_properties.py', cls: 'is_forced_charging()',
+            file: 'hub_properties.py', cls: 'is_forced_charging()', readsDeviceKey: 'pv',
             wraps: [
               "PwMngt's own \"Forced charge\" scaffold sensor (sensor.<hub>_pv_forced_charge) — read as a plain bool, failing safe to False if the entity isn't registered yet or has no real value yet."
-            ]
+            ],
+            note: 'That scaffold sensor is filed under PwM_PV_SCAFFOLD_SENSORS in sensor.py — it lives on "PwM PV", not "PwM" (see the device chip above). This properties file sits in the Hub folder by naming convention, not because of the device it reads — flagged here so that mismatch doesn\'t look like an oversight.'
           }
         ],
         helpers: [
@@ -696,7 +900,7 @@
       layers: {
         data: [
           {
-            file: 'consumption_charger_data.py', cls: 'PwMngtChargerConsumptionSensor', device: 'PwM Charger1 / PwM Charger2 (one sensor per charger)',
+            file: 'consumption_charger_data.py', cls: 'PwMngtChargerConsumptionSensor', deviceKey: 'charger',
             triggers: [
               { kind: 'entity', text: "Tracks whichever entity_id is currently typed into this charger's own \"Consumption source entity\" text field — re-subscribes if it changes." },
               { kind: 'time', text: 'Local midnight (00:00) — resets the running since-midnight total to 0.' },
@@ -707,7 +911,7 @@
               'kl_8', 'kl_16',
               '_last_raw (internal)', '_total_date (internal)'
             ],
-            note: 'This file also defines a standalone function, total_charger_consumption(), that sums both chargers\' kl_8/kl_16 snapshots — the native replacement for Claus\'s Node-RED "Forbrug_billadere". Built, but not yet called from anywhere.'
+            note: 'One sensor instance per charger — each attaches to its own device (PwM Charger1 or PwM Charger2), never shared. This file also defines a standalone function, total_charger_consumption(), that sums both chargers\' kl_8/kl_16 snapshots — the native replacement for Claus\'s Node-RED "Forbrug_billadere". Built, but not yet called from anywhere.'
           }
         ],
         properties: [],
@@ -757,7 +961,7 @@
     html += '<div style="display:flex;flex-direction:column;align-items:center;gap:0;">';
 
     html += '<button class="card-base hub-card" type="button" data-nav="hub">';
-    html += '<div class="card-top"><div class="card-icon">' + ICON.hub + '</div>' + badgeFor(hub) + '</div>';
+    html += '<div class="card-top"><div class="card-icon icon-' + hub.icon + '">' + ICON.hub + '</div>' + badgeFor(hub) + '</div>';
     html += '<h2 class="card-title">' + hub.title + '</h2>';
     html += '<p class="card-desc">' + hub.description + '</p>';
     html += '<div class="card-hint">View structure' + ICON.chevron + '</div>';
@@ -769,7 +973,7 @@
     SEGMENT_ORDER.forEach(function (key) {
       var seg = SEGMENTS[key];
       html += '<button class="card-base seg-card" type="button" data-nav="' + key + '">';
-      html += '<div class="card-top"><div class="card-icon">' + ICON[seg.icon] + '</div>' + badgeFor(seg) + '</div>';
+      html += '<div class="card-top"><div class="card-icon icon-' + seg.icon + '">' + ICON[seg.icon] + '</div>' + badgeFor(seg) + '</div>';
       html += '<h2 class="card-title">' + seg.title + '</h2>';
       html += '<p class="card-desc">' + seg.description + '</p>';
       html += '<div class="card-hint">View structure' + ICON.chevron + '</div>';
@@ -777,6 +981,25 @@
     });
     html += '</div></div>';
 
+    return html;
+  }
+
+  /* ============== DEVICE MAP (Hub segment only) ============== */
+
+  function renderDeviceMap() {
+    var html = '<div class="device-map">';
+    html += '<div class="device-map-label">Home Assistant device registry</div>';
+    html += '<div class="device-tree">';
+    html += '<div class="device-node root">' + ICON.hub + ' PwM</div>';
+    html += '<div class="device-stem"></div>';
+    html += '<div class="device-children">';
+    html += '<div class="device-child"><div class="device-stem"></div><div class="device-node node-pv">' + ICON.pv + ' PwM PV</div></div>';
+    html += '<div class="device-child"><div class="device-stem"></div><div class="device-node node-ev">' + ICON.ev + ' PwM Charger1</div></div>';
+    html += '<div class="device-child"><div class="device-stem"></div><div class="device-node node-ev">' + ICON.ev + ' PwM Charger2</div></div>';
+    html += '</div>';
+    html += '</div>';
+    html += '<p class="device-map-caption">4 devices exist in Home Assistant today. The Hub (<code>PwM</code>) is the parent of all of them — PwM PV and both chargers nest underneath it via <code>via_device</code> in devices.py. Pool and PV Surplus don\'t have a device of their own yet.</p>';
+    html += '</div>';
     return html;
   }
 
@@ -789,11 +1012,15 @@
     html += '<div style="display:flex;flex-direction:column;gap:20px;">';
 
     html += '<div class="seg-header">';
-    html += '<div class="card-icon">' + ICON[seg.icon] + '</div>';
+    html += '<div class="card-icon icon-' + seg.icon + '">' + ICON[seg.icon] + '</div>';
     html += '<div>';
     html += '<div class="seg-header-title-row"><h2>' + seg.title + '</h2>' + badgeFor(seg) + '</div>';
     html += '<p>' + seg.description + '</p>';
     html += '</div></div>';
+
+    if (key === 'hub') {
+      html += renderDeviceMap();
+    }
 
     html += '<div class="layer-grid">';
     ['data', 'properties', 'helpers'].forEach(function (layerKey) {
@@ -808,7 +1035,8 @@
         html += '<div class="file-list">';
         files.forEach(function (f, idx) {
           html += '<button class="file-row" type="button" data-nav-file="' + key + '|' + layerKey + '|' + idx + '">';
-          html += '<span>' + ICON.file + ' ' + f.file + '</span>' + ICON.chevron;
+          html += '<span class="file-row-name">' + ICON.file + ' ' + f.file + '</span>';
+          html += '<span class="file-row-right">' + deviceChip(f, key) + ICON.chevron + '</span>';
           html += '</button>';
         });
         html += '</div>';
@@ -834,7 +1062,8 @@
     html += '<div class="file-header">';
     html += '<span class="type-badge"><span class="layer-dot ' + meta.cls + '"></span>' + meta.label + '</span>';
     html += '<span class="filename">' + f.file + '</span>';
-    if (f.cls) html += '<p class="class-line">Implements <code>' + f.cls + '</code>' + (f.device ? ' &middot; device: ' + f.device : '') + '</p>';
+    html += deviceChip(f, segKey);
+    if (f.cls) html += '<p class="class-line">Implements <code>' + f.cls + '</code></p>';
     html += '</div>';
 
     if (layerKey === 'data') {
@@ -852,14 +1081,9 @@
 
       html += '<div class="detail-block"><h3>' + ICON.data + ' Attributes calculated</h3><div class="attr-chips">';
       f.attributes.forEach(function (a) {
-        var internal = a.indexOf('(internal)') !== -1 || a.indexOf('native value') !== -1;
         html += '<span class="attr-chip' + (a.indexOf('(internal)') !== -1 ? ' internal' : '') + '">' + a + '</span>';
       });
       html += '</div></div>';
-
-      if (f.note) {
-        html += '<div class="note-block">' + ICON.info + '<span>' + f.note + '</span></div>';
-      }
     }
 
     if (layerKey === 'properties') {
@@ -876,6 +1100,10 @@
         html += '<div class="method-item"><div class="sig">' + m.sig + '</div><p>' + m.desc + '</p></div>';
       });
       html += '</div></div>';
+    }
+
+    if (f.note) {
+      html += '<div class="note-block">' + ICON.info + '<span>' + f.note + '</span></div>';
     }
 
     html += '</div>';
