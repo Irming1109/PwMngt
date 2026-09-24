@@ -915,7 +915,7 @@
               { name: 'property_kl_17', type: 'float (kWh, 3 dp)', example: '15.9' },
               { name: 'property_kl_21', type: 'float (kWh, 3 dp)', example: '22.4' },
               { name: 'property_kl_23_59', type: 'float (kWh, 3 dp)', example: '24.65' },
-              { name: '_midnight_baseline_property', type: 'float (kWh) — raw lifetime counter', example: '15234.802', internal: true },
+              { name: '_midnight_baseline_property', type: 'float (kWh)', example: '15234.802', internal: true },
               { name: '_midnight_baseline_date_property', type: 'str (ISO date)', example: '"2026-09-24"', internal: true }
             ],
             note: 'Its category list is designed to grow across every future segment (PV Surplus, chargers, pool heat, heat pump); only the "property" (whole-household) category exists today.'
@@ -924,18 +924,18 @@
             file: 'consumption_averages_data.py', cls: 'PwMngtConsumptionAveragesSensor', deviceKey: 'pv',
             triggers: [],
             attributes: [
-              { name: 'daytime_average', type: 'float (kWh) — planned', example: 'None (not built yet)' },
-              { name: 'daytime_average_adjusted', type: 'float (kWh) — planned', example: 'None (not built yet)' },
-              { name: 'early_morning_average', type: 'float (kWh) — planned', example: 'None (not built yet)' },
-              { name: 'morning_average', type: 'float (kWh) — planned', example: 'None (not built yet)' },
-              { name: 'late_morning_average', type: 'float (kWh) — planned', example: 'None (not built yet)' },
-              { name: 'evening_average', type: 'float (kWh) — planned', example: 'None (not built yet)' },
-              { name: 'nighttime_average', type: 'float (kWh) — planned', example: 'None (not built yet)' },
-              { name: 'full_day_average', type: 'float (kWh) — planned', example: 'None (not built yet)' },
-              { name: 'pool_heating_consumption', type: 'float (kWh) — planned', example: 'None (not built yet)' },
-              { name: 'pv_surplus_consumption', type: 'float (kWh) — planned', example: 'None (not built yet)' },
-              { name: 'car_charger_consumption', type: 'float (kWh) — planned', example: 'None (not built yet)' },
-              { name: 'heat_pump_consumption', type: 'float (kWh) — planned', example: 'None (not built yet)' }
+              { name: 'daytime_average', type: 'float (kWh)', example: 'None (not built yet)' },
+              { name: 'daytime_average_adjusted', type: 'float (kWh)', example: 'None (not built yet)' },
+              { name: 'early_morning_average', type: 'float (kWh)', example: 'None (not built yet)' },
+              { name: 'morning_average', type: 'float (kWh)', example: 'None (not built yet)' },
+              { name: 'late_morning_average', type: 'float (kWh)', example: 'None (not built yet)' },
+              { name: 'evening_average', type: 'float (kWh)', example: 'None (not built yet)' },
+              { name: 'nighttime_average', type: 'float (kWh)', example: 'None (not built yet)' },
+              { name: 'full_day_average', type: 'float (kWh)', example: 'None (not built yet)' },
+              { name: 'pool_heating_consumption', type: 'float (kWh)', example: 'None (not built yet)' },
+              { name: 'pv_surplus_consumption', type: 'float (kWh)', example: 'None (not built yet)' },
+              { name: 'car_charger_consumption', type: 'float (kWh)', example: 'None (not built yet)' },
+              { name: 'heat_pump_consumption', type: 'float (kWh)', example: 'None (not built yet)' }
             ],
             note: 'Pure scaffolding — no trigger wired up yet, so state and every attribute always read None. Will consume the snapshot data above plus each segment\'s consumption once the averaging logic is built.'
           }
@@ -946,8 +946,8 @@
             wraps: [
               {
                 entity: '<code>sensor.&lt;hub&gt;_pv_forced_charge</code>',
-                type: 'ENUM sensor state → wrapped as Python bool',
-                example: '"on" → True &nbsp;/&nbsp; "off" or unregistered → False'
+                type: 'ENUM',
+                example: 'On'
               }
             ]
           }
@@ -969,10 +969,10 @@
               { kind: 'time', text: '2 fixed times/day: 08:00 and 16:00 — snapshot the running total.' }
             ],
             attributes: [
-              { name: 'native value', type: 'float (kWh) — running since-midnight total (the sensor\'s own state, not an extra attribute)', example: '2.885' },
+              { name: 'native value', type: 'float (kWh)', example: '2.885' },
               { name: 'kl_8', type: 'float (kWh)', example: '1.204' },
               { name: 'kl_16', type: 'float (kWh)', example: '4.51' },
-              { name: '_last_raw', type: 'float — last raw source reading, used to compute the next delta', example: '48213.7', internal: true },
+              { name: '_last_raw', type: 'float', example: '48213.7', internal: true },
               { name: '_total_date', type: 'str (ISO date)', example: '"2026-09-24"', internal: true }
             ],
             note: 'One sensor instance per charger — each attaches to its own device (PwM Charger1 or PwM Charger2), never shared. This file also defines a standalone function, total_charger_consumption(), that sums both chargers\' kl_8/kl_16 snapshots — the native replacement for Claus\'s Node-RED "Forbrug_billadere". Built, but not yet called from anywhere.'
@@ -1157,8 +1157,8 @@
         html += '<li class="wraps-item' + (a.internal ? ' internal' : '') + '">';
         html += '<div class="wraps-entity">' + a.name + '</div>';
         html += '<div class="wraps-meta">';
-        html += '<span class="wraps-chip type data-type"><span class="wraps-chip-label">Type</span>' + a.type + '</span>';
         html += '<span class="wraps-chip example"><span class="wraps-chip-label">e.g.</span>' + a.example + '</span>';
+        html += '<span class="wraps-chip type data-type"><span class="wraps-chip-label">Type</span>' + a.type + '</span>';
         html += '</div></li>';
       });
       html += '</ul></div>';
@@ -1170,8 +1170,8 @@
         html += '<li class="wraps-item">';
         html += '<div class="wraps-entity">' + w.entity + '</div>';
         html += '<div class="wraps-meta">';
-        html += '<span class="wraps-chip type"><span class="wraps-chip-label">Type</span>' + w.type + '</span>';
         html += '<span class="wraps-chip example"><span class="wraps-chip-label">e.g.</span>' + w.example + '</span>';
+        html += '<span class="wraps-chip type"><span class="wraps-chip-label">Type</span>' + w.type + '</span>';
         html += '</div>';
         html += '</li>';
       });
