@@ -1,0 +1,948 @@
+<title>PwMngt Architecture</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Sora:wght@500;600;700&family=Public+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;600&display=swap');
+
+  :root {
+    color-scheme: light;
+    --bg: #f5f6f3;
+    --surface: #ffffff;
+    --surface-2: #edf0ec;
+    --surface-3: #f4f6f3;
+    --border: #dde3de;
+    --border-strong: #c7cfc9;
+    --text: #16211d;
+    --text-muted: #58665f;
+    --text-faint: #8b968f;
+    --accent: #0f7a6e;
+    --accent-strong: #0b5c53;
+    --accent-2: #c97a1f;
+    --active-dot: #16a34a;
+    --mandatory-bg: #fdf1de;
+    --mandatory-text: #8a4b0c;
+    --mandatory-border: #edc48a;
+    --optional-bg: #e9f3f0;
+    --optional-text: #0f5c52;
+    --optional-border: #a9d2c9;
+    --hub-bg: #eceef1;
+    --hub-text: #333d44;
+    --hub-border: #ccd3d8;
+    --data-color: #0f7a6e;
+    --props-color: #7a4fae;
+    --helper-color: #b1650f;
+    --shadow: 0 1px 2px rgba(22, 33, 29, 0.04);
+    --shadow-hover: 0 12px 24px -12px rgba(22, 33, 29, 0.28);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #0e1412;
+      --surface: #161d1a;
+      --surface-2: #1b2320;
+      --surface-3: #1a201d;
+      --border: #283330;
+      --border-strong: #37433f;
+      --text: #e8ede9;
+      --text-muted: #9aa8a1;
+      --text-faint: #6d7a74;
+      --accent: #3ab6a1;
+      --accent-strong: #63cdba;
+      --accent-2: #e3a04f;
+      --active-dot: #4ade80;
+      --mandatory-bg: #3a2a12;
+      --mandatory-text: #f0c98a;
+      --mandatory-border: #6b4a1e;
+      --optional-bg: #123029;
+      --optional-text: #8fd9cb;
+      --optional-border: #1f5a51;
+      --hub-bg: #232b2e;
+      --hub-text: #ccd4d1;
+      --hub-border: #3a4540;
+      --data-color: #4fd0ba;
+      --props-color: #c19cf0;
+      --helper-color: #f0b15c;
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+      --shadow-hover: 0 16px 28px -12px rgba(0, 0, 0, 0.55);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #0e1412;
+    --surface: #161d1a;
+    --surface-2: #1b2320;
+    --surface-3: #1a201d;
+    --border: #283330;
+    --border-strong: #37433f;
+    --text: #e8ede9;
+    --text-muted: #9aa8a1;
+    --text-faint: #6d7a74;
+    --accent: #3ab6a1;
+    --accent-strong: #63cdba;
+    --accent-2: #e3a04f;
+    --active-dot: #4ade80;
+    --mandatory-bg: #3a2a12;
+    --mandatory-text: #f0c98a;
+    --mandatory-border: #6b4a1e;
+    --optional-bg: #123029;
+    --optional-text: #8fd9cb;
+    --optional-border: #1f5a51;
+    --hub-bg: #232b2e;
+    --hub-text: #ccd4d1;
+    --hub-border: #3a4540;
+    --data-color: #4fd0ba;
+    --props-color: #c19cf0;
+    --helper-color: #f0b15c;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-hover: 0 16px 28px -12px rgba(0, 0, 0, 0.55);
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Public Sans', system-ui, sans-serif;
+    padding-inline: 20px;
+    padding-block: 32px;
+    display: flex;
+    justify-content: center;
+  }
+
+  .page {
+    width: 100%;
+    max-width: 1040px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  /* ---------- Top bar (persistent) ---------- */
+
+  .topbar {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    padding-bottom: 20px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .topbar .eyebrow {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    color: var(--accent-strong);
+    text-transform: uppercase;
+  }
+
+  .topbar h1 {
+    font-family: 'Sora', system-ui, sans-serif;
+    font-weight: 700;
+    font-size: clamp(19px, 2.6vw, 23px);
+    margin: 0;
+    letter-spacing: -0.01em;
+    flex: 1 1 auto;
+    min-width: 200px;
+  }
+
+  .version-chip {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--accent-strong);
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    padding: 3px 11px;
+    flex-shrink: 0;
+    white-space: nowrap;
+  }
+
+  /* ---------- Breadcrumb / back nav ---------- */
+
+  .crumbrow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    color: var(--text-faint);
+  }
+
+  .crumb-btn {
+    all: unset;
+    cursor: pointer;
+    color: var(--accent-strong);
+    font-weight: 600;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 4px;
+    border-radius: 6px;
+    transition: background 0.15s ease;
+  }
+
+  .crumb-btn:hover, .crumb-btn:focus-visible {
+    background: var(--surface-2);
+  }
+
+  .crumb-btn svg { width: 12px; height: 12px; }
+
+  .crumb-sep { color: var(--border-strong); }
+
+  .crumb-current { color: var(--text-muted); }
+
+  /* ---------- Hero lede (overview only) ---------- */
+
+  .lede {
+    margin: -8px 0 0;
+    color: var(--text-muted);
+    font-size: 15px;
+    line-height: 1.55;
+    max-width: 62ch;
+  }
+
+  .section-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-faint);
+    margin-bottom: 4px;
+  }
+
+  /* ---------- Shared card chrome ---------- */
+
+  .card-base {
+    all: unset;
+    box-sizing: border-box;
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px 22px;
+    box-shadow: var(--shadow);
+    cursor: pointer;
+    transition: transform 0.16s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+  }
+
+  .card-base:hover, .card-base:focus-visible {
+    transform: translateY(-3px);
+    box-shadow: var(--shadow-hover);
+    border-color: var(--accent);
+  }
+
+  .card-base:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .card-base:active { transform: translateY(-1px); }
+
+  .card-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .card-icon {
+    flex-shrink: 0;
+    width: 34px;
+    height: 34px;
+    border-radius: 9px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface-2);
+    color: var(--accent-strong);
+  }
+
+  .card-icon svg { width: 18px; height: 18px; }
+
+  .card-title {
+    font-family: 'Sora', system-ui, sans-serif;
+    font-weight: 600;
+    font-size: 17px;
+    margin: 0 0 4px;
+    color: var(--text);
+  }
+
+  .badge {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border-radius: 999px;
+    padding: 3px 10px;
+    white-space: nowrap;
+    border: 1px solid transparent;
+  }
+
+  .badge-mandatory { background: var(--mandatory-bg); color: var(--mandatory-text); border-color: var(--mandatory-border); }
+  .badge-optional { background: var(--optional-bg); color: var(--optional-text); border-color: var(--optional-border); }
+  .badge-hub {
+    background: var(--hub-bg); color: var(--hub-text); border-color: var(--hub-border);
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+
+  .active-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--active-dot);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--active-dot) 25%, transparent);
+    flex-shrink: 0;
+  }
+
+  .card-desc {
+    margin: 10px 0 0;
+    font-size: 14.5px;
+    line-height: 1.55;
+    color: var(--text-muted);
+    max-width: 56ch;
+  }
+
+  .card-hint {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 16px;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-faint);
+    transition: color 0.16s ease, gap 0.16s ease;
+  }
+
+  .card-base:hover .card-hint, .card-base:focus-visible .card-hint { color: var(--accent-strong); gap: 10px; }
+  .card-hint svg { width: 13px; height: 13px; transition: transform 0.16s ease; }
+  .card-base:hover .card-hint svg, .card-base:focus-visible .card-hint svg { transform: translateX(2px); }
+
+  .hub-card { max-width: 640px; }
+
+  .connector { display: flex; flex-direction: column; align-items: center; height: 30px; color: var(--border-strong); }
+
+  .segment-grid { width: 100%; display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+
+  @media (max-width: 860px) { .segment-grid { grid-template-columns: repeat(2, 1fr); } }
+  @media (max-width: 520px) { .segment-grid { grid-template-columns: 1fr; } .hub-card { max-width: 100%; } }
+
+  .seg-card .card-desc { min-height: 66px; }
+
+  /* ---------- Segment (level 1) header ---------- */
+
+  .seg-header {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 22px 24px;
+  }
+
+  .seg-header .card-icon { width: 42px; height: 42px; }
+  .seg-header .card-icon svg { width: 22px; height: 22px; }
+
+  .seg-header-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+
+  .seg-header h2 {
+    font-family: 'Sora', system-ui, sans-serif;
+    font-weight: 700;
+    font-size: 21px;
+    margin: 0;
+  }
+
+  .seg-header p { margin: 0; color: var(--text-muted); font-size: 14.5px; line-height: 1.55; max-width: 64ch; }
+
+  /* ---------- Layer boxes ---------- */
+
+  .layer-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+  }
+
+  @media (max-width: 780px) { .layer-grid { grid-template-columns: 1fr; } }
+
+  .layer-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 18px 8px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .layer-box-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+
+  .layer-dot { width: 9px; height: 9px; border-radius: 3px; flex-shrink: 0; }
+  .layer-dot.data { background: var(--data-color); }
+  .layer-dot.properties { background: var(--props-color); }
+  .layer-dot.helper { background: var(--helper-color); }
+
+  .layer-box-head h3 {
+    font-family: 'Sora', system-ui, sans-serif;
+    font-size: 14.5px;
+    font-weight: 600;
+    margin: 0;
+  }
+
+  .layer-box-sub {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    color: var(--text-faint);
+    margin: 0 0 12px;
+  }
+
+  .file-list { display: flex; flex-direction: column; gap: 6px; padding-bottom: 12px; }
+
+  .file-row {
+    all: unset;
+    box-sizing: border-box;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 9px 11px;
+    border-radius: 9px;
+    border: 1px solid var(--border);
+    background: var(--surface-3);
+    cursor: pointer;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    color: var(--text);
+    transition: border-color 0.14s ease, transform 0.14s ease, background 0.14s ease;
+  }
+
+  .file-row:hover, .file-row:focus-visible {
+    border-color: var(--accent);
+    background: var(--surface);
+    transform: translateX(2px);
+  }
+
+  .file-row:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .file-row svg { width: 12px; height: 12px; color: var(--text-faint); flex-shrink: 0; transition: transform 0.14s ease, color 0.14s ease; }
+  .file-row:hover svg, .file-row:focus-visible svg { transform: translateX(2px); color: var(--accent-strong); }
+
+  .empty-note {
+    font-size: 13px;
+    color: var(--text-faint);
+    font-style: italic;
+    padding: 6px 2px 16px;
+  }
+
+  /* ---------- File detail (level 2) ---------- */
+
+  .file-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px 24px;
+  }
+
+  .file-header .filename {
+    font-family: 'IBM Plex Mono', monospace;
+    font-weight: 600;
+    font-size: 16px;
+  }
+
+  .type-badge {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border-radius: 999px;
+    padding: 3px 10px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--border-strong);
+    background: var(--surface-2);
+  }
+
+  .file-header .class-line {
+    width: 100%;
+    margin: 2px 0 0;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  .file-header .class-line code {
+    font-family: 'IBM Plex Mono', monospace;
+    background: var(--surface-2);
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-size: 12px;
+  }
+
+  .detail-block {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px 24px;
+  }
+
+  .detail-block h3 {
+    font-family: 'Sora', system-ui, sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0 0 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .detail-block h3 svg { width: 15px; height: 15px; color: var(--text-faint); }
+
+  .trigger-list, .wraps-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+
+  .trigger-item, .wraps-item {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    font-size: 14px;
+    line-height: 1.5;
+  }
+
+  .trigger-kind {
+    flex-shrink: 0;
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    border: 1px solid var(--border-strong);
+    margin-top: 1px;
+  }
+
+  .trigger-kind.time { color: var(--helper-color); border-color: color-mix(in srgb, var(--helper-color) 45%, var(--border-strong)); }
+  .trigger-kind.interval { color: var(--data-color); border-color: color-mix(in srgb, var(--data-color) 45%, var(--border-strong)); }
+  .trigger-kind.entity { color: var(--props-color); border-color: color-mix(in srgb, var(--props-color) 45%, var(--border-strong)); }
+
+  .attr-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+
+  .attr-chip {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 12.5px;
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    padding: 5px 10px;
+    color: var(--text);
+  }
+
+  .attr-chip.internal { color: var(--text-faint); border-style: dashed; }
+
+  .method-list { display: flex; flex-direction: column; gap: 16px; }
+
+  .method-item .sig {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--accent-strong);
+    background: var(--surface-2);
+    border-radius: 8px;
+    padding: 6px 10px;
+    display: inline-block;
+    margin-bottom: 8px;
+  }
+
+  .method-item p { margin: 0; font-size: 14px; line-height: 1.55; color: var(--text-muted); }
+
+  .note-block {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--text-muted);
+    background: var(--surface-2);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+
+  .note-block svg { width: 15px; height: 15px; flex-shrink: 0; margin-top: 2px; color: var(--text-faint); }
+
+  [hidden] { display: none !important; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="page">
+
+  <div class="topbar">
+    <span class="eyebrow">PwMngt &middot; Home Assistant custom integration</span>
+    <h1>Home Assistant Integration Power Management</h1>
+    <span class="version-chip" id="version-chip">v0.3.06</span>
+  </div>
+
+  <div class="crumbrow" id="crumbrow"></div>
+
+  <main id="view-root"></main>
+
+</div>
+
+<script>
+(function () {
+
+  /* ============== ICONS ============== */
+  var ICON = {
+    hub: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"></circle><path d="M12 3.5v3.4M12 17.1v3.4M20.5 12h-3.4M6.9 12H3.5M17.6 6.4l-2.4 2.4M8.8 15.2l-2.4 2.4M17.6 17.6l-2.4-2.4M8.8 8.8L6.4 6.4"></path></svg>',
+    pv: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="7.2" r="2.6"></circle><path d="M12 2v1.6M12 11.4V13M5.8 7.2H4.2M19.8 7.2h-1.6M7.2 3.3L8.3 4.4M16.8 3.3l-1.1 1.1"></path><rect x="4" y="15" width="16" height="6.5" rx="1.2"></rect><path d="M4 18.2h16M9.3 15v6.5M14.7 15v6.5"></path></svg>',
+    ev: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M5 10.5V19a1 1 0 0 0 1 1h5a1 1 0 0 0 1-1v-3.5"></path><path d="M8 10.5V5.8c0-.5.4-.8.8-.8h1.4c.4 0 .8.3.8.8v1.7"></path><path d="M12 8.5h1.6c.9 0 1.4 1 .9 1.8l-1.4 2c-.5.8 0 1.7.9 1.7H15" stroke-linecap="round"></path><path d="M3.5 10.5h6"></path></svg>',
+    pool: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 15.5c1.4 1.1 2.6 1.1 4 0s2.6-1.1 4 0 2.6 1.1 4 0 2.6-1.1 4 0"></path><path d="M3 19.5c1.4 1.1 2.6 1.1 4 0s2.6-1.1 4 0 2.6 1.1 4 0 2.6-1.1 4 0"></path><path d="M12 4v7.2M9.2 8.4L12 11.2l2.8-2.8"></path></svg>',
+    surplus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 13c2.5-6 5.5-9 8-9s5.5 3 8 9"></path><path d="M4 13a8 4.2 0 0 0 16 0"></path><path d="M12 13v6.5M9.4 17.1l2.6 2.4 2.6-2.4"></path></svg>',
+    chevron: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"></path></svg>',
+    back: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 6l-6 6 6 6"></path></svg>',
+    data: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5.5" rx="7" ry="2.5"></ellipse><path d="M5 5.5v13c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5v-13"></path><path d="M5 12c0 1.4 3.1 2.5 7 2.5s7-1.1 7-2.5"></path></svg>',
+    properties: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20 11.5 12.5 19a1.5 1.5 0 0 1-2.1 0l-5.4-5.4a1.5 1.5 0 0 1 0-2.1L12.5 4H19a1 1 0 0 1 1 1z"></path><circle cx="15.2" cy="8.8" r="1.3"></circle></svg>',
+    helper: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a3.5 3.5 0 0 0-4.7 4l-6.2 6.2a1.8 1.8 0 0 0 2.5 2.5l6.2-6.2a3.5 3.5 0 0 0 4.4-4.6l-2.4 2.4-1.9-.5-.5-1.9z"></path></svg>',
+    info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"></circle><path d="M12 8v5M12 16.2v.1"></path></svg>',
+    file: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h8l4 4v14a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"></path><path d="M14 3v4h4"></path></svg>'
+  };
+
+  /* ============== CONTENT MODEL ============== */
+  /* Read from the live PwMngt repo (custom_components/pwmngt) as of v0.3.06.
+     "device" notes the actual Home Assistant device an entity attaches to,
+     which can differ from the segment it's grouped under here (see Hub). */
+
+  var SEGMENTS = {
+    hub: {
+      title: 'Hub', icon: 'hub', kind: 'hub',
+      description: "The integration's core device. Hosts the cross-cutting calculations every segment feeds into or draws from — live power balance and the household's since-midnight consumption snapshots.",
+      layers: {
+        data: [
+          {
+            file: 'balance_data.py', cls: 'PwMngtBalanceDataSensor', device: 'PwM (Hub device)',
+            triggers: [
+              { kind: 'interval', text: 'Every 10 seconds — samples Grid + Battery power (skipped while a forced-charge is in progress).' }
+            ],
+            attributes: [
+              'balance_30_sec', 'balance_1_min', 'balance_5_min', 'balance_15_min',
+              'balance_15_min_corrected', 'balance_15_min_corrected_with_chargers', 'balance_30_min'
+            ],
+            note: '"_corrected" doesn\'t subtract PV Surplus yet (not built). "_corrected_with_chargers" genuinely sums PwM Charger1/2\'s Power sensors, but reads the same as "_corrected" until those go live.'
+          },
+          {
+            file: 'consumption_snapshots_data.py', cls: 'PwMngtConsumptionSnapshotsSensor', device: 'PwM PV (grouped under Hub — see note)',
+            triggers: [
+              { kind: 'time', text: 'Local midnight (00:00) per category — captures that day\'s baseline reading.' },
+              { kind: 'time', text: '8 fixed times/day per category: 06:00, 07:00, 08:00, 09:00, 16:00, 17:00, 21:00, 23:58.' }
+            ],
+            attributes: [
+              'property_kl_6', 'property_kl_7', 'property_kl_8', 'property_kl_9',
+              'property_kl_16', 'property_kl_17', 'property_kl_21', 'property_kl_23_59',
+              '_midnight_baseline_property (internal)', '_midnight_baseline_date_property (internal)'
+            ],
+            note: 'Its entity technically lives on the "PwM PV" device, not "PwM" — grouped under Hub here because its category list is designed to grow across every segment (PV Surplus, chargers, pool heat, heat pump). Only the "property" (whole-household) category exists today.'
+          },
+          {
+            file: 'consumption_averages_data.py', cls: 'PwMngtConsumptionAveragesSensor', device: 'PwM PV (grouped under Hub — see note)',
+            triggers: [],
+            attributes: [
+              'daytime_average', 'daytime_average_adjusted', 'early_morning_average', 'morning_average',
+              'late_morning_average', 'evening_average', 'nighttime_average', 'full_day_average',
+              'pool_heating_consumption', 'pv_surplus_consumption', 'car_charger_consumption', 'heat_pump_consumption'
+            ],
+            note: 'Pure scaffolding — no trigger wired up yet, so state and every attribute always read None. Will consume Hub\'s own snapshot data plus each segment\'s consumption once the averaging logic is built.'
+          }
+        ],
+        properties: [
+          {
+            file: 'hub_properties.py', cls: 'is_forced_charging()',
+            wraps: [
+              "PwMngt's own \"Forced charge\" scaffold sensor (sensor.<hub>_pv_forced_charge) — read as a plain bool, failing safe to False if the entity isn't registered yet or has no real value yet."
+            ]
+          }
+        ],
+        helpers: [
+          {
+            file: 'history_helper.py',
+            methods: [
+              { sig: 'fetch_state_changes_since(hass, entity_id, start_time)', desc: 'Every recorded state change for entity_id from start_time to now, gap-free (via Recorder\'s "include_start_time_state"). Returns None if Recorder isn\'t loaded, there\'s no history, or the query fails.' }
+            ]
+          },
+          {
+            file: 'state_helper.py',
+            methods: [
+              { sig: 'read_float_state(state)', desc: 'The numeric value of a Home Assistant State object, or None if it\'s missing, unknown/unavailable, or not a valid number.' }
+            ]
+          }
+        ]
+      }
+    },
+
+    solar_pv_plant: {
+      title: 'Solar PV Plant', icon: 'pv', kind: 'mandatory',
+      description: "Maps your solar plant's core data — battery, PV production, grid power and spot price — into PwMngt. The only segment that's fully live today.",
+      layers: { data: [], properties: [], helpers: [] }
+    },
+
+    ev_charging: {
+      title: 'EV Charging', icon: 'ev', kind: 'optional',
+      description: 'Configures up to two EV chargers: type, consumption source, and — planned — load control based on solar surplus.',
+      layers: {
+        data: [
+          {
+            file: 'consumption_charger_data.py', cls: 'PwMngtChargerConsumptionSensor', device: 'PwM Charger1 / PwM Charger2 (one sensor per charger)',
+            triggers: [
+              { kind: 'entity', text: "Tracks whichever entity_id is currently typed into this charger's own \"Consumption source entity\" text field — re-subscribes if it changes." },
+              { kind: 'time', text: 'Local midnight (00:00) — resets the running since-midnight total to 0.' },
+              { kind: 'time', text: '2 fixed times/day: 08:00 and 16:00 — snapshot the running total.' }
+            ],
+            attributes: [
+              'native value — running since-midnight kWh total',
+              'kl_8', 'kl_16',
+              '_last_raw (internal)', '_total_date (internal)'
+            ],
+            note: 'This file also defines a standalone function, total_charger_consumption(), that sums both chargers\' kl_8/kl_16 snapshots — the native replacement for Claus\'s Node-RED "Forbrug_billadere". Built, but not yet called from anywhere.'
+          }
+        ],
+        properties: [],
+        helpers: []
+      }
+    },
+
+    pool: {
+      title: 'Pool', icon: 'pool', kind: 'optional',
+      description: 'Planned control of pool heating and pump based on solar surplus. Wizard page only — no entities yet.',
+      layers: { data: [], properties: [], helpers: [] }
+    },
+
+    pv_surplus: {
+      title: 'PV Surplus', icon: 'surplus', kind: 'optional',
+      description: 'Planned handling of leftover solar production once the battery and other loads are covered. Wizard page only — no entities yet.',
+      layers: { data: [], properties: [], helpers: [] }
+    }
+  };
+
+  var SEGMENT_ORDER = ['solar_pv_plant', 'ev_charging', 'pool', 'pv_surplus'];
+
+  var LAYER_META = {
+    data: { label: 'Data layer', sub: 'data/', icon: ICON.data, cls: 'data' },
+    properties: { label: 'Properties / Wrapper layer', sub: 'properties/', icon: ICON.properties, cls: 'properties' },
+    helpers: { label: 'Helper layer', sub: 'helpers/', icon: ICON.helper, cls: 'helper' }
+  };
+
+  /* ============== RENDER HELPERS ============== */
+
+  function badgeFor(seg) {
+    if (seg.kind === 'hub') return '<span class="badge badge-hub"><span class="active-dot" aria-hidden="true"></span>Always active</span>';
+    if (seg.kind === 'mandatory') return '<span class="badge badge-mandatory">Mandatory</span>';
+    return '<span class="badge badge-optional">Optional</span>';
+  }
+
+  function fileCount(seg) {
+    return seg.layers.data.length + seg.layers.properties.length + seg.layers.helpers.length;
+  }
+
+  /* ============== VIEW: OVERVIEW ============== */
+
+  function renderOverview() {
+    var hub = SEGMENTS.hub;
+    var html = '';
+    html += '<div class="section-label" style="margin-bottom:14px;">Architecture at a glance</div>';
+    html += '<div style="display:flex;flex-direction:column;align-items:center;gap:0;">';
+
+    html += '<button class="card-base hub-card" type="button" data-nav="hub">';
+    html += '<div class="card-top"><div class="card-icon">' + ICON.hub + '</div>' + badgeFor(hub) + '</div>';
+    html += '<h2 class="card-title">' + hub.title + '</h2>';
+    html += '<p class="card-desc">' + hub.description + '</p>';
+    html += '<div class="card-hint">View structure' + ICON.chevron + '</div>';
+    html += '</button>';
+
+    html += '<div class="connector" aria-hidden="true"><svg width="2" height="30" viewBox="0 0 2 30"><line x1="1" y1="0" x2="1" y2="30" stroke="currentColor" stroke-width="2" stroke-dasharray="1 5" stroke-linecap="round"></line></svg></div>';
+
+    html += '<div class="segment-grid">';
+    SEGMENT_ORDER.forEach(function (key) {
+      var seg = SEGMENTS[key];
+      html += '<button class="card-base seg-card" type="button" data-nav="' + key + '">';
+      html += '<div class="card-top"><div class="card-icon">' + ICON[seg.icon] + '</div>' + badgeFor(seg) + '</div>';
+      html += '<h2 class="card-title">' + seg.title + '</h2>';
+      html += '<p class="card-desc">' + seg.description + '</p>';
+      html += '<div class="card-hint">View structure' + ICON.chevron + '</div>';
+      html += '</button>';
+    });
+    html += '</div></div>';
+
+    return html;
+  }
+
+  /* ============== VIEW: SEGMENT (level 1) ============== */
+
+  function renderSegment(key) {
+    var seg = SEGMENTS[key];
+    var html = '';
+
+    html += '<div style="display:flex;flex-direction:column;gap:20px;">';
+
+    html += '<div class="seg-header">';
+    html += '<div class="card-icon">' + ICON[seg.icon] + '</div>';
+    html += '<div>';
+    html += '<div class="seg-header-title-row"><h2>' + seg.title + '</h2>' + badgeFor(seg) + '</div>';
+    html += '<p>' + seg.description + '</p>';
+    html += '</div></div>';
+
+    html += '<div class="layer-grid">';
+    ['data', 'properties', 'helpers'].forEach(function (layerKey) {
+      var meta = LAYER_META[layerKey];
+      var files = seg.layers[layerKey];
+      html += '<div class="layer-box">';
+      html += '<div class="layer-box-head"><span class="layer-dot ' + meta.cls + '"></span><h3>' + meta.label + '</h3></div>';
+      html += '<p class="layer-box-sub">' + meta.sub + '</p>';
+      if (files.length === 0) {
+        html += '<div class="empty-note">No files here yet.</div>';
+      } else {
+        html += '<div class="file-list">';
+        files.forEach(function (f, idx) {
+          html += '<button class="file-row" type="button" data-nav-file="' + key + '|' + layerKey + '|' + idx + '">';
+          html += '<span>' + ICON.file + ' ' + f.file + '</span>' + ICON.chevron;
+          html += '</button>';
+        });
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+
+    html += '</div>';
+    return html;
+  }
+
+  /* ============== VIEW: FILE DETAIL (level 2) ============== */
+
+  function renderFile(segKey, layerKey, idx) {
+    var seg = SEGMENTS[segKey];
+    var f = seg.layers[layerKey][idx];
+    var meta = LAYER_META[layerKey];
+    var html = '';
+
+    html += '<div style="display:flex;flex-direction:column;gap:16px;">';
+
+    html += '<div class="file-header">';
+    html += '<span class="type-badge"><span class="layer-dot ' + meta.cls + '"></span>' + meta.label + '</span>';
+    html += '<span class="filename">' + f.file + '</span>';
+    if (f.cls) html += '<p class="class-line">Implements <code>' + f.cls + '</code>' + (f.device ? ' &middot; device: ' + f.device : '') + '</p>';
+    html += '</div>';
+
+    if (layerKey === 'data') {
+      html += '<div class="detail-block"><h3>' + ICON.info + ' Triggers</h3>';
+      if (f.triggers.length === 0) {
+        html += '<div class="empty-note" style="padding:0;">None yet — this sensor is pure scaffolding, nothing calls it.</div>';
+      } else {
+        html += '<ul class="trigger-list">';
+        f.triggers.forEach(function (t) {
+          html += '<li class="trigger-item"><span class="trigger-kind ' + t.kind + '">' + t.kind + '</span><span>' + t.text + '</span></li>';
+        });
+        html += '</ul>';
+      }
+      html += '</div>';
+
+      html += '<div class="detail-block"><h3>' + ICON.data + ' Attributes calculated</h3><div class="attr-chips">';
+      f.attributes.forEach(function (a) {
+        var internal = a.indexOf('(internal)') !== -1 || a.indexOf('native value') !== -1;
+        html += '<span class="attr-chip' + (a.indexOf('(internal)') !== -1 ? ' internal' : '') + '">' + a + '</span>';
+      });
+      html += '</div></div>';
+
+      if (f.note) {
+        html += '<div class="note-block">' + ICON.info + '<span>' + f.note + '</span></div>';
+      }
+    }
+
+    if (layerKey === 'properties') {
+      html += '<div class="detail-block"><h3>' + ICON.properties + ' Entities wrapped</h3><ul class="wraps-list">';
+      f.wraps.forEach(function (w) {
+        html += '<li class="wraps-item"><span>' + w + '</span></li>';
+      });
+      html += '</ul></div>';
+    }
+
+    if (layerKey === 'helpers') {
+      html += '<div class="detail-block"><h3>' + ICON.helper + ' Static methods</h3><div class="method-list">';
+      f.methods.forEach(function (m) {
+        html += '<div class="method-item"><div class="sig">' + m.sig + '</div><p>' + m.desc + '</p></div>';
+      });
+      html += '</div></div>';
+    }
+
+    html += '</div>';
+    return html;
+  }
+
+  /* ============== ROUTER ============== */
+
+  var state = { view: 'overview', seg: null, layer: null, idx: null };
+
+  function renderCrumbs() {
+    var crumb = document.getElementById('crumbrow');
+    if (state.view === 'overview') { crumb.innerHTML = ''; return; }
+
+    var html = '<button class="crumb-btn" data-nav="overview">' + ICON.back + ' Overview</button>';
+    if (state.view === 'segment' || state.view === 'file') {
+      html += '<span class="crumb-sep">/</span>';
+      if (state.view === 'file') {
+        html += '<button class="crumb-btn" data-nav="' + state.seg + '">' + SEGMENTS[state.seg].title + '</button>';
+        html += '<span class="crumb-sep">/</span><span class="crumb-current">' + SEGMENTS[state.seg].layers[state.layer][state.idx].file + '</span>';
+      } else {
+        html += '<span class="crumb-current">' + SEGMENTS[state.seg].title + '</span>';
+      }
+    }
+    crumb.innerHTML = html;
+  }
+
+  function render() {
+    var root = document.getElementById('view-root');
+    if (state.view === 'overview') {
+      root.innerHTML = renderOverview();
+      location.hash = '';
+    } else if (state.view === 'segment') {
+      root.innerHTML = renderSegment(state.seg);
+      location.hash = state.seg.replace(/_/g, '-');
+    } else if (state.view === 'file') {
+      root.innerHTML = renderFile(state.seg, state.layer, state.idx);
+      location.hash = state.seg.replace(/_/g, '-');
+    }
+    renderCrumbs();
+    window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
+  }
+
+  function goOverview() { state = { view: 'overview', seg: null, layer: null, idx: null }; render(); }
+  function goSegment(key) { state = { view: 'segment', seg: key, layer: null, idx: null }; render(); }
+  function goFile(key, layer, idx) { state = { view: 'file', seg: key, layer: layer, idx: idx }; render(); }
+
+  document.addEventListener('click', function (e) {
+    var navBtn = e.target.closest('[data-nav]');
+    if (navBtn) {
+      var target = navBtn.getAttribute('data-nav');
+      if (target === 'overview') goOverview(); else goSegment(target);
+      return;
+    }
+    var fileBtn = e.target.closest('[data-nav-file]');
+    if (fileBtn) {
+      var parts = fileBtn.getAttribute('data-nav-file').split('|');
+      goFile(parts[0], parts[1], parseInt(parts[2], 10));
+    }
+  });
+
+  /* Deep-link on load via #segment-key */
+  var initial = (location.hash || '').replace('#', '').replace(/-/g, '_');
+  if (initial && SEGMENTS[initial]) {
+    goSegment(initial);
+  } else {
+    render();
+  }
+})();
+</script>
