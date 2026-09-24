@@ -404,6 +404,10 @@
   .seg-header p { margin: 0; color: var(--text-muted); font-size: 14.5px; line-height: 1.55; max-width: 64ch; }
 
   /* ---------- Device map (Hub only) ---------- */
+  /* A literal box-inside-a-box: PwM is the outer frame, the 3 nested
+     devices sit visibly inside its padding in their own inset tray --
+     chosen deliberately over a tree/org-chart, which reads as "related
+     to" rather than "physically lives inside". */
 
   .device-map {
     background: var(--surface);
@@ -419,65 +423,129 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--text-faint);
-    margin: 0 0 20px;
-    text-align: center;
+    margin: 0 0 18px;
   }
 
-  .device-tree { display: flex; flex-direction: column; align-items: center; }
+  .device-container {
+    border: 2.5px solid var(--hub-color);
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--hub-color) 8%, var(--surface));
+    padding: 18px 20px 20px;
+  }
 
-  .device-node {
+  .device-container-head {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 18px;
+  }
+
+  .device-container-icon {
+    flex-shrink: 0;
+    width: 48px;
+    height: 48px;
+    border-radius: 13px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: color-mix(in srgb, var(--hub-color) 22%, var(--surface));
+    color: var(--hub-color);
+  }
+
+  .device-container-icon svg { width: 25px; height: 25px; }
+
+  .device-container-title {
+    font-family: 'Sora', system-ui, sans-serif;
+    font-weight: 700;
+    font-size: 18px;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .device-container-badge {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--hub-color) 20%, var(--surface));
+    border: 1px solid var(--hub-color);
+    color: var(--hub-color);
+  }
+
+  .device-container-sub {
+    margin: 4px 0 0;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+
+  .device-nested-label {
+    font-family: 'IBM Plex Mono', monospace;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-faint);
+    margin: 0 0 10px;
+    padding-left: 2px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .device-nested-label::before {
+    content: '';
+    width: 14px;
+    height: 8px;
+    border-left: 2px solid var(--border-strong);
+    border-bottom: 2px solid var(--border-strong);
+    border-radius: 0 0 0 4px;
+    flex-shrink: 0;
+  }
+
+  .device-nested-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    background: var(--surface);
+    border: 1.5px dashed var(--border-strong);
+    border-radius: 12px;
+    padding: 16px;
+  }
+
+  .device-nested-chip {
     display: inline-flex;
     align-items: center;
     gap: 8px;
     font-family: 'IBM Plex Mono', monospace;
     font-weight: 600;
     font-size: 13px;
-    padding: 9px 16px;
+    padding: 9px 15px;
     border-radius: 10px;
     background: var(--surface-3);
     border: 1px solid var(--border-strong);
     color: var(--text);
-    white-space: nowrap;
-    transition: transform 0.2s cubic-bezier(.34,1.56,.64,1);
+    transition: transform 0.2s cubic-bezier(.34,1.56,.64,1), border-color 0.2s ease;
   }
 
-  .device-node:hover { transform: translateY(-2px) scale(1.03); }
+  .device-nested-chip:hover { transform: translateY(-2px) scale(1.04); }
 
-  .device-node svg { width: 15px; height: 15px; }
+  .device-nested-chip svg { width: 15px; height: 15px; }
 
-  .device-node.root {
-    font-size: 14.5px;
-    padding: 11px 22px;
-    background: color-mix(in srgb, var(--hub-color) 16%, var(--surface-3));
-    border-color: var(--hub-color);
-    color: var(--hub-color);
-  }
-
-  .device-node.node-pv { border-color: color-mix(in srgb, var(--pv-color) 55%, var(--border-strong)); color: var(--pv-color); }
-  .device-node.node-ev { border-color: color-mix(in srgb, var(--ev-color) 55%, var(--border-strong)); color: var(--ev-color); }
-
-  .device-stem { width: 2px; height: 22px; background: var(--border-strong); }
-
-  .device-children {
-    display: inline-flex;
-    gap: 32px;
-    padding-top: 22px;
-    border-top: 2px solid var(--border-strong);
-  }
-
-  .device-child { display: flex; flex-direction: column; align-items: center; }
+  .device-nested-chip.node-pv { color: var(--pv-color); border-color: color-mix(in srgb, var(--pv-color) 55%, var(--border-strong)); }
+  .device-nested-chip.node-ev { color: var(--ev-color); border-color: color-mix(in srgb, var(--ev-color) 55%, var(--border-strong)); }
 
   .device-map-caption {
-    margin: 18px 0 0;
+    margin: 16px 0 0;
     font-size: 13px;
     line-height: 1.55;
     color: var(--text-muted);
-    text-align: center;
-    max-width: 60ch;
-    margin-inline: auto;
   }
 
-  .device-map-caption code {
+  .device-container-sub code, .device-map-caption code {
     font-family: 'IBM Plex Mono', monospace;
     background: var(--surface-2);
     border-radius: 5px;
@@ -485,10 +553,8 @@
     font-size: 12px;
   }
 
-  @media (max-width: 620px) {
-    .device-children { flex-wrap: wrap; justify-content: center; border-top: none; padding-top: 4px; gap: 14px; }
-    .device-children .device-stem { display: none; }
-    .device-tree > .device-stem { display: none; }
+  @media (max-width: 480px) {
+    .device-container-head { flex-wrap: wrap; }
   }
 
   /* ---------- Layer boxes ---------- */
@@ -947,7 +1013,7 @@
   /* ============== RENDER HELPERS ============== */
 
   function badgeFor(seg) {
-    if (seg.kind === 'hub') return '<span class="badge badge-hub"><span class="active-dot" aria-hidden="true"></span>Always active</span>';
+    if (seg.kind === 'hub') return '<span class="badge badge-hub"><span class="active-dot" aria-hidden="true"></span>PwM &middot; Always active</span>';
     if (seg.kind === 'mandatory') return '<span class="badge badge-mandatory">Mandatory</span>';
     return '<span class="badge badge-optional">Optional</span>';
   }
@@ -993,16 +1059,25 @@
   function renderDeviceMap() {
     var html = '<div class="device-map">';
     html += '<div class="device-map-label">Home Assistant device registry</div>';
-    html += '<div class="device-tree">';
-    html += '<div class="device-node root">' + ICON.hub + ' PwM</div>';
-    html += '<div class="device-stem"></div>';
-    html += '<div class="device-children">';
-    html += '<div class="device-child"><div class="device-stem"></div><div class="device-node node-pv">' + ICON.pv + ' PwM PV</div></div>';
-    html += '<div class="device-child"><div class="device-stem"></div><div class="device-node node-ev">' + ICON.ev + ' PwM Charger1</div></div>';
-    html += '<div class="device-child"><div class="device-stem"></div><div class="device-node node-ev">' + ICON.ev + ' PwM Charger2</div></div>';
+
+    html += '<div class="device-container">';
+    html += '<div class="device-container-head">';
+    html += '<div class="device-container-icon">' + ICON.hub + '</div>';
+    html += '<div>';
+    html += '<div class="device-container-title">PwM <span class="device-container-badge">Hub device</span></div>';
+    html += '<p class="device-container-sub">The parent device. Everything below physically lives inside it — open <code>Settings → Devices → PwM</code> in Home Assistant and you\'ll see these exact 3 listed underneath.</p>';
     html += '</div>';
     html += '</div>';
-    html += '<p class="device-map-caption">4 devices exist in Home Assistant today. The Hub (<code>PwM</code>) is the parent of all of them — PwM PV and both chargers nest underneath it via <code>via_device</code> in devices.py. Pool and PV Surplus don\'t have a device of their own yet.</p>';
+
+    html += '<div class="device-nested-label">Nested inside PwM (via <code style="padding:0 4px;">via_device</code>) — 3 devices</div>';
+    html += '<div class="device-nested-row">';
+    html += '<div class="device-nested-chip node-pv">' + ICON.pv + ' PwM PV</div>';
+    html += '<div class="device-nested-chip node-ev">' + ICON.ev + ' PwM Charger1</div>';
+    html += '<div class="device-nested-chip node-ev">' + ICON.ev + ' PwM Charger2</div>';
+    html += '</div>';
+    html += '</div>';
+
+    html += '<p class="device-map-caption">4 devices exist in Home Assistant today: PwM itself, plus the 3 nested inside it. Pool and PV Surplus are wizard pages only — neither has a device of its own yet (see devices.py).</p>';
     html += '</div>';
     return html;
   }
