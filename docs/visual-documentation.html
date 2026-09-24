@@ -437,6 +437,17 @@
     border-color: color-mix(in srgb, var(--ev-color) 45%, var(--border-strong));
   }
 
+  /* Planned device name for a segment with no real HA device yet (Pool,
+     PV Surplus) -- dashed border + muted color deliberately distinguishes
+     this from a real, registered device tag (dev-pv/dev-charger above), so
+     the tag can't be mistaken for a claim that this device already exists. */
+  .badge-device.dev-planned {
+    background: var(--surface-2);
+    color: var(--text-muted);
+    border-style: dashed;
+    border-color: var(--border-strong);
+  }
+
   /* ---------- Layer boxes ---------- */
 
   .layer-grid {
@@ -795,6 +806,20 @@
     pool: null, pv_surplus: null
   };
 
+  /* Cosmetic-only "future device name" labels for segments that are wizard
+     pages today with no real HA device yet (Pool, PV Surplus already say
+     "no entities yet" in their description). These are deliberately kept
+     OUT of SEGMENT_HOME_DEVICE/DEVICE_META -- that pair must stay grounded
+     in devices.py's literal *_device_info() functions, since it also
+     drives the cross-device mismatch check in deviceChip(). This map only
+     feeds the header tag (segmentDeviceTag), rendered with a visibly
+     different "planned" style (see .badge-device.dev-planned) so it can
+     never be mistaken for an existing registered device. */
+  var SEGMENT_PLANNED_LABEL = {
+    pool: 'PwM Pool',
+    pv_surplus: 'PwM PV Surplus'
+  };
+
   function deviceChip(f, segKey) {
     var key = f.deviceKey || f.readsDeviceKey;
     if (!key) return '';
@@ -963,10 +988,24 @@
      you're on from the title). Skipped for Hub (its badge already says
      "PwM") and for segments with no device of their own yet. */
   function segmentDeviceTag(key) {
+    if (key === 'hub') return '';
     var home = SEGMENT_HOME_DEVICE[key];
-    if (!home || key === 'hub') return '';
-    var meta = DEVICE_META[home];
-    return '<span class="badge-device dev-' + home + '">' + meta.label + '</span>';
+    if (home === 'charger') {
+      /* EV Charging maps to 2 distinct real devices (PwM Charger1, PwM
+         Charger2) -- show both as separate tags rather than one combined
+         "PwM Charger1/2" label, so each real device gets its own tag. */
+      return '<span class="badge-device dev-charger">PwM Charger1</span>' +
+             '<span class="badge-device dev-charger">PwM Charger2</span>';
+    }
+    if (home) {
+      var meta = DEVICE_META[home];
+      return '<span class="badge-device dev-' + home + '">' + meta.label + '</span>';
+    }
+    var planned = SEGMENT_PLANNED_LABEL[key];
+    if (planned) {
+      return '<span class="badge-device dev-planned" title="Planned device name -- not registered in Home Assistant yet (wizard page only, no entities today).">' + planned + '</span>';
+    }
+    return '';
   }
 
   /* ============== VIEW: OVERVIEW ============== */
