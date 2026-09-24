@@ -33,7 +33,7 @@ from ..const import (
 )
 from ..devices import CHARGERS, hub_device_info
 from ..helpers.state_helper import read_float_state
-from ..properties import hub_properties
+from ..properties import pv_properties
 
 LOGGER = logging.getLogger(__name__)
 
@@ -168,7 +168,7 @@ class PwMngtBalanceDataSensor(RestoreEntity, SensorEntity):
     """A PwM hub sensor bundling the 7 balance values above as attributes.
 
     Every 10 seconds, a timer trigger (_sample) reads Grid power plus
-    Battery power (skipped while hub_properties.is_forced_charging()
+    Battery power (skipped while pv_properties.is_forced_charging()
     reports True), extends this entity's rolling sample history, then
     hands it to calculate_balance() for the math and writes the result
     out.
@@ -301,7 +301,7 @@ class PwMngtBalanceDataSensor(RestoreEntity, SensorEntity):
             return
 
         status = grid_power
-        if not hub_properties.is_forced_charging(self.hass, self._entry):
+        if not pv_properties.is_forced_charging(self.hass, self._entry):
             status += battery_power
         self._samples.append(status)
         self._charger_samples.append(self._read_charger_power_total())

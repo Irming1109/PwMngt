@@ -1,4 +1,4 @@
-"""Read-only property accessors for the PwM hub device."""
+"""Read-only property accessors for the PwM PV device."""
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant

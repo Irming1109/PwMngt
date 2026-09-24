@@ -1,5 +1,5 @@
 """Read-only property accessors, grouped one file per device/segment (e.g.
-hub_properties.py for the PwM hub device).
+pv_properties.py for the PwM PV device).
 
 Each function hides the entity-registry lookup and state parsing behind a
 single, safe call -- callers get a plain answer (a bool, a number, ...)
