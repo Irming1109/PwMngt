@@ -272,9 +272,10 @@
 
   .card-top {
     display: flex;
-    align-items: flex-start;
+    align-items: center;
     justify-content: space-between;
     gap: 12px;
+    min-height: 44px;
   }
 
   .card-icon {
@@ -389,9 +390,6 @@
     padding: 22px 24px;
   }
 
-  .seg-header .card-icon { width: 56px; height: 56px; border-radius: 14px; }
-  .seg-header .card-icon svg { width: 28px; height: 28px; }
-
   .seg-header-title-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
 
   .seg-header h2 {
@@ -403,158 +401,30 @@
 
   .seg-header p { margin: 0; color: var(--text-muted); font-size: 14.5px; line-height: 1.55; max-width: 64ch; }
 
-  /* ---------- Device map (Hub only) ---------- */
-  /* A literal box-inside-a-box: PwM is the outer frame, the 3 nested
-     devices sit visibly inside its padding in their own inset tray --
-     chosen deliberately over a tree/org-chart, which reads as "related
-     to" rather than "physically lives inside". */
+  /* ---------- Segment device tag (replaces the old per-segment icon) ---------- */
 
-  .device-map {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 22px 24px 26px;
-  }
-
-  .device-map-label {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 11.5px;
-    font-weight: 600;
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
-    color: var(--text-faint);
-    margin: 0 0 18px;
-  }
-
-  .device-container {
-    border: 2.5px solid var(--hub-color);
-    border-radius: 16px;
-    background: color-mix(in srgb, var(--hub-color) 8%, var(--surface));
-    padding: 18px 20px 20px;
-  }
-
-  .device-container-head {
-    display: flex;
-    align-items: center;
-    gap: 14px;
-    margin-bottom: 18px;
-  }
-
-  .device-container-icon {
-    flex-shrink: 0;
-    width: 48px;
-    height: 48px;
-    border-radius: 13px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    background: color-mix(in srgb, var(--hub-color) 22%, var(--surface));
-    color: var(--hub-color);
-  }
-
-  .device-container-icon svg { width: 25px; height: 25px; }
-
-  .device-container-title {
-    font-family: 'Sora', system-ui, sans-serif;
-    font-weight: 700;
-    font-size: 18px;
-    color: var(--text);
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-
-  .device-container-badge {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 10.5px;
-    font-weight: 600;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    padding: 3px 10px;
-    border-radius: 999px;
-    background: color-mix(in srgb, var(--hub-color) 20%, var(--surface));
-    border: 1px solid var(--hub-color);
-    color: var(--hub-color);
-  }
-
-  .device-container-sub {
-    margin: 4px 0 0;
-    font-size: 13px;
-    color: var(--text-muted);
-  }
-
-  .device-nested-label {
+  .badge-device {
     font-family: 'IBM Plex Mono', monospace;
     font-size: 11px;
     font-weight: 600;
-    color: var(--text-faint);
-    margin: 0 0 10px;
-    padding-left: 2px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border-radius: 999px;
+    padding: 3px 10px;
+    white-space: nowrap;
+    border: 1px solid transparent;
   }
 
-  .device-nested-label::before {
-    content: '';
-    width: 14px;
-    height: 8px;
-    border-left: 2px solid var(--border-strong);
-    border-bottom: 2px solid var(--border-strong);
-    border-radius: 0 0 0 4px;
-    flex-shrink: 0;
+  .badge-device.dev-pv {
+    background: color-mix(in srgb, var(--pv-color) 16%, var(--surface-2));
+    color: var(--pv-color);
+    border-color: color-mix(in srgb, var(--pv-color) 45%, var(--border-strong));
   }
 
-  .device-nested-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    background: var(--surface);
-    border: 1.5px dashed var(--border-strong);
-    border-radius: 12px;
-    padding: 16px;
-  }
-
-  .device-nested-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    font-family: 'IBM Plex Mono', monospace;
-    font-weight: 600;
-    font-size: 13px;
-    padding: 9px 15px;
-    border-radius: 10px;
-    background: var(--surface-3);
-    border: 1px solid var(--border-strong);
-    color: var(--text);
-    transition: transform 0.2s cubic-bezier(.34,1.56,.64,1), border-color 0.2s ease;
-  }
-
-  .device-nested-chip:hover { transform: translateY(-2px) scale(1.04); }
-
-  .device-nested-chip svg { width: 15px; height: 15px; }
-
-  .device-nested-chip.node-pv { color: var(--pv-color); border-color: color-mix(in srgb, var(--pv-color) 55%, var(--border-strong)); }
-  .device-nested-chip.node-ev { color: var(--ev-color); border-color: color-mix(in srgb, var(--ev-color) 55%, var(--border-strong)); }
-
-  .device-map-caption {
-    margin: 16px 0 0;
-    font-size: 13px;
-    line-height: 1.55;
-    color: var(--text-muted);
-  }
-
-  .device-container-sub code, .device-map-caption code {
-    font-family: 'IBM Plex Mono', monospace;
-    background: var(--surface-2);
-    border-radius: 5px;
-    padding: 1px 6px;
-    font-size: 12px;
-  }
-
-  @media (max-width: 480px) {
-    .device-container-head { flex-wrap: wrap; }
+  .badge-device.dev-charger {
+    background: color-mix(in srgb, var(--ev-color) 16%, var(--surface-2));
+    color: var(--ev-color);
+    border-color: color-mix(in srgb, var(--ev-color) 45%, var(--border-strong));
   }
 
   /* ---------- Layer boxes ---------- */
@@ -1063,13 +933,25 @@
   /* ============== RENDER HELPERS ============== */
 
   function badgeFor(seg) {
-    if (seg.kind === 'hub') return '<span class="badge badge-hub"><span class="active-dot" aria-hidden="true"></span>PwM &middot; Always active</span>';
+    if (seg.kind === 'hub') return '<span class="badge badge-hub"><span class="active-dot" aria-hidden="true"></span>PwM</span>';
     if (seg.kind === 'mandatory') return '<span class="badge badge-mandatory">Mandatory</span>';
     return '<span class="badge badge-optional">Optional</span>';
   }
 
   function fileCount(seg) {
     return seg.layers.data.length + seg.layers.properties.length + seg.layers.helpers.length;
+  }
+
+  /* A compact "which device does this segment map to" tag, shown inline
+     next to the Mandatory/Optional badge on a segment's own page --
+     replaces a redundant segment icon (you already know which segment
+     you're on from the title). Skipped for Hub (its badge already says
+     "PwM") and for segments with no device of their own yet. */
+  function segmentDeviceTag(key) {
+    var home = SEGMENT_HOME_DEVICE[key];
+    if (!home || key === 'hub') return '';
+    var meta = DEVICE_META[home];
+    return '<span class="badge-device dev-' + home + '">' + meta.label + '</span>';
   }
 
   /* ============== VIEW: OVERVIEW ============== */
@@ -1104,34 +986,6 @@
     return html;
   }
 
-  /* ============== DEVICE MAP (Hub segment only) ============== */
-
-  function renderDeviceMap() {
-    var html = '<div class="device-map">';
-    html += '<div class="device-map-label">Home Assistant device registry</div>';
-
-    html += '<div class="device-container">';
-    html += '<div class="device-container-head">';
-    html += '<div class="device-container-icon">' + ICON.hub + '</div>';
-    html += '<div>';
-    html += '<div class="device-container-title">PwM <span class="device-container-badge">Hub device</span></div>';
-    html += '<p class="device-container-sub">The parent device. Everything below physically lives inside it — open <code>Settings → Devices → PwM</code> in Home Assistant and you\'ll see these exact 3 listed underneath.</p>';
-    html += '</div>';
-    html += '</div>';
-
-    html += '<div class="device-nested-label">Nested inside PwM (via <code style="padding:0 4px;">via_device</code>) — 3 devices</div>';
-    html += '<div class="device-nested-row">';
-    html += '<div class="device-nested-chip node-pv">' + ICON.pv + ' PwM PV</div>';
-    html += '<div class="device-nested-chip node-ev">' + ICON.ev + ' PwM Charger1</div>';
-    html += '<div class="device-nested-chip node-ev">' + ICON.ev + ' PwM Charger2</div>';
-    html += '</div>';
-    html += '</div>';
-
-    html += '<p class="device-map-caption">4 devices exist in Home Assistant today: PwM itself, plus the 3 nested inside it. Pool and PV Surplus are wizard pages only — neither has a device of its own yet (see devices.py).</p>';
-    html += '</div>';
-    return html;
-  }
-
   /* ============== VIEW: SEGMENT (level 1) ============== */
 
   function renderSegment(key) {
@@ -1141,15 +995,10 @@
     html += '<div style="display:flex;flex-direction:column;gap:20px;">';
 
     html += '<div class="seg-header">';
-    html += '<div class="card-icon icon-' + seg.icon + '">' + ICON[seg.icon] + '</div>';
     html += '<div>';
-    html += '<div class="seg-header-title-row"><h2>' + seg.title + '</h2>' + badgeFor(seg) + '</div>';
+    html += '<div class="seg-header-title-row"><h2>' + seg.title + '</h2>' + badgeFor(seg) + segmentDeviceTag(key) + '</div>';
     html += '<p>' + seg.description + '</p>';
     html += '</div></div>';
-
-    if (key === 'hub') {
-      html += renderDeviceMap();
-    }
 
     html += '<div class="layer-grid">';
     ['data', 'properties', 'helpers'].forEach(function (layerKey) {
