@@ -699,19 +699,30 @@
   .trigger-kind.interval { color: var(--data-color); border-color: color-mix(in srgb, var(--data-color) 45%, var(--border-strong)); }
   .trigger-kind.entity { color: var(--props-color); border-color: color-mix(in srgb, var(--props-color) 45%, var(--border-strong)); }
 
-  .attr-chips { display: flex; flex-wrap: wrap; gap: 8px; }
-
-  .attr-chip {
-    font-family: 'IBM Plex Mono', monospace;
-    font-size: 12.5px;
-    background: var(--surface-2);
-    border: 1px solid var(--border-strong);
-    border-radius: 8px;
-    padding: 5px 10px;
-    color: var(--text);
+  /* "Attributes calculated" (data layer) reuses .wraps-list/.wraps-item/
+     .wraps-chip (originally built for the properties layer's "Entities
+     wrapped") so both layers show name + type + example in the same
+     list shape. .data-type recolors the type chip to the data layer's
+     own color instead of the properties layer's purple. .internal dims
+     an item for an internal/bookkeeping attribute -- same idea as the
+     old flat .attr-chip.internal, just applied to a list row instead of
+     a chip. */
+  .wraps-chip.type.data-type {
+    background: color-mix(in srgb, var(--data-color) 14%, var(--surface-2));
+    color: var(--data-color);
+    border: 1px solid color-mix(in srgb, var(--data-color) 40%, var(--border-strong));
   }
 
-  .attr-chip.internal { color: var(--text-faint); border-style: dashed; }
+  .wraps-item.internal .wraps-entity { color: var(--text-faint); }
+
+  .wraps-item.internal .wraps-chip.type {
+    background: var(--surface-2);
+    color: var(--text-faint);
+    border-style: dashed;
+    border-color: var(--border-strong);
+  }
+
+  .wraps-item.internal .wraps-chip.example { color: var(--text-faint); border-style: dashed; }
 
   .method-list { display: flex; flex-direction: column; gap: 16px; }
 
@@ -855,8 +866,13 @@
               { kind: 'interval', text: 'Every 10 seconds — samples Grid + Battery power (skipped while a forced-charge is in progress).' }
             ],
             attributes: [
-              'balance_30_sec', 'balance_1_min', 'balance_5_min', 'balance_15_min',
-              'balance_15_min_corrected', 'balance_15_min_corrected_with_chargers', 'balance_30_min'
+              { name: 'balance_30_sec', type: 'int (W)', example: '-420' },
+              { name: 'balance_1_min', type: 'int (W)', example: '-410' },
+              { name: 'balance_5_min', type: 'int (W)', example: '-385' },
+              { name: 'balance_15_min', type: 'int (W)', example: '-350' },
+              { name: 'balance_15_min_corrected', type: 'int (W)', example: '-350' },
+              { name: 'balance_15_min_corrected_with_chargers', type: 'int (W)', example: '-395' },
+              { name: 'balance_30_min', type: 'int (W)', example: '-300' }
             ],
             note: '"_corrected" doesn\'t subtract PV Surplus yet (not built). "_corrected_with_chargers" genuinely sums PwM Charger1/2\'s Power sensors, but reads the same as "_corrected" until those go live.'
           }
@@ -891,29 +907,45 @@
               { kind: 'time', text: '8 fixed times/day per category: 06:00, 07:00, 08:00, 09:00, 16:00, 17:00, 21:00, 23:58.' }
             ],
             attributes: [
-              'property_kl_6', 'property_kl_7', 'property_kl_8', 'property_kl_9',
-              'property_kl_16', 'property_kl_17', 'property_kl_21', 'property_kl_23_59',
-              '_midnight_baseline_property (internal)', '_midnight_baseline_date_property (internal)'
+              { name: 'property_kl_6', type: 'float (kWh, 3 dp)', example: '0.412' },
+              { name: 'property_kl_7', type: 'float (kWh, 3 dp)', example: '1.05' },
+              { name: 'property_kl_8', type: 'float (kWh, 3 dp)', example: '2.318' },
+              { name: 'property_kl_9', type: 'float (kWh, 3 dp)', example: '3.102' },
+              { name: 'property_kl_16', type: 'float (kWh, 3 dp)', example: '14.87' },
+              { name: 'property_kl_17', type: 'float (kWh, 3 dp)', example: '15.9' },
+              { name: 'property_kl_21', type: 'float (kWh, 3 dp)', example: '22.4' },
+              { name: 'property_kl_23_59', type: 'float (kWh, 3 dp)', example: '24.65' },
+              { name: '_midnight_baseline_property', type: 'float (kWh) — raw lifetime counter', example: '15234.802', internal: true },
+              { name: '_midnight_baseline_date_property', type: 'str (ISO date)', example: '"2026-09-24"', internal: true }
             ],
-            note: 'Moved here from Hub (2026-09-24) — Kasper spotted in HA\'s own device registry that this entity actually lives on "PwM PV", matching where it\'s now filed. Its category list is still designed to grow across every future segment (PV Surplus, chargers, pool heat, heat pump); only the "property" (whole-household) category exists today.'
+            note: 'Its category list is designed to grow across every future segment (PV Surplus, chargers, pool heat, heat pump); only the "property" (whole-household) category exists today.'
           },
           {
             file: 'consumption_averages_data.py', cls: 'PwMngtConsumptionAveragesSensor', deviceKey: 'pv',
             triggers: [],
             attributes: [
-              'daytime_average', 'daytime_average_adjusted', 'early_morning_average', 'morning_average',
-              'late_morning_average', 'evening_average', 'nighttime_average', 'full_day_average',
-              'pool_heating_consumption', 'pv_surplus_consumption', 'car_charger_consumption', 'heat_pump_consumption'
+              { name: 'daytime_average', type: 'float (kWh) — planned', example: 'None (not built yet)' },
+              { name: 'daytime_average_adjusted', type: 'float (kWh) — planned', example: 'None (not built yet)' },
+              { name: 'early_morning_average', type: 'float (kWh) — planned', example: 'None (not built yet)' },
+              { name: 'morning_average', type: 'float (kWh) — planned', example: 'None (not built yet)' },
+              { name: 'late_morning_average', type: 'float (kWh) — planned', example: 'None (not built yet)' },
+              { name: 'evening_average', type: 'float (kWh) — planned', example: 'None (not built yet)' },
+              { name: 'nighttime_average', type: 'float (kWh) — planned', example: 'None (not built yet)' },
+              { name: 'full_day_average', type: 'float (kWh) — planned', example: 'None (not built yet)' },
+              { name: 'pool_heating_consumption', type: 'float (kWh) — planned', example: 'None (not built yet)' },
+              { name: 'pv_surplus_consumption', type: 'float (kWh) — planned', example: 'None (not built yet)' },
+              { name: 'car_charger_consumption', type: 'float (kWh) — planned', example: 'None (not built yet)' },
+              { name: 'heat_pump_consumption', type: 'float (kWh) — planned', example: 'None (not built yet)' }
             ],
-            note: 'Pure scaffolding — no trigger wired up yet, so state and every attribute always read None. Moved here from Hub for the same reason as consumption_snapshots_data.py above — confirmed to live on "PwM PV". Will consume the snapshot data above plus each segment\'s consumption once the averaging logic is built.'
+            note: 'Pure scaffolding — no trigger wired up yet, so state and every attribute always read None. Will consume the snapshot data above plus each segment\'s consumption once the averaging logic is built.'
           }
         ],
         properties: [
           {
-            file: 'pv_properties.py', cls: 'is_forced_charging()', readsDeviceKey: 'pv',
+            file: 'pv_properties.py', readsDeviceKey: 'pv',
             wraps: [
               {
-                entity: "PwMngt's own \"Forced charge\" scaffold sensor (sensor.&lt;hub&gt;_pv_forced_charge)",
+                entity: '<code>sensor.&lt;hub&gt;_pv_forced_charge</code>',
                 type: 'ENUM sensor state → wrapped as Python bool',
                 example: '"on" → True &nbsp;/&nbsp; "off" or unregistered → False'
               }
@@ -937,9 +969,11 @@
               { kind: 'time', text: '2 fixed times/day: 08:00 and 16:00 — snapshot the running total.' }
             ],
             attributes: [
-              'native value — running since-midnight kWh total',
-              'kl_8', 'kl_16',
-              '_last_raw (internal)', '_total_date (internal)'
+              { name: 'native value', type: 'float (kWh) — running since-midnight total (the sensor\'s own state, not an extra attribute)', example: '2.885' },
+              { name: 'kl_8', type: 'float (kWh)', example: '1.204' },
+              { name: 'kl_16', type: 'float (kWh)', example: '4.51' },
+              { name: '_last_raw', type: 'float — last raw source reading, used to compute the next delta', example: '48213.7', internal: true },
+              { name: '_total_date', type: 'str (ISO date)', example: '"2026-09-24"', internal: true }
             ],
             note: 'One sensor instance per charger — each attaches to its own device (PwM Charger1 or PwM Charger2), never shared. This file also defines a standalone function, total_charger_consumption(), that sums both chargers\' kl_8/kl_16 snapshots — the native replacement for Claus\'s Node-RED "Forbrug_billadere". Built, but not yet called from anywhere.'
           }
@@ -1096,7 +1130,13 @@
     html += '<span class="type-badge"><span class="layer-dot ' + meta.cls + '"></span>' + meta.label + '</span>';
     html += '<span class="filename">' + f.file + '</span>';
     html += deviceChip(f, segKey);
-    if (f.cls) html += '<p class="class-line">Implements <code>' + f.cls + '</code></p>';
+    /* Skip the "Implements <cls>" line for properties files: a wrapper
+       file's whole point is to hold several wrapped entities/functions
+       (see "Entities wrapped" below), so naming just one function here
+       reads as if that's the file's only job. Data/helper files still
+       show it -- there it names the one real SensorEntity class the file
+       implements. */
+    if (f.cls && layerKey !== 'properties') html += '<p class="class-line">Implements <code>' + f.cls + '</code></p>';
     html += '</div>';
 
     if (layerKey === 'data') {
@@ -1112,11 +1152,16 @@
       }
       html += '</div>';
 
-      html += '<div class="detail-block"><h3>' + ICON.data + ' Attributes calculated</h3><div class="attr-chips">';
+      html += '<div class="detail-block"><h3>' + ICON.data + ' Attributes calculated</h3><ul class="wraps-list">';
       f.attributes.forEach(function (a) {
-        html += '<span class="attr-chip' + (a.indexOf('(internal)') !== -1 ? ' internal' : '') + '">' + a + '</span>';
+        html += '<li class="wraps-item' + (a.internal ? ' internal' : '') + '">';
+        html += '<div class="wraps-entity">' + a.name + '</div>';
+        html += '<div class="wraps-meta">';
+        html += '<span class="wraps-chip type data-type"><span class="wraps-chip-label">Type</span>' + a.type + '</span>';
+        html += '<span class="wraps-chip example"><span class="wraps-chip-label">e.g.</span>' + a.example + '</span>';
+        html += '</div></li>';
       });
-      html += '</div></div>';
+      html += '</ul></div>';
     }
 
     if (layerKey === 'properties') {
