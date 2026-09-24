@@ -234,7 +234,17 @@
   .card-base {
     all: unset;
     box-sizing: border-box;
-    display: block;
+    /* display:grid (not block) on purpose: on a <button>, Chromium's legacy
+       internal button layout still vertically centers the rendered content
+       when the button is stretched taller than its own content (e.g. by a
+       CSS Grid row with align-items:stretch) -- display:block does NOT
+       fully opt out of that, so cards with a shorter description (fewer
+       wrapped lines) silently got pushed down a few px relative to cards
+       whose longer description filled the stretched height exactly. A
+       single-column display:grid does opt out, and otherwise behaves like
+       block for these stacked children. Confirmed via Playwright: don't
+       revert this to display:block without re-checking that bug. */
+    display: grid;
     position: relative;
     overflow: hidden;
     width: 100%;
@@ -788,12 +798,17 @@
   function deviceChip(f, segKey) {
     var key = f.deviceKey || f.readsDeviceKey;
     if (!key) return '';
-    var meta = DEVICE_META[key];
     var home = SEGMENT_HOME_DEVICE[segKey];
     var cross = !!(home && key !== home);
+    /* Only show a chip when the file's real device genuinely differs from
+       the segment's own device -- that's the whole point of the chip (flag
+       a mismatch worth noticing). A file that lives on its segment's own
+       device is already obvious from context and doesn't need a label. */
+    if (!cross) return '';
+    var meta = DEVICE_META[key];
     var verb = f.deviceKey ? 'Attaches to' : 'Reads a sensor on';
-    var title = (cross ? 'Different device than this segment. ' : '') + verb + ': ' + meta.label;
-    return '<span class="device-chip' + (cross ? ' cross' : '') + '" title="' + title + '">' + ICON[meta.icon] + meta.label + '</span>';
+    var title = 'Different device than this segment. ' + verb + ': ' + meta.label;
+    return '<span class="device-chip cross" title="' + title + '">' + ICON[meta.icon] + meta.label + '</span>';
   }
 
   /* ============== CONTENT MODEL ============== */
@@ -995,6 +1010,7 @@
     html += '<div style="display:flex;flex-direction:column;gap:20px;">';
 
     html += '<div class="seg-header">';
+    html += '<div class="card-icon icon-' + seg.icon + '">' + ICON[seg.icon] + '</div>';
     html += '<div>';
     html += '<div class="seg-header-title-row"><h2>' + seg.title + '</h2>' + badgeFor(seg) + segmentDeviceTag(key) + '</div>';
     html += '<p>' + seg.description + '</p>';
