@@ -633,20 +633,33 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         flattened at the top of the submit-handling below.
 
         Every field is pre-filled via description={"suggested_value":
-        ...} (self.add_suggested_values_to_schema, which recurses into
-        each section's nested schema on its own), not default= -- see
+        ...} (self.add_suggested_values_to_schema), not default= -- see
         async_step_ev_charging's docstring for the full reasoning (a
         plain default= makes Home Assistant's EntitySelector reject the
         field being cleared back to empty). Fixed here for the same
         reason it was fixed there, even though this page hadn't actually
         hit it yet (PV2/PV3 were the only optional fields, and nobody
         without a second/third string would have set one) -- and it's
-        what makes clearing one of the three auto-detected fields
-        (PV forecast today/tomorrow, spot electricity price) and
-        submitting a real way to ask _AUTO_DETECT_SOURCES to re-derive
-        it: the cleared field is saved as None in the entity map, so the
-        auto-detect loop below finds it unset again on the next render,
-        same as if it had never been picked.
+        what makes clearing one of the auto-detected fields (PV forecast
+        today/tomorrow, spot electricity price, and now the Core group,
+        see INVERTER_CORE_AUTO_DETECT_NAMES) and submitting a real way to
+        ask for it to be re-derived: the cleared field is saved as None
+        in the entity map, so the auto-detect loop below finds it unset
+        again on the next render, same as if it had never been picked.
+
+        For a field inside one of this page's section()s specifically,
+        the suggested_values dict handed to add_suggested_values_to_schema
+        has to be nested under that section's own group_key (see the
+        comment right above where it's built below) -- add_suggested_values_to_schema
+        only recurses into a section when the section's own key is present
+        in what it's given, then passes THAT key's value down as the
+        nested call's suggested_values. A flat dict keyed straight by
+        field name silently never matches any section's key, so nothing
+        inside a section ever gets pre-filled -- this used to be a flat
+        dict here, which is exactly why Kasper saw every field on this
+        page (not just the new Inverter-driven ones) come back blank on
+        every visit, independent of whether it already had a real,
+        intact entity_map value (confirmed live: it did).
 
         Whichever of those three gets auto-detected on THIS render shows
         up right in the page's own description, via description_placeholders
@@ -713,15 +726,39 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                 return await self._advance()
 
         schema_dict: dict[Any, Any] = {}
-        suggested_values: dict[str, str] = {}
+        # Nested by group_key, NOT flat -- add_suggested_values_to_schema's
+        # own recursion into a section() only triggers when the section's
+        # *own* key is present in the suggested_values dict handed to it,
+        # and it then passes that key's value (a dict) down as the nested
+        # call's own suggested_values (see homeassistant/data_entry_flow.py:
+        # "if ... isinstance(val, section) and key in suggested_values:
+        # ... add_suggested_values_to_schema(new_val.schema,
+        # suggested_values[key])"). A flat dict keyed straight by field name
+        # (e.g. {"battery_soc": "sensor...."}) -- what this used to build --
+        # never has "core"/"solar_forecast"/"stromligning" as a key, so that
+        # check was always false and no section's fields ever got a
+        # suggested_value: confirmed live via the options flow's own raw
+        # JSON (fetched directly through Home Assistant's REST API,
+        # bypassing the frontend) on 2026-09-27, both for a manually-picked
+        # field and for a freshly auto-detected one -- neither carried a
+        # "description" key at all. This is what Kasper actually hit: every
+        # field on this page has shown as blank on every visit since the
+        # suggested_value fix was applied here, regardless of the Inverter
+        # feature -- his existing entity_map picks were never actually
+        # lost (the live mirror sensors kept reading them fine the whole
+        # time), the wizard just couldn't show them back to him.
+        suggested_values: dict[str, dict[str, str]] = {}
         for group_key, collapsed, field_keys in _SOLAR_PV_PLANT_GROUPS:
             group_schema_dict: dict[Any, Any] = {}
+            group_suggested: dict[str, str] = {}
             for key in field_keys:
                 group_schema_dict[vol.Optional(key)] = _entity_picker(
                     self.hass, _FIELD_UNIT_BY_KEY[key]
                 )
                 if values.get(key):
-                    suggested_values[key] = values[key]
+                    group_suggested[key] = values[key]
+            if group_suggested:
+                suggested_values[group_key] = group_suggested
             schema_dict[vol.Required(group_key)] = section(
                 vol.Schema(group_schema_dict), SectionConfig(collapsed=collapsed)
             )
