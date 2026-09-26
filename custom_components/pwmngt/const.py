@@ -70,6 +70,20 @@ CHARGER_CONSUMPTION_SOURCE_TRANSLATION_KEYS: dict[str, tuple[str, str]] = {
 }
 
 # ---------------------------------------------------------------------------
+# Inverter brand integrations. Same idea as CHARGER_TYPE_INTEGRATION_DOMAINS
+# above, for the Solar PV Plant flow's own "Inverter" field
+# (config_flow.py's async_step_pv_inverter) -- narrows that field's
+# dropdown down to the brand(s) actually configured in this Home Assistant,
+# never required (an install with neither just sees "Not installed" and
+# fills in the Core group's fields by hand, same as always).
+# ---------------------------------------------------------------------------
+
+INVERTER_TYPE_INTEGRATION_DOMAINS: dict[str, str] = {
+    "Kostal Plenticore": "kostal_plenticore",
+    "Growatt": "growatt_server",
+}
+
+# ---------------------------------------------------------------------------
 # Entity abstraction layer.
 #
 # The Options wizard lets the user pick the real source entity for each
@@ -116,6 +130,73 @@ ENTITY_KEY_SPOT_ELECTRICITY_PRICE = "spot_electricity_price"
 # Utility Meter helper -- PwMngt captures its own local-midnight
 # baseline internally instead of relying on one configured in YAML.
 ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL = "property_consumption_total"
+
+# ---------------------------------------------------------------------------
+# Once the Solar PV Plant flow's own "Inverter" field
+# (config_flow.py's async_step_pv_inverter, narrowed to installed brands by
+# INVERTER_TYPE_INTEGRATION_DOMAINS above) names a brand, this is what
+# auto-fills the Core group's fields (see _SOLAR_PV_PLANT_GROUPS) --
+# config_flow.py's _auto_detect_entity_by_name() matches each entry against
+# the entity registry, one brand + one Core field (ENTITY_KEY_*) at a time.
+#
+# Deliberately (platform, original_name) here, NOT (platform,
+# translation_key) like CHARGER_CONSUMPTION_SOURCE_TRANSLATION_KEYS above.
+# Checked directly against Kasper's own live Kostal Plenticore install
+# (Pileaas_Sol) via its entity registry: none of its sensors carry a
+# translation_key at all -- this integration predates that Home Assistant
+# convention and sets each sensor's `name` directly in its own
+# SensorEntityDescription instead (e.g. sensor.pileaas_sol_grid_power's
+# registry entry has original_name "Grid Power", no translation_key
+# property, confirmed live 2026-09-26). original_name is the next most
+# stable thing Home Assistant exposes for matching: like translation_key,
+# it doesn't care what the entity_id happens to be (see
+# CHARGER_CONSUMPTION_SOURCE_TRANSLATION_KEYS's own note on that) or what
+# the device is currently named -- it only stops matching if the user has
+# explicitly renamed that specific entity's friendly name in the UI.
+#
+# Kostal Plenticore's names below are directly confirmed this way, one for
+# one, against Kasper's own install. Growatt's are NOT -- Kasper doesn't
+# have a live Growatt to check against, and Home Assistant's own
+# growatt_server source wasn't reachable during this research (see the
+# chat where this was added for what was tried). They're inferred from a
+# well-known third-party fork Home Assistant's own integration descends
+# from (indykoning/home-assistant-growatt-server), retitled to the same
+# Title Case convention used everywhere else in this file. A wrong guess
+# here is harmless -- _auto_detect_entity_by_name() just finds zero
+# matches and that field stays blank for manual pick, exactly as if this
+# dict didn't have an entry for it -- but they should be swapped for
+# confirmed names as soon as someone can check a real Growatt install
+# (Kasper's own, if he ever gets one, or a report from another user).
+#
+# Not every Core field has a known equivalent for every brand -- left out
+# rather than guessed (e.g. no confirmed Growatt equivalent for the two
+# battery charge/discharge *energy* totals, as opposed to power).
+# ---------------------------------------------------------------------------
+
+INVERTER_CORE_AUTO_DETECT_NAMES: dict[str, dict[str, tuple[str, str]]] = {
+    "Kostal Plenticore": {
+        ENTITY_KEY_BATTERY_SOC: ("kostal_plenticore", "Battery SoC"),
+        ENTITY_KEY_BATTERY_PV_CHARGED: ("kostal_plenticore", "Battery Charge from PV Total"),
+        ENTITY_KEY_BATTERY_PV_DISCHARGED: ("kostal_plenticore", "Battery Discharge Total"),
+        ENTITY_KEY_BATTERY_POWER: ("kostal_plenticore", "Battery Power"),
+        ENTITY_KEY_PV1_POWER: ("kostal_plenticore", "DC1 Power"),
+        ENTITY_KEY_PV2_POWER: ("kostal_plenticore", "DC2 Power"),
+        ENTITY_KEY_PV3_POWER: ("kostal_plenticore", "DC3 Power"),
+        ENTITY_KEY_PV_DIRECT_CONSUMPTION: ("kostal_plenticore", "Home Power from PV"),
+        ENTITY_KEY_PV_TOTAL_CONSUMPTION: ("kostal_plenticore", "Home Consumption Total"),
+        ENTITY_KEY_GRID_POWER: ("kostal_plenticore", "Grid Power"),
+    },
+    "Growatt": {
+        # -- best-effort, unverified -- see the dict's own docstring above.
+        ENTITY_KEY_BATTERY_SOC: ("growatt_server", "Battery percentage"),
+        ENTITY_KEY_BATTERY_POWER: ("growatt_server", "Storage charging/discharging"),
+        ENTITY_KEY_PV1_POWER: ("growatt_server", "Input 1 Wattage"),
+        ENTITY_KEY_PV2_POWER: ("growatt_server", "Input 2 Wattage"),
+        ENTITY_KEY_PV_DIRECT_CONSUMPTION: ("growatt_server", "Solar power production"),
+        ENTITY_KEY_PV_TOTAL_CONSUMPTION: ("growatt_server", "Load consumption"),
+        ENTITY_KEY_GRID_POWER: ("growatt_server", "Import from grid"),
+    },
+}
 
 # ---------------------------------------------------------------------------
 # Segments: optional areas of PwMngt a given installation may not need.

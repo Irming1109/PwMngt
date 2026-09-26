@@ -14,7 +14,7 @@ from homeassistant.helpers.event import async_call_later
 
 from . import async_setup_entry, async_unload_entry
 from .devices import CHARGERS
-from .select import PwM_CONFIG_SELECTS
+from .select import PwM_CONFIG_SELECTS, PwM_PV_CONFIG_SELECTS
 from .const import (
     DOMAIN,
     CONF_DEFAULT_NAME,
@@ -38,12 +38,14 @@ from .const import (
     DEPENDENCY_STROMLIGNING,
     CHARGER_TYPE_INTEGRATION_DOMAINS,
     CHARGER_CONSUMPTION_SOURCE_TRANSLATION_KEYS,
+    INVERTER_TYPE_INTEGRATION_DOMAINS,
+    INVERTER_CORE_AUTO_DETECT_NAMES,
     SEGMENT_EV_CHARGING,
     SEGMENT_POOL,
     SEGMENT_PV_SURPLUS,
 )
 
-# Solar PV Plant entity-map fields (page 2): (entity_map key, unit of
+# Solar PV Plant entity-map fields (page 3): (entity_map key, unit of
 # measurement, required). Keep in sync with PwM_PV_MIRROR_SENSORS in
 # sensor.py. Not required when not every install has the value (e.g.
 # PV2/PV3 power for a second/third PV string).
@@ -147,6 +149,26 @@ _AUTO_DETECT_SOURCES: dict[str, tuple[str, str]] = {
     ),
 }
 
+# Display label for each auto-detectable Solar PV Plant field -- both
+# _AUTO_DETECT_SOURCES above and INVERTER_CORE_AUTO_DETECT_NAMES (const.py)
+# share this, for the {auto_filled_note} shown when _auto_filled_note()
+# below has something to report.
+_AUTO_DETECT_LABELS: dict[str, str] = {
+    ENTITY_KEY_PV_FORECAST_TODAY: "PV forecast today",
+    ENTITY_KEY_PV_FORECAST_TOMORROW: "PV forecast tomorrow",
+    ENTITY_KEY_SPOT_ELECTRICITY_PRICE: "Spot electricity price",
+    ENTITY_KEY_BATTERY_SOC: "Battery SoC",
+    ENTITY_KEY_BATTERY_PV_CHARGED: "Battery PV charged",
+    ENTITY_KEY_BATTERY_PV_DISCHARGED: "Battery PV discharged",
+    ENTITY_KEY_BATTERY_POWER: "Battery power",
+    ENTITY_KEY_PV1_POWER: "PV1 power",
+    ENTITY_KEY_PV2_POWER: "PV2 power",
+    ENTITY_KEY_PV3_POWER: "PV3 power",
+    ENTITY_KEY_PV_DIRECT_CONSUMPTION: "PV direct consumption",
+    ENTITY_KEY_PV_TOTAL_CONSUMPTION: "PV total consumption",
+    ENTITY_KEY_GRID_POWER: "Grid power",
+}
+
 LOGGER = logging.getLogger(__name__)
 
 # Fixed visit order for the optional segment pages (3-5). "Solar PV Plant"
@@ -162,6 +184,14 @@ _CHARGER_TYPE_DESCRIPTIONS = {
     )
     for charger in CHARGERS
 }
+
+# The PV Inverter page's own "<id>_type"-style select description
+# (PwM_PV_CONFIG_SELECTS in select.py) -- same idea as
+# _CHARGER_TYPE_DESCRIPTIONS above, just a single fixed field instead of
+# one per charger.
+_PV_INVERTER_TYPE_DESCRIPTION = next(
+    d for d in PwM_PV_CONFIG_SELECTS if d.key == "inverter_type"
+)
 
 
 def _entity_ids_by_unit(hass, unit: str) -> list[str]:
@@ -238,6 +268,39 @@ def _auto_detect_entity_id(hass, platform: str, translation_key: str) -> str | N
     return matches[0] if len(matches) == 1 else None
 
 
+def _auto_filled_note(labels: list[str]) -> str:
+    """Build the {auto_filled_note} description_placeholders text for a
+    step whose description ends with that placeholder (ev_charging_consumption,
+    solar_pv_plant in strings.json/en.json) -- a short, visible callout
+    for whichever field(s) auto-detect just filled in during *this*
+    render, e.g. "Auto-filled: Charger2." or "Auto-filled: PV forecast
+    today, Spot electricity price.".
+
+    Deliberately not a per-field badge -- Home Assistant's options-flow
+    forms don't support attaching dynamic text to one specific field,
+    only to the step's own title/description via description_placeholders
+    -- but naming the field(s) here is just as unambiguous with only one
+    or two candidates per page.
+
+    Deliberately not historical either: every call site only ever adds a
+    label here at the exact moment a field was found empty and auto-detect
+    filled it in -- never for a field that already held a value, whatever
+    originally put it there (a previous auto-detect, or Kasper's own
+    pick). Once that value is saved, the next render finds the field
+    already non-empty, the auto-detect branch doesn't run, and the note
+    naturally stops appearing on its own -- no separate "seen before"
+    state to track or clear.
+
+    Returns "" (not None) when nothing was auto-filled, since it's
+    spliced directly onto the end of a description string in
+    strings.json/en.json -- an empty string there leaves that string
+    exactly as written, with no stray blank line.
+    """
+    if not labels:
+        return ""
+    return "\n\n✅ **Auto-filled:** " + ", ".join(labels) + "."
+
+
 def _installed_charger_type_options(hass, options: list[str], current_value: str) -> list[str]:
     """Narrow a charger "type" select's static options (description.options
     in select.py's PwM_CONFIG_SELECTS) down to what the EV Charging wizard
@@ -267,6 +330,25 @@ def _installed_charger_type_options(hass, options: list[str], current_value: str
         if option == current_value
         or option not in CHARGER_TYPE_INTEGRATION_DOMAINS
         or hass.config_entries.async_entries(CHARGER_TYPE_INTEGRATION_DOMAINS[option])
+    ]
+
+
+def _installed_inverter_type_options(hass, options: list[str], current_value: str) -> list[str]:
+    """Same idea as _installed_charger_type_options() just above, for the
+    PV Inverter page's own "type" field -- narrows its static option list
+    (PwM_PV_CONFIG_SELECTS's inverter_type description) down to the brand(s)
+    actually installed, via INVERTER_TYPE_INTEGRATION_DOMAINS instead of
+    CHARGER_TYPE_INTEGRATION_DOMAINS. Kept as its own function rather than
+    generalizing the charger one -- matches how the rest of this file gives
+    each concern (charger vs. inverter) its own small, obviously-named
+    helper instead of one shared function threading a domains dict through.
+    """
+    return [
+        option
+        for option in options
+        if option == current_value
+        or option not in INVERTER_TYPE_INTEGRATION_DOMAINS
+        or hass.config_entries.async_entries(INVERTER_TYPE_INTEGRATION_DOMAINS[option])
     ]
 
 
@@ -305,6 +387,34 @@ def _auto_detect_charger_consumption_entity(
     return matches[0] if len(matches) == 1 else None
 
 
+def _auto_detect_entity_by_name(hass, platform: str, name: str) -> str | None:
+    """Find the single entity_id from `platform` whose entity registry
+    original_name matches, for pre-filling a Solar PV Plant Core field once
+    an inverter brand is picked (see INVERTER_CORE_AUTO_DETECT_NAMES in
+    const.py).
+
+    Used instead of _auto_detect_entity_id (translation_key-based) because
+    the inverter integrations that dict covers don't set translation_key at
+    all -- confirmed directly against Kasper's own live Kostal Plenticore
+    install (see that dict's own comment for how). original_name is the
+    next most stable thing Home Assistant's entity registry exposes: same
+    as translation_key, it doesn't care what the entity_id happens to be or
+    what the device is currently named, it just stops matching if the user
+    has explicitly renamed that entity's friendly name.
+
+    Returns None unless exactly one match exists, same reasoning as
+    _auto_detect_entity_id -- e.g. two Kostal Plenticore inverters would
+    otherwise risk mixing up which one's "Grid Power" is whose.
+    """
+    registry = er.async_get(hass)
+    matches = [
+        entry.entity_id
+        for entry in registry.entities.values()
+        if entry.platform == platform and entry.original_name == name
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 class PwMngtOptionsFlow(config_entries.OptionsFlow):
     """PwMngt options flow -- a multi-page wizard.
 
@@ -316,10 +426,18 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
     "name" field -- that's set once at initial setup
     (PwMngtConfigFlow.async_step_user). "Solar PV Plant" is mandatory, not
     a toggle; EV Charging / Pool / PV Surplus are the opt-in segments.
-    Page 2 (async_step_solar_pv_plant): the Solar PV Plant entity map.
+    Page 2 (async_step_pv_inverter): which inverter brand the Solar PV
+    Plant uses, if any -- also mandatory/always visited, and always
+    visited right before page 3 for the same reason EV Charging's own
+    type/device page comes before its consumption page (see that page's
+    docstring): page 3's auto-detect needs this already saved, not just
+    typed into a still-open form.
+    Page 3 (async_step_solar_pv_plant): the Solar PV Plant entity map.
     Always visited.
-    Pages 3-5 (async_step_ev_charging / _pool / _pv_surplus): one per
-    optional segment enabled on page 1. Scaffolding -- no fields yet.
+    Pages 4-6 (async_step_ev_charging / _pool / _pv_surplus): one per
+    optional segment enabled on page 1. Scaffolding -- no fields yet
+    (EV Charging itself splits further into its own two pages, see that
+    method's docstring).
 
     Each page's picks are saved into the config entry's options as soon as
     it's submitted (see _save_progress), not only at the end of the
@@ -374,14 +492,15 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             self._data[CONF_SEGMENTS] = selected_segments
             self._pending_segments = list(selected_segments)
             self._save_progress()
-            return await self.async_step_solar_pv_plant()
+            return await self.async_step_pv_inverter()
 
         current_segments = self.config_entry.options.get(CONF_SEGMENTS, [])
         schema = vol.Schema(
             {
                 # "Solar PV Plant" isn't a choice here -- mandatory,
-                # configured on page 2. Helper text for each toggle is in
-                # strings.json -> options.step.init.data_description.
+                # configured on page 3 (after page 2's Inverter pick).
+                # Helper text for each toggle is in strings.json ->
+                # options.step.init.data_description.
                 vol.Optional(
                     SEGMENT_EV_CHARGING,
                     default=SEGMENT_EV_CHARGING in current_segments,
@@ -399,8 +518,98 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
 
         return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
 
+    async def async_step_pv_inverter(self, user_input: Any | None = None):
+        """Page 2: which inverter brand the Solar PV Plant uses, if any --
+        mandatory/always visited, like Solar PV Plant itself (page 3), not
+        one of the opt-in segments from page 1.
+
+        Convenience mirror of a persistent entity, exactly the same
+        pattern as EV Charging's own type field (async_step_ev_charging,
+        see its docstring for the full reasoning) -- this field mirrors
+        select.<id>_pv_inverter_type (PwM_PV_CONFIG_SELECTS in select.py);
+        it is not itself stored in the config entry's options.
+
+        Split onto its own page for the exact same reason EV Charging's
+        type/device page is split from its consumption page: Home
+        Assistant's options-flow pages are static per render, so page 3's
+        own auto-detect (driven by INVERTER_CORE_AUTO_DETECT_NAMES, see
+        _auto_detect_entity_by_name) needs this pick already *saved*, not
+        just typed into a still-open form. Submitting this page saves the
+        pick via a blocking service call first, then moves straight into a
+        fresh render of async_step_solar_pv_plant that reads it
+        immediately -- so the Core group's fields (Battery SoC, Battery
+        power, DC/PV string power, consumption, grid power) can auto-fill
+        the very first time through the wizard, not just on a revisit.
+
+        The dropdown is narrowed to the brand(s) actually installed in
+        this Home Assistant (plus "Not installed" and whatever's
+        currently set) -- see _installed_inverter_type_options(), same
+        idea as the EV Charging type field's own
+        _installed_charger_type_options().
+        """
+        if user_input is not None:
+            entity_id = self._pv_inverter_type_entity_id()
+            if entity_id is not None:
+                await self.hass.services.async_call(
+                    "select",
+                    "select_option",
+                    {
+                        "entity_id": entity_id,
+                        "option": user_input.get(
+                            "inverter_type", _PV_INVERTER_TYPE_DESCRIPTION.default_option
+                        ),
+                    },
+                    blocking=True,
+                )
+            # Not _advance() -- Solar PV Plant (page 3) is next regardless
+            # of which segments are enabled, same as page 1 always going
+            # to this page rather than into _pending_segments.
+            return await self.async_step_solar_pv_plant()
+
+        current_value = self._pv_inverter_type_current_value()
+        schema = vol.Schema(
+            {
+                vol.Optional("inverter_type"): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=_installed_inverter_type_options(
+                            self.hass,
+                            _PV_INVERTER_TYPE_DESCRIPTION.options,
+                            current_value,
+                        ),
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                )
+            }
+        )
+        return self.async_show_form(
+            step_id="pv_inverter",
+            data_schema=self.add_suggested_values_to_schema(
+                schema, {"inverter_type": current_value}
+            ),
+        )
+
+    def _pv_inverter_type_entity_id(self) -> str | None:
+        """entity_id of the PV device's "inverter_type" select entity
+        (PwM_PV_CONFIG_SELECTS in select.py), or None if the select
+        platform hasn't registered it yet."""
+        registry = er.async_get(self.hass)
+        return registry.async_get_entity_id(
+            "select", DOMAIN, f"{self.config_entry.entry_id}_pv_inverter_type"
+        )
+
+    def _pv_inverter_type_current_value(self) -> str:
+        """Current value of that select entity, for pre-filling the field
+        and for driving async_step_solar_pv_plant's auto-detect below --
+        the description's own default if it doesn't exist yet or has no
+        value."""
+        entity_id = self._pv_inverter_type_entity_id()
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state in ("unknown", "unavailable"):
+            return _PV_INVERTER_TYPE_DESCRIPTION.default_option
+        return state.state
+
     async def async_step_solar_pv_plant(self, user_input: Any | None = None):
-        """Page 2: Solar PV Plant entity map (mandatory page; not every
+        """Page 3: Solar PV Plant entity map (mandatory page; not every
         field is required, see _SOLAR_PV_PLANT_FIELDS).
 
         Each field is an entity picker filtered to the value's unit of
@@ -408,8 +617,13 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
 
         A few fields (PV forecast today/tomorrow, spot electricity price)
         get pre-filled automatically if their one known source integration
-        is installed and unambiguous -- see _AUTO_DETECT_SOURCES. The user
-        can still pick something else; an existing pick is never
+        is installed and unambiguous -- see _AUTO_DETECT_SOURCES. The
+        Core group's fields (Battery SoC, Battery power, DC/PV string
+        power, consumption, grid power) get the same treatment from
+        whichever inverter brand was picked on page 2 -- see
+        INVERTER_CORE_AUTO_DETECT_NAMES and _auto_detect_entity_by_name.
+        Both mechanisms share this page's single {auto_filled_note}. The
+        user can still pick something else; an existing pick is never
         overwritten.
 
         Fields are visually split into collapsible sections (see
@@ -418,23 +632,57 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         section's picks come back as a nested dict under the group's key,
         flattened at the top of the submit-handling below.
 
-        Known limitation: a field that already holds a value and gets
-        cleared via the picker's own "x" makes Home Assistant's
-        EntitySelector reject the resulting "" before this function even
-        runs. Not yet hit in practice (PV2/PV3 are the only optional
-        fields, and nobody without a second/third string would have set
-        one).
+        Every field is pre-filled via description={"suggested_value":
+        ...} (self.add_suggested_values_to_schema, which recurses into
+        each section's nested schema on its own), not default= -- see
+        async_step_ev_charging's docstring for the full reasoning (a
+        plain default= makes Home Assistant's EntitySelector reject the
+        field being cleared back to empty). Fixed here for the same
+        reason it was fixed there, even though this page hadn't actually
+        hit it yet (PV2/PV3 were the only optional fields, and nobody
+        without a second/third string would have set one) -- and it's
+        what makes clearing one of the three auto-detected fields
+        (PV forecast today/tomorrow, spot electricity price) and
+        submitting a real way to ask _AUTO_DETECT_SOURCES to re-derive
+        it: the cleared field is saved as None in the entity map, so the
+        auto-detect loop below finds it unset again on the next render,
+        same as if it had never been picked.
+
+        Whichever of those three gets auto-detected on THIS render shows
+        up right in the page's own description, via description_placeholders
+        -- see _auto_filled_note()'s docstring for why that's the
+        mechanism (Home Assistant has no per-field equivalent) and why it
+        never lingers once a field's value is actually saved.
         """
         errors: dict[str, str] = {}
         values = dict(self.config_entry.options.get(CONF_ENTITY_MAP, {}))
 
         # Pre-fill fields the user hasn't picked yet (see
-        # _AUTO_DETECT_SOURCES) -- never overrides an existing pick.
+        # _AUTO_DETECT_SOURCES) -- never overrides an existing pick. Also
+        # collects which ones, for the description's {auto_filled_note}
+        # (_auto_filled_note()) below.
+        auto_filled_labels: list[str] = []
         for key, (platform, translation_key) in _AUTO_DETECT_SOURCES.items():
             if not values.get(key):
                 detected = _auto_detect_entity_id(self.hass, platform, translation_key)
                 if detected:
                     values[key] = detected
+                    auto_filled_labels.append(_AUTO_DETECT_LABELS.get(key, key))
+
+        # Same idea, for the Core group -- driven by whichever inverter
+        # brand was picked on page 2 (async_step_pv_inverter), just saved
+        # by the time this page renders. A brand not in
+        # INVERTER_CORE_AUTO_DETECT_NAMES ("Not installed", or a brand with
+        # no entry at all) simply contributes nothing here.
+        inverter_type = self._pv_inverter_type_current_value()
+        for key, (platform, name) in INVERTER_CORE_AUTO_DETECT_NAMES.get(
+            inverter_type, {}
+        ).items():
+            if not values.get(key):
+                detected = _auto_detect_entity_by_name(self.hass, platform, name)
+                if detected:
+                    values[key] = detected
+                    auto_filled_labels.append(_AUTO_DETECT_LABELS.get(key, key))
 
         if user_input is not None:
             # Flatten each section's nested dict (keyed by group_key) back
@@ -464,32 +712,34 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                 self._save_progress()
                 return await self._advance()
 
-        # No `default=` at all when there's no value yet -- NOT default=""
-        # or default=None. Home Assistant's EntitySelector rejects "" as
-        # invalid, so the only way to keep a field skippable is to leave
-        # it out of the schema entirely until it has a value; the frontend
-        # then omits an untouched field from the submitted data.
         schema_dict: dict[Any, Any] = {}
+        suggested_values: dict[str, str] = {}
         for group_key, collapsed, field_keys in _SOLAR_PV_PLANT_GROUPS:
             group_schema_dict: dict[Any, Any] = {}
             for key in field_keys:
-                marker = (
-                    vol.Optional(key, default=values[key])
-                    if values.get(key)
-                    else vol.Optional(key)
+                group_schema_dict[vol.Optional(key)] = _entity_picker(
+                    self.hass, _FIELD_UNIT_BY_KEY[key]
                 )
-                group_schema_dict[marker] = _entity_picker(self.hass, _FIELD_UNIT_BY_KEY[key])
+                if values.get(key):
+                    suggested_values[key] = values[key]
             schema_dict[vol.Required(group_key)] = section(
                 vol.Schema(group_schema_dict), SectionConfig(collapsed=collapsed)
             )
-        schema = vol.Schema(schema_dict)
+        schema = self.add_suggested_values_to_schema(
+            vol.Schema(schema_dict), suggested_values
+        )
 
         return self.async_show_form(
-            step_id="solar_pv_plant", data_schema=schema, errors=errors
+            step_id="solar_pv_plant",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={
+                "auto_filled_note": _auto_filled_note(auto_filled_labels)
+            },
         )
 
     async def async_step_ev_charging(self, user_input: Any | None = None):
-        """Page 3a: EV Charging -- type and physical device, per charger:
+        """Page 4a: EV Charging -- type and physical device, per charger:
         Charger1 type, Charger1 device, Charger2 type, Charger2 device.
 
         Kasper's fix for a real problem the old single-page version had:
@@ -547,10 +797,36 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         nothing reads it yet (ev_charging_consumption's auto-detect is
         the first thing that reads it, right below).
 
-        Known limitation carried over unchanged: no default= at all when
-        there's no value yet (DeviceSelector rejects "" as invalid), so
-        an untouched/cleared field is simply left out of the schema
-        instead.
+        Both fields (and every other picker in this options flow --
+        async_step_ev_charging_consumption's consumption field,
+        async_step_solar_pv_plant's entity pickers) are pre-filled via
+        description={"suggested_value": ...} (self's
+        add_suggested_values_to_schema, a FlowHandler builtin), never
+        default=. Kasper hit the difference in practice: a plain
+        vol.Optional(key, default=value) makes Home Assistant's frontend
+        send that value right back whenever the field is cleared, so
+        DeviceSelector's own validator rejects the empty string and
+        Charger2's device could never be un-set once picked -- even
+        though this field is meant to stay optional (a charger can be
+        "Not installed"). suggested_value pre-fills the same way but is
+        only ever a hint, never a fallback: clearing the picker (its
+        "x", or backspacing it out) now genuinely omits the key from
+        user_input, which every submit handler here already treated as
+        "" via .get()'s default (or, for a required Solar PV Plant
+        field, as the "required" error it always was). That in turn is
+        what makes a field like "type" (which falls back to
+        description.default_option, "Not installed", when unset) or a
+        Solar PV Plant field with an _AUTO_DETECT_SOURCES entry
+        re-derivable on demand: clear it, submit, and the cleared value
+        persists as empty -- so the next render's own fallback/
+        auto-detect logic (see _charger_type_current_value,
+        _AUTO_DETECT_SOURCES) fills it back in, exactly as if it had
+        never been set. Applied uniformly across the whole options flow
+        for that reason, not just where a bug had already been hit --
+        "type" itself was never stuck (a SelectSelector dropdown has no
+        empty state to get stuck in), but it's built the same way as
+        everything else now rather than being the one field still using
+        default=.
         """
         if user_input is not None:
             for charger in CHARGERS:
@@ -586,15 +862,12 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             return await self.async_step_ev_charging_consumption()
 
         schema_dict: dict[Any, Any] = {}
+        suggested_values: dict[str, str] = {}
         for charger in CHARGERS:
             description = _CHARGER_TYPE_DESCRIPTIONS[charger["id"]]
             current_type_value = self._charger_type_current_value(charger)
-            schema_dict[
-                vol.Optional(
-                    f"{charger['id']}_type",
-                    default=current_type_value,
-                )
-            ] = selector.SelectSelector(
+            type_key = f"{charger['id']}_type"
+            schema_dict[vol.Optional(type_key)] = selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=_installed_charger_type_options(
                         self.hass, description.options, current_type_value
@@ -602,16 +875,17 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             )
+            # Always non-empty (falls back to description.default_option,
+            # "Not installed") -- so unlike the device field below, this
+            # always has a suggestion, and the submit handler's plain
+            # user_input[type_key] (no .get()) stays safe.
+            suggested_values[type_key] = current_type_value
 
             current_device_value = self._charger_text_current_value(
                 charger, "charging_device_id"
             )
-            device_marker = (
-                vol.Optional(f"{charger['id']}_device", default=current_device_value)
-                if current_device_value
-                else vol.Optional(f"{charger['id']}_device")
-            )
-            schema_dict[device_marker] = selector.DeviceSelector(
+            device_key = f"{charger['id']}_device"
+            schema_dict[vol.Optional(device_key)] = selector.DeviceSelector(
                 selector.DeviceSelectorConfig(
                     filter=[
                         {"integration": domain}
@@ -619,46 +893,60 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                     ]
                 )
             )
+            if current_device_value:
+                suggested_values[device_key] = current_device_value
 
         return self.async_show_form(
-            step_id="ev_charging", data_schema=vol.Schema(schema_dict)
+            step_id="ev_charging",
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(schema_dict), suggested_values
+            ),
         )
 
     async def async_step_ev_charging_consumption(self, user_input: Any | None = None):
-        """Page 3b: EV Charging -- consumption source entity, per charger.
+        """Page 4b: EV Charging -- consumption source entity, per charger.
 
-        Split off from type/device (page 3a, async_step_ev_charging) so
+        Split off from type/device (page 4a, async_step_ev_charging) so
         this field's auto-detect can actually work the first time
         through the wizard -- see that method's docstring for the full
         reasoning on why the split itself is the fix. By the time this
-        page renders, page 3a's submit handler has already saved
+        page renders, page 4a's submit handler has already saved
         type+device via blocking service calls, so
         _auto_detect_charger_consumption_entity() below always sees
         current state, never stale state from before this wizard run.
 
-        Convenience mirror of a persistent entity, same as the page 3a
+        Convenience mirror of a persistent entity, same as the page 4a
         fields -- consumption source mirrors
         text.<id>_consumption_source_entity (PwM_CHARGER_CONFIG_TEXTS in
         text.py); not stored in the config entry's options.
 
         Always shown for every charger regardless of type, same
-        reasoning as page 3a: filling it in for a "Not installed"
+        reasoning as page 4a: filling it in for a "Not installed"
         charger just has no effect yet.
 
         A searchable entity picker (like the Solar PV Plant page's
-        fields), restricted to sensors with device_class "energy". Same
-        known limitation as page 3a's device field: no default= at all
-        when there's no value yet (EntitySelector rejects "" as
-        invalid), so an untouched/cleared field is simply left out of
-        the schema instead.
+        fields), restricted to sensors with device_class "energy".
+        Pre-filled via description={"suggested_value": ...}
+        (add_suggested_values_to_schema), not default= -- same fix, and
+        the same reason, as page 4a's device field: a plain default=
+        makes the field impossible to clear once set (EntitySelector
+        rejects the resulting "" instead of letting it through), which
+        matters here because a charger can legitimately have no
+        consumption source configured at all.
 
         If the field is still empty, it's auto-detected from this
-        charger's type + device (both just saved by page 3a) -- see
+        charger's type + device (both just saved by page 4a) -- see
         _auto_detect_charger_consumption_entity(), same idea as
         _AUTO_DETECT_SOURCES on the Solar PV Plant page. Never overrides
         an existing pick -- picking a different device later and
         revisiting this page won't silently replace a value Kasper
         already chose or corrected here.
+
+        Whichever charger(s) get auto-detected on THIS render are named
+        in the page's own description, via description_placeholders --
+        see _auto_filled_note()'s docstring for why that's the mechanism
+        (Home Assistant has no per-field equivalent) and why it never
+        lingers once a value is actually saved.
         """
         if user_input is not None:
             for charger in CHARGERS:
@@ -680,6 +968,8 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             return await self._advance()
 
         schema_dict: dict[Any, Any] = {}
+        suggested_values: dict[str, str] = {}
+        auto_filled_labels: list[str] = []
         for charger in CHARGERS:
             current_type_value = self._charger_type_current_value(charger)
             current_device_value = self._charger_text_current_value(
@@ -689,21 +979,24 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                 charger, "consumption_source_entity"
             )
             if not current_consumption_value:
-                current_consumption_value = (
-                    _auto_detect_charger_consumption_entity(
-                        self.hass, current_type_value, current_device_value
-                    )
-                    or ""
+                detected = _auto_detect_charger_consumption_entity(
+                    self.hass, current_type_value, current_device_value
                 )
-            consumption_marker = (
-                vol.Optional(charger["id"], default=current_consumption_value)
-                if current_consumption_value
-                else vol.Optional(charger["id"])
-            )
-            schema_dict[consumption_marker] = _energy_entity_picker(self.hass)
+                if detected:
+                    current_consumption_value = detected
+                    auto_filled_labels.append(charger["id"].capitalize())
+            schema_dict[vol.Optional(charger["id"])] = _energy_entity_picker(self.hass)
+            if current_consumption_value:
+                suggested_values[charger["id"]] = current_consumption_value
 
         return self.async_show_form(
-            step_id="ev_charging_consumption", data_schema=vol.Schema(schema_dict)
+            step_id="ev_charging_consumption",
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(schema_dict), suggested_values
+            ),
+            description_placeholders={
+                "auto_filled_note": _auto_filled_note(auto_filled_labels)
+            },
         )
 
     def _charger_type_entity_id(self, charger: dict) -> str | None:

@@ -194,6 +194,22 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
                  "1.80", "1.90", "2.00"],
         default_option="0.80",
     ),
+    # New -- no "Old key"/"Old name", this field didn't exist before the
+    # Options wizard's own "Inverter" page (config_flow.py's
+    # async_step_pv_inverter). Same convenience-mirror pattern as
+    # charger1_type/charger2_type above: this entity is the actual source
+    # of truth the wizard writes through to and reads back from, so it's
+    # what drives auto-filling the Solar PV Plant page's Core group (see
+    # INVERTER_CORE_AUTO_DETECT_NAMES in const.py) -- picking a brand here
+    # doesn't do anything else on its own yet.
+    PwMngtSelectEntityDescription(
+        key="inverter_type",
+        name="Inverter type",
+        icon="mdi:solar-power-variant",
+        entity_category=EntityCategory.CONFIG,
+        options=["Not installed", "Kostal Plenticore", "Growatt"],
+        default_option="Not installed",
+    ),
 ]
 
 # Shown under each charger device's "Configuration" tab (set once, rarely changed).

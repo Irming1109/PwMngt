@@ -26,9 +26,16 @@
           "pv_surplus": "Manage what happens to solar production left over once the battery and other loads are covered."
         }
       },
+      "pv_inverter": {
+        "title": "Solar PV Plant",
+        "description": "Which inverter do you have? Picking one lets PwMngt auto-fill several of the next page's fields for you.",
+        "data": {
+          "inverter_type": "Inverter"
+        }
+      },
       "solar_pv_plant": {
         "title": "Solar PV Plant",
-        "description": "Pick the entity in your own Home Assistant that PwMngt should mirror for each value below.",
+        "description": "Pick the entity in your own Home Assistant that PwMngt should mirror for each value below.{auto_filled_note}",
         "sections": {
           "core": {
             "name": "Core sensors",
@@ -126,7 +133,7 @@
       },
       "ev_charging": {
         "title": "EV Charging",
-        "description": "Pick each charger's type, and -- once it's set to something other than \"Not installed\" -- which physical device on that brand's own integration it actually is. Both fields mirror the charger's own select/text entity under the PwM hub device's Configuration tab and stay visible for every charger; filling them in for a \"Not installed\" charger just has no effect yet. The next page picks each charger's consumption source entity, using what's picked here.",
+        "description": "Pick each charger's type and, if installed, its physical device.",
         "data": {
           "charger1_type": "Charger1 type",
           "charger1_device": "Charger1 device",
@@ -136,7 +143,7 @@
       },
       "ev_charging_consumption": {
         "title": "EV Charging",
-        "description": "Pick each charger's own added-energy sensor -- the entity that reports how much it's charged, e.g. a Wallbox portal's \"Added energy\" sensor or an Easee charger's \"Session Energy\" sensor. Pre-filled automatically when possible, based on the type and device just picked on the previous page -- pick a different entity if it's wrong or missing. Mirrors the charger's own text entity under the PwM hub device's Configuration tab and stays visible for every charger; filling it in for a \"Not installed\" charger just has no effect yet.",
+        "description": "Pick each charger's own added-energy sensor (e.g. Wallbox's \"Added energy\" or Easee's \"Session Energy\").{auto_filled_note}",
         "data": {
           "charger1": "Charger1 consumption source entity",
           "charger2": "Charger2 consumption source entity"
