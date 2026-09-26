@@ -489,33 +489,43 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         )
 
     async def async_step_ev_charging(self, user_input: Any | None = None):
-        """Page 3: EV Charging -- per charger, interleaved as (type,
-        charging device, consumption source entity), i.e. Charger1 type,
-        Charger1 device, Charger1 consumption source, Charger2 type,
-        Charger2 device, Charger2 consumption source.
+        """Page 3a: EV Charging -- type and physical device, per charger:
+        Charger1 type, Charger1 device, Charger2 type, Charger2 device.
 
-        All three fields are convenience mirrors of a persistent entity
-        that stays the actual source of truth -- type mirrors
-        select.<id>_type (PwM_CONFIG_SELECTS in select.py), device and
-        consumption source mirror text.<id>_charging_device_id and
-        text.<id>_consumption_source_entity (both PwM_CHARGER_CONFIG_TEXTS
-        in text.py). Submitting here writes through to all three via a
-        service call; none of them is stored in the config entry's
-        options.
+        Kasper's fix for a real problem the old single-page version had:
+        the consumption-source field's auto-detect (see
+        async_step_ev_charging_consumption below) needs this charger's
+        type and device already *saved*, not just typed into a
+        still-open form -- Home Assistant's options-flow pages are
+        static per render, nothing on a page can react to another field
+        on that same still-open page. On one combined page, that meant
+        picking a device and hitting Submit would only pre-fill
+        consumption the *next* time you opened the page -- in practice,
+        going through the wizard once left it blank, which read as
+        broken rather than "revisit later". Splitting type+device onto
+        their own page fixes that for real: submitting THIS page saves
+        type+device via service calls first, and moving to the next
+        step is a genuinely fresh render of a *different* page, which
+        reads that just-saved state immediately -- so
+        ev_charging_consumption's auto-detect now works the very first
+        time through, no revisit needed. (Splitting the other way, one
+        page per charger instead of one page per field-group, wouldn't
+        have fixed this -- each charger's own type+device+consumption
+        would still sit together on one static render.)
 
-        All three fields are always shown, for every charger, regardless
-        of its type -- tried hiding the consumption field while a charger
-        is "Not installed" first, but Home Assistant's options-flow
-        pages are static per render (no field can react to another
-        field's still-being-edited value, and nothing can trigger a
-        submit on the user's behalf), so it either stayed stuck showing
-        the wrong thing until a second Submit, or never visibly reacted
-        at all if you only changed the dropdown without submitting.
-        Kasper's call: always-visible is simpler, and matches how the
-        text entity already behaves everywhere else (it exists and
-        stays visible under its own Configuration tab no matter the
-        charger's type) -- filling it in for a "Not installed" charger
-        just has no effect yet.
+        Both fields are convenience mirrors of a persistent entity that
+        stays the actual source of truth -- type mirrors
+        select.<id>_type (PwM_CONFIG_SELECTS in select.py), device
+        mirrors text.<id>_charging_device_id (PwM_CHARGER_CONFIG_TEXTS in
+        text.py). Submitting here writes through to both via a service
+        call; neither is stored in the config entry's options.
+
+        Both fields are always shown, for every charger, regardless of
+        its type -- matches how the text entity already behaves
+        everywhere else (exists and stays visible under its own
+        Configuration tab no matter the charger's type); filling in the
+        device field for a "Not installed" charger just has no effect
+        yet.
 
         The type field's own dropdown is narrowed to the brand(s)
         actually installed in this Home Assistant (plus "Not installed"
@@ -534,26 +544,13 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         device's registry ID, not its name -- see that entity's own
         description in text.py for why. This is what a later step needs
         to find this charger's own entities and call services on them;
-        nothing reads it yet.
+        nothing reads it yet (ev_charging_consumption's auto-detect is
+        the first thing that reads it, right below).
 
-        The consumption field is a searchable entity picker (like the
-        Solar PV Plant page's fields), restricted to sensors with
-        device_class "energy" -- it used to be a plain text box the user
-        had to type an entity_id into by hand. Same known limitation as
-        the Solar PV Plant page (and now the device field too): no
-        default= at all when there's no value yet (EntitySelector/
-        DeviceSelector reject "" as invalid), so an untouched/cleared
-        field is simply left out of the schema instead.
-
-        If the consumption field is still empty, it's auto-detected from
-        this charger's already-saved type + device (see
-        _auto_detect_charger_consumption_entity), same idea as
-        _AUTO_DETECT_SOURCES on the Solar PV Plant page -- never
-        overrides an existing pick. "Already-saved" matters: since this
-        page is static per render, picking a device and hitting Submit
-        only pre-fills consumption on the *next* time this page opens,
-        not within that same submission -- same static-per-render
-        limitation the always-visible-fields decision above is about.
+        Known limitation carried over unchanged: no default= at all when
+        there's no value yet (DeviceSelector rejects "" as invalid), so
+        an untouched/cleared field is simply left out of the schema
+        instead.
         """
         if user_input is not None:
             for charger in CHARGERS:
@@ -581,20 +578,12 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                         },
                         blocking=True,
                     )
-                text_entity_id = self._charger_text_entity_id(
-                    charger, "consumption_source_entity"
-                )
-                if text_entity_id is not None:
-                    await self.hass.services.async_call(
-                        "text",
-                        "set_value",
-                        {
-                            "entity_id": text_entity_id,
-                            "value": user_input.get(charger["id"], ""),
-                        },
-                        blocking=True,
-                    )
-            return await self._advance()
+            # Not _advance() -- the EV Charging segment isn't done yet,
+            # its consumption-source page (3b) is next. Calling that step
+            # method directly (rather than routing back through
+            # _pending_segments) is what makes it a fresh render reading
+            # the type/device values just saved above.
+            return await self.async_step_ev_charging_consumption()
 
         schema_dict: dict[Any, Any] = {}
         for charger in CHARGERS:
@@ -631,6 +620,71 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                 )
             )
 
+        return self.async_show_form(
+            step_id="ev_charging", data_schema=vol.Schema(schema_dict)
+        )
+
+    async def async_step_ev_charging_consumption(self, user_input: Any | None = None):
+        """Page 3b: EV Charging -- consumption source entity, per charger.
+
+        Split off from type/device (page 3a, async_step_ev_charging) so
+        this field's auto-detect can actually work the first time
+        through the wizard -- see that method's docstring for the full
+        reasoning on why the split itself is the fix. By the time this
+        page renders, page 3a's submit handler has already saved
+        type+device via blocking service calls, so
+        _auto_detect_charger_consumption_entity() below always sees
+        current state, never stale state from before this wizard run.
+
+        Convenience mirror of a persistent entity, same as the page 3a
+        fields -- consumption source mirrors
+        text.<id>_consumption_source_entity (PwM_CHARGER_CONFIG_TEXTS in
+        text.py); not stored in the config entry's options.
+
+        Always shown for every charger regardless of type, same
+        reasoning as page 3a: filling it in for a "Not installed"
+        charger just has no effect yet.
+
+        A searchable entity picker (like the Solar PV Plant page's
+        fields), restricted to sensors with device_class "energy". Same
+        known limitation as page 3a's device field: no default= at all
+        when there's no value yet (EntitySelector rejects "" as
+        invalid), so an untouched/cleared field is simply left out of
+        the schema instead.
+
+        If the field is still empty, it's auto-detected from this
+        charger's type + device (both just saved by page 3a) -- see
+        _auto_detect_charger_consumption_entity(), same idea as
+        _AUTO_DETECT_SOURCES on the Solar PV Plant page. Never overrides
+        an existing pick -- picking a different device later and
+        revisiting this page won't silently replace a value Kasper
+        already chose or corrected here.
+        """
+        if user_input is not None:
+            for charger in CHARGERS:
+                text_entity_id = self._charger_text_entity_id(
+                    charger, "consumption_source_entity"
+                )
+                if text_entity_id is not None:
+                    await self.hass.services.async_call(
+                        "text",
+                        "set_value",
+                        {
+                            "entity_id": text_entity_id,
+                            "value": user_input.get(charger["id"], ""),
+                        },
+                        blocking=True,
+                    )
+            # The EV Charging segment is done now -- on to the next
+            # enabled segment (or finish).
+            return await self._advance()
+
+        schema_dict: dict[Any, Any] = {}
+        for charger in CHARGERS:
+            current_type_value = self._charger_type_current_value(charger)
+            current_device_value = self._charger_text_current_value(
+                charger, "charging_device_id"
+            )
             current_consumption_value = self._charger_text_current_value(
                 charger, "consumption_source_entity"
             )
@@ -649,7 +703,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             schema_dict[consumption_marker] = _energy_entity_picker(self.hass)
 
         return self.async_show_form(
-            step_id="ev_charging", data_schema=vol.Schema(schema_dict)
+            step_id="ev_charging_consumption", data_schema=vol.Schema(schema_dict)
         )
 
     def _charger_type_entity_id(self, charger: dict) -> str | None:
