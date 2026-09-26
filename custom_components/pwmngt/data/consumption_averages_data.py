@@ -20,6 +20,17 @@ soon as that part of the day was over. PwMngt deliberately doesn't copy
 that cadence -- see the "Trigger timing" note below -- all 3 histories
 now advance together, once a day, from one complete calendar day's worth
 of snapshots.
+
+Before a day is let into the 3 histories, _is_plausible_day() sanity-
+checks it: every derived figure should be >= 0 (the source counters only
+ever increase), and the full-day total is capped at
+_MAX_PLAUSIBLE_FULL_DAY_KWH. This is what protects the rolling averages
+from a source-entity swap in Options (see
+consumption_snapshots_data.py's _discard_stale_entity_baseline() for the
+other half of that fix) or any other one-off bad reading -- a day that
+fails the check is skipped entirely (same as a day with a missing
+snapshot) rather than entered and left to skew a 7-30 day average for
+as long as it stays in the rolling window.
 """
 
 import logging
@@ -84,6 +95,11 @@ PwM_CONSUMPTION_AVERAGES_SENSORS: list[SensorEntityDescription] = [
 # matter what select.pwm_pv_history_period_days is currently set to --
 # same "30" Node-RED capped each of its 3 context lists at.
 _MAX_HISTORY_DAYS = 30
+
+# A single day's real household consumption above this is implausible --
+# see _is_plausible_day(). Comfortably covers even a heavy EV-charging
+# day; Kasper's own call on where to draw the line.
+_MAX_PLAUSIBLE_FULL_DAY_KWH = 250
 
 
 @dataclass
@@ -177,6 +193,62 @@ def calculate_full_day_average(history: list[dict[str, Any]], period_days: int) 
     used directly instead.
     """
     return _average(history, "full_day", period_days)
+
+
+def _derive_daily_values(kl: dict[str, float]) -> dict[str, float]:
+    """Pure calculation: turn one day's property_kl_* snapshots into the
+    7 per-day figures PwMngtConsumptionAveragesSensor._append_daily_entries()
+    stores and _is_plausible_day() sanity-checks -- split out so both use
+    the exact same math rather than risking the two drifting apart.
+    """
+    daytime = round(kl["16"] - kl["8"], 2)
+    return {
+        "early_morning": round(kl["7"] - kl["6"], 2),
+        "morning": round(kl["8"] - kl["7"], 2),
+        "late_morning": round(kl["9"] - kl["8"], 2),
+        "daytime": daytime,
+        # daytime_adjusted has nothing to subtract yet -- see the
+        # PwM_CONSUMPTION_AVERAGES_ATTRIBUTES comment above. Same
+        # "equals the uncorrected value until the real logic exists"
+        # placeholder as balance_15_min_corrected in data/balance_data.py.
+        "daytime_adjusted": daytime,
+        "nighttime": round((kl["23_59"] - kl["17"]) + kl["6"], 2),
+        "evening": round(kl["21"] - kl["17"], 2),
+        "full_day": kl["23_59"],
+    }
+
+
+def _is_plausible_day(values: dict[str, float]) -> bool:
+    """Whether one day's derived figures (see _derive_daily_values())
+    are sane enough to enter the rolling histories.
+
+    The source counters are ever-increasing, so every one of these
+    since-midnight deltas should be >= 0 -- a negative one means two
+    readings that don't actually belong to the same consistent counter
+    (most likely a source entity swapped mid-day; see
+    consumption_snapshots_data.py's _discard_stale_entity_baseline(),
+    which exists precisely to stop that from happening but is worth
+    double-checking here too). full_day is separately capped at
+    _MAX_PLAUSIBLE_FULL_DAY_KWH: a genuinely higher real reading is far
+    less likely than a bad source reading, and one bad day isn't worth
+    risking dragging a 7-30 day rolling average off for as long as it
+    stays in the window (see _MAX_HISTORY_DAYS) -- better to skip that
+    day's entry entirely and let it show up as one missing day instead.
+    """
+    if any(
+        values[key] < 0
+        for key in (
+            "early_morning",
+            "morning",
+            "late_morning",
+            "daytime",
+            "nighttime",
+            "evening",
+            "full_day",
+        )
+    ):
+        return False
+    return values["full_day"] <= _MAX_PLAUSIBLE_FULL_DAY_KWH
 
 
 class PwMngtConsumptionAveragesSensor(restore_state.RestoreEntity, SensorEntity):
@@ -291,13 +363,24 @@ class PwMngtConsumptionAveragesSensor(restore_state.RestoreEntity, SensorEntity)
     def _handle_new_day(self, _now) -> None:
         """00:01 alarm: the calendar day that just ended has a complete
         set of data/consumption_snapshots_data.py "property_kl_*"
-        attributes -- read them, append one entry to each of the 3
-        rolling histories, then recompute the 8 averages."""
+        attributes -- read them, sanity-check them (see
+        _is_plausible_day()), append one entry to each of the 3 rolling
+        histories, then recompute the 8 averages."""
         snapshot_attributes = self._read_snapshot_attributes()
         if snapshot_attributes is None:
             return
 
-        self._append_daily_entries(snapshot_attributes)
+        values = _derive_daily_values(snapshot_attributes)
+        if not _is_plausible_day(values):
+            LOGGER.warning(
+                "PwMngt: today's consumption snapshots look implausible "
+                "(%s) -- skipping today's consumption-average entry "
+                "rather than risk skewing the rolling averages",
+                values,
+            )
+            return
+
+        self._append_daily_entries(values)
         self._recompute()
         self.async_write_ha_state()
 
@@ -324,42 +407,33 @@ class PwMngtConsumptionAveragesSensor(restore_state.RestoreEntity, SensorEntity)
             values[time_key] = value
         return values
 
-    def _append_daily_entries(self, kl: dict[str, float]) -> None:
-        """Turn one day's property_kl_* snapshots into one entry per
-        rolling history (newest first, capped at _MAX_HISTORY_DAYS) --
-        the same shape calculate_daytime_averages()/
-        calculate_evening_average()/calculate_full_day_average() read
-        back."""
+    def _append_daily_entries(self, values: dict[str, float]) -> None:
+        """Turn one day's already-derived figures (see
+        _derive_daily_values(), and _handle_new_day()'s
+        _is_plausible_day() check) into one entry per rolling history
+        (newest first, capped at _MAX_HISTORY_DAYS) -- the same shape
+        calculate_daytime_averages()/calculate_evening_average()/
+        calculate_full_day_average() read back."""
         today = dt_util.now().date().isoformat()
-
-        daytime = round(kl["16"] - kl["8"], 2)
-        # daytime_adjusted has nothing to subtract yet -- see the
-        # PwM_CONSUMPTION_AVERAGES_ATTRIBUTES comment above. Same
-        # "equals the uncorrected value until the real logic exists"
-        # placeholder as balance_15_min_corrected in data/balance_data.py.
-        daytime_adjusted = daytime
-        nighttime = round((kl["23_59"] - kl["17"]) + kl["6"], 2)
 
         self._daytime_history.insert(
             0,
             {
                 "date": today,
-                "early_morning": round(kl["7"] - kl["6"], 2),
-                "morning": round(kl["8"] - kl["7"], 2),
-                "late_morning": round(kl["9"] - kl["8"], 2),
-                "daytime": daytime,
-                "daytime_adjusted": daytime_adjusted,
-                "nighttime": nighttime,
+                "early_morning": values["early_morning"],
+                "morning": values["morning"],
+                "late_morning": values["late_morning"],
+                "daytime": values["daytime"],
+                "daytime_adjusted": values["daytime_adjusted"],
+                "nighttime": values["nighttime"],
             },
         )
         self._daytime_history = self._daytime_history[:_MAX_HISTORY_DAYS]
 
-        self._evening_history.insert(
-            0, {"date": today, "evening": round(kl["21"] - kl["17"], 2)}
-        )
+        self._evening_history.insert(0, {"date": today, "evening": values["evening"]})
         self._evening_history = self._evening_history[:_MAX_HISTORY_DAYS]
 
-        self._full_day_history.insert(0, {"date": today, "full_day": kl["23_59"]})
+        self._full_day_history.insert(0, {"date": today, "full_day": values["full_day"]})
         self._full_day_history = self._full_day_history[:_MAX_HISTORY_DAYS]
 
     def _recompute(self) -> None:

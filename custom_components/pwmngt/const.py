@@ -21,6 +21,55 @@ DEPENDENCY_SOLCAST_SOLAR = "solcast_solar"
 DEPENDENCY_STROMLIGNING = "stromligning"
 
 # ---------------------------------------------------------------------------
+# Charger brand integrations. Unlike DEPENDENCY_* above, neither is
+# required -- EV charging is an opt-in segment, and a charger can be "Not
+# installed" -- so these don't raise a Repair. They're only used to narrow
+# the EV Charging wizard page's "type" dropdown (config_flow.py's
+# _installed_charger_type_options()) down to the brand(s) actually
+# configured in this Home Assistant, so the user can't pick a brand he
+# doesn't have. The select entity itself (select.<id>_type, see
+# PwM_CONFIG_SELECTS in select.py) is unaffected and keeps offering both.
+# ---------------------------------------------------------------------------
+
+CHARGER_TYPE_INTEGRATION_DOMAINS: dict[str, str] = {
+    "Wallbox": "wallbox",
+    "Easee": "easee",
+}
+
+# ---------------------------------------------------------------------------
+# Each brand's own sensor for "how much energy this charger has added,
+# reset at the start of every new charging session" -- used by
+# config_flow.py's _auto_detect_charger_consumption_entity() to pre-fill a
+# charger's "consumption_source_entity" (text.py) once its brand (type) and
+# physical device (charging_device_id) are both already known.
+#
+# (platform, translation_key), matched the same way _auto_detect_entity_id
+# already matches Solcast/Strømligning sensors -- never the entity_id
+# string. That matters here specifically: on Kasper's own HA, the Wallbox
+# sensor this is modelled on is sensor.wallbox_portal_added_energy, sitting
+# on a device Home Assistant now calls "Wallbox Pulsar MAX SN 1018689" --
+# confirmed live via the entity registry (hass.entities in the frontend).
+# "portal" is just whatever the device happened to be named when that
+# entity_id was first generated; entity_ids don't get renamed when a
+# device is renamed later. Its translation_key, "added_energy", is
+# unaffected by any of that.
+#
+# Easee's equivalent, confirmed from the easee_hass integration's own
+# const.py/translations (no live Easee install available to double-check
+# against, since Kasper doesn't have one) is "session_energy" -- not
+# "lifetime_energy". Easee's API exposes both: sessionEnergy resets at the
+# start of each charging session (same behaviour as Wallbox's added_energy,
+# and what data/consumption_charger_data.py's accumulate() is built to
+# handle), while lifetimeEnergy is a never-resetting odometer-style total
+# -- the wrong shape for this field.
+# ---------------------------------------------------------------------------
+
+CHARGER_CONSUMPTION_SOURCE_TRANSLATION_KEYS: dict[str, tuple[str, str]] = {
+    "Wallbox": ("wallbox", "added_energy"),
+    "Easee": ("easee", "session_energy"),
+}
+
+# ---------------------------------------------------------------------------
 # Entity abstraction layer.
 #
 # The Options wizard lets the user pick the real source entity for each
@@ -93,4 +142,4 @@ SEGMENT_PV_SURPLUS = "pv_surplus"
 # this value.
 # ---------------------------------------------------------------------------
 
-RESTORE_MAX_AGE = timedelta(hours=3)
+RESTORE_MAX_AGE = timedelta(minutes=30)

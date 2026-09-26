@@ -36,6 +36,8 @@ from .const import (
     ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL,
     DEPENDENCY_SOLCAST_SOLAR,
     DEPENDENCY_STROMLIGNING,
+    CHARGER_TYPE_INTEGRATION_DOMAINS,
+    CHARGER_CONSUMPTION_SOURCE_TRANSLATION_KEYS,
     SEGMENT_EV_CHARGING,
     SEGMENT_POOL,
     SEGMENT_PV_SURPLUS,
@@ -236,6 +238,73 @@ def _auto_detect_entity_id(hass, platform: str, translation_key: str) -> str | N
     return matches[0] if len(matches) == 1 else None
 
 
+def _installed_charger_type_options(hass, options: list[str], current_value: str) -> list[str]:
+    """Narrow a charger "type" select's static options (description.options
+    in select.py's PwM_CONFIG_SELECTS) down to what the EV Charging wizard
+    page should actually offer to pick from.
+
+    "Not installed" (and anything else not in
+    CHARGER_TYPE_INTEGRATION_DOMAINS) always stays. A brand name like
+    "Wallbox"/"Easee" only stays if that brand's own Home Assistant
+    integration is actually configured here -- same
+    hass.config_entries.async_entries() check _async_check_dependencies()
+    in __init__.py uses for Solcast/Strømligning, just without raising a
+    Repair for it (neither charger brand is required -- EV charging is an
+    opt-in segment, and a user with neither installed just sees "Not
+    installed").
+
+    `current_value` is always kept too, even if its integration isn't
+    installed (e.g. it was just uninstalled) -- otherwise the field's own
+    default would point at an option no longer in its list.
+
+    The select entity itself (select.<id>_type) is untouched by this --
+    it keeps offering the full option list regardless; only what the
+    wizard page presents is narrowed.
+    """
+    return [
+        option
+        for option in options
+        if option == current_value
+        or option not in CHARGER_TYPE_INTEGRATION_DOMAINS
+        or hass.config_entries.async_entries(CHARGER_TYPE_INTEGRATION_DOMAINS[option])
+    ]
+
+
+def _auto_detect_charger_consumption_entity(
+    hass, charger_type: str, device_id: str
+) -> str | None:
+    """Find one charger's own "added energy" / "session energy" sensor,
+    for pre-filling "consumption_source_entity" once both this charger's
+    brand (its "type" field) and its physical device (its
+    "charging_device_id" field) are already known -- see
+    CHARGER_CONSUMPTION_SOURCE_TRANSLATION_KEYS in const.py for the
+    (platform, translation_key) each brand matches on, and why.
+
+    Deliberately scoped to one already-known device_id rather than
+    searching the whole registry like _auto_detect_entity_id does for the
+    Solar PV Plant page -- a house with two Wallbox chargers would
+    otherwise have two "added_energy" sensors with no way to tell them
+    apart by translation_key alone. Narrowing to this charger's own
+    device_id first is what makes a plain translation_key match safe here.
+
+    Returns None if the brand isn't one CHARGER_CONSUMPTION_SOURCE_TRANSLATION_KEYS
+    recognizes (e.g. "Not installed"), no device is picked yet, or the
+    device doesn't have exactly one matching sensor.
+    """
+    if not device_id or charger_type not in CHARGER_CONSUMPTION_SOURCE_TRANSLATION_KEYS:
+        return None
+    platform, translation_key = CHARGER_CONSUMPTION_SOURCE_TRANSLATION_KEYS[charger_type]
+    registry = er.async_get(hass)
+    matches = [
+        entry.entity_id
+        for entry in registry.entities.values()
+        if entry.device_id == device_id
+        and entry.platform == platform
+        and entry.translation_key == translation_key
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 class PwMngtOptionsFlow(config_entries.OptionsFlow):
     """PwMngt options flow -- a multi-page wizard.
 
@@ -421,18 +490,21 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
 
     async def async_step_ev_charging(self, user_input: Any | None = None):
         """Page 3: EV Charging -- per charger, interleaved as (type,
-        consumption source entity), i.e. Charger1 type, Charger1
-        consumption source, Charger2 type, Charger2 consumption source.
+        charging device, consumption source entity), i.e. Charger1 type,
+        Charger1 device, Charger1 consumption source, Charger2 type,
+        Charger2 device, Charger2 consumption source.
 
-        Both fields are convenience mirrors of a persistent entity that
-        stays the actual source of truth -- type mirrors select.<id>_type
-        (PwM_CONFIG_SELECTS in select.py), consumption source mirrors
-        text.<id>_consumption_source_entity (PwM_CHARGER_CONFIG_TEXTS in
-        text.py). Submitting here writes through to both via a service
-        call; neither field is stored in the config entry's options.
+        All three fields are convenience mirrors of a persistent entity
+        that stays the actual source of truth -- type mirrors
+        select.<id>_type (PwM_CONFIG_SELECTS in select.py), device and
+        consumption source mirror text.<id>_charging_device_id and
+        text.<id>_consumption_source_entity (both PwM_CHARGER_CONFIG_TEXTS
+        in text.py). Submitting here writes through to all three via a
+        service call; none of them is stored in the config entry's
+        options.
 
-        Both fields are always shown, for every charger, regardless of
-        its type -- tried hiding the consumption field while a charger
+        All three fields are always shown, for every charger, regardless
+        of its type -- tried hiding the consumption field while a charger
         is "Not installed" first, but Home Assistant's options-flow
         pages are static per render (no field can react to another
         field's still-being-edited value, and nothing can trigger a
@@ -445,13 +517,43 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         charger's type) -- filling it in for a "Not installed" charger
         just has no effect yet.
 
+        The type field's own dropdown is narrowed to the brand(s)
+        actually installed in this Home Assistant (plus "Not installed"
+        and whatever the charger is currently set to) -- see
+        _installed_charger_type_options(). The underlying select entity
+        (select.<id>_type) keeps its full static option list regardless;
+        only what this wizard page offers to pick is narrowed, so a
+        user without the Wallbox or Easee integration can't pick a brand
+        he doesn't have.
+
+        The device field, right below type, is a DeviceSelector filtered
+        to devices from either brand's own integration (see
+        CHARGER_TYPE_INTEGRATION_DOMAINS in const.py) -- the user picks
+        by device name, same as anywhere else in Home Assistant, but the
+        value actually stored (in text.<id>_charging_device_id) is that
+        device's registry ID, not its name -- see that entity's own
+        description in text.py for why. This is what a later step needs
+        to find this charger's own entities and call services on them;
+        nothing reads it yet.
+
         The consumption field is a searchable entity picker (like the
         Solar PV Plant page's fields), restricted to sensors with
         device_class "energy" -- it used to be a plain text box the user
         had to type an entity_id into by hand. Same known limitation as
-        the Solar PV Plant page: no default= at all when there's no
-        value yet (EntitySelector rejects "" as invalid), so an
-        untouched/cleared field is simply left out of the schema instead.
+        the Solar PV Plant page (and now the device field too): no
+        default= at all when there's no value yet (EntitySelector/
+        DeviceSelector reject "" as invalid), so an untouched/cleared
+        field is simply left out of the schema instead.
+
+        If the consumption field is still empty, it's auto-detected from
+        this charger's already-saved type + device (see
+        _auto_detect_charger_consumption_entity), same idea as
+        _AUTO_DETECT_SOURCES on the Solar PV Plant page -- never
+        overrides an existing pick. "Already-saved" matters: since this
+        page is static per render, picking a device and hitting Submit
+        only pre-fills consumption on the *next* time this page opens,
+        not within that same submission -- same static-per-render
+        limitation the always-visible-fields decision above is about.
         """
         if user_input is not None:
             for charger in CHARGERS:
@@ -466,7 +568,22 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                         },
                         blocking=True,
                     )
-                text_entity_id = self._charger_text_entity_id(charger)
+                device_text_entity_id = self._charger_text_entity_id(
+                    charger, "charging_device_id"
+                )
+                if device_text_entity_id is not None:
+                    await self.hass.services.async_call(
+                        "text",
+                        "set_value",
+                        {
+                            "entity_id": device_text_entity_id,
+                            "value": user_input.get(f"{charger['id']}_device", ""),
+                        },
+                        blocking=True,
+                    )
+                text_entity_id = self._charger_text_entity_id(
+                    charger, "consumption_source_entity"
+                )
                 if text_entity_id is not None:
                     await self.hass.services.async_call(
                         "text",
@@ -482,18 +599,48 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         schema_dict: dict[Any, Any] = {}
         for charger in CHARGERS:
             description = _CHARGER_TYPE_DESCRIPTIONS[charger["id"]]
+            current_type_value = self._charger_type_current_value(charger)
             schema_dict[
                 vol.Optional(
                     f"{charger['id']}_type",
-                    default=self._charger_type_current_value(charger),
+                    default=current_type_value,
                 )
             ] = selector.SelectSelector(
                 selector.SelectSelectorConfig(
-                    options=description.options,
+                    options=_installed_charger_type_options(
+                        self.hass, description.options, current_type_value
+                    ),
                     mode=selector.SelectSelectorMode.DROPDOWN,
                 )
             )
-            current_consumption_value = self._charger_text_current_value(charger)
+
+            current_device_value = self._charger_text_current_value(
+                charger, "charging_device_id"
+            )
+            device_marker = (
+                vol.Optional(f"{charger['id']}_device", default=current_device_value)
+                if current_device_value
+                else vol.Optional(f"{charger['id']}_device")
+            )
+            schema_dict[device_marker] = selector.DeviceSelector(
+                selector.DeviceSelectorConfig(
+                    filter=[
+                        {"integration": domain}
+                        for domain in CHARGER_TYPE_INTEGRATION_DOMAINS.values()
+                    ]
+                )
+            )
+
+            current_consumption_value = self._charger_text_current_value(
+                charger, "consumption_source_entity"
+            )
+            if not current_consumption_value:
+                current_consumption_value = (
+                    _auto_detect_charger_consumption_entity(
+                        self.hass, current_type_value, current_device_value
+                    )
+                    or ""
+                )
             consumption_marker = (
                 vol.Optional(charger["id"], default=current_consumption_value)
                 if current_consumption_value
@@ -524,21 +671,19 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             return _CHARGER_TYPE_DESCRIPTIONS[charger["id"]].default_option
         return state.state
 
-    def _charger_text_entity_id(self, charger: dict) -> str | None:
-        """entity_id of this charger's "consumption_source_entity" text
-        entity (PwM_CHARGER_CONFIG_TEXTS in text.py), or None if the text
+    def _charger_text_entity_id(self, charger: dict, key: str) -> str | None:
+        """entity_id of one of this charger's plain text.py fields --
+        "charging_device_id" or "consumption_source_entity"
+        (PwM_CHARGER_CONFIG_TEXTS in text.py) -- or None if the text
         platform hasn't registered it yet."""
         registry = er.async_get(self.hass)
-        unique_id = (
-            f"{self.config_entry.entry_id}_{charger['id']}_"
-            "consumption_source_entity"
-        )
+        unique_id = f"{self.config_entry.entry_id}_{charger['id']}_{key}"
         return registry.async_get_entity_id("text", DOMAIN, unique_id)
 
-    def _charger_text_current_value(self, charger: dict) -> str:
+    def _charger_text_current_value(self, charger: dict, key: str) -> str:
         """Current value of that text entity, for pre-filling the field
         -- "" if it doesn't exist yet or has no value."""
-        entity_id = self._charger_text_entity_id(charger)
+        entity_id = self._charger_text_entity_id(charger, key)
         state = self.hass.states.get(entity_id) if entity_id else None
         if state is None or state.state in ("unknown", "unavailable"):
             return ""

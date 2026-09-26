@@ -47,6 +47,38 @@ PwM_CHARGER_CONFIG_TEXTS: list[PwMngtTextEntityDescription] = [
         default_value="",
         visible_when_charger_type="Easee",
     ),
+    # New (no Node-RED equivalent). Which physical device (from the
+    # Wallbox or Easee integration -- see CHARGER_TYPE_INTEGRATION_DOMAINS
+    # in const.py) this PwM charger slot actually is -- needed so that a
+    # later step can call that charger's own services (start/stop
+    # charging, set current, etc.) and knows which device's entities to
+    # look among.
+    #
+    # Stores Home Assistant's own device registry ID, not the device's
+    # display name: a name is just a label the user (or the integration)
+    # can change at any time with nothing to warn that PwMngt was
+    # depending on it, while the ID is stable and is exactly what
+    # entity_registry.entities can be filtered by (entry.device_id) to
+    # find every entity that belongs to this device -- the lookup a
+    # future "call a control" step needs. The value therefore looks like
+    # an opaque id, not a friendly name; the EV Charging wizard page
+    # (config_flow.py) is where the device is actually picked by name,
+    # via a DeviceSelector that resolves the pick down to this ID for
+    # storage.
+    #
+    # Deliberately a plain typed field, not part of
+    # entry.options[CONF_ENTITY_MAP] -- same reasoning as
+    # consumption_source_entity below: it needs to exist as its own
+    # persistent, always-visible entity so it can also be pre-filled/
+    # edited from the EV Charging wizard page without a second,
+    # disconnected source of truth.
+    PwMngtTextEntityDescription(
+        key="charging_device_id",
+        name="Charging device ID",
+        icon="mdi:ev-station",
+        entity_category=EntityCategory.CONFIG,
+        default_value="",
+    ),
     # New (no Node-RED equivalent by this name -- Claus's flow read a
     # fixed entity_id, sensor.wallbox_portal_added_energy, hardcoded in
     # his function node). The entity that reports this charger's own

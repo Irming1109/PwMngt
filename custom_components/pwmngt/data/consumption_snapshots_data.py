@@ -23,6 +23,18 @@ baseline and any already-passed sample attributes from Recorder history
 instead of leaving them None. If Recorder has nothing to offer, everything
 starts blank as before -- _sample()'s own lazy-bootstrap fallback still
 covers that.
+
+Swapping the source entity (e.g. a new inverter/meter mapped in under
+Options): a baseline is only meaningful for the specific entity it was
+captured from -- if the configured entity for a category changes since
+the stored baseline was captured, _discard_stale_entity_baseline() below
+throws that baseline (and today's in-progress kl_* attributes) away
+rather than letting _sample() mix a reading from the new entity against a
+baseline from the old one. Depending on whether Recorder has history for
+the new entity going back to local midnight, that either reconstructs
+today cleanly from the new entity alone, or leaves today short/blank --
+never a huge or negative since_midnight value from comparing two
+unrelated counters. See that function's docstring for the full reasoning.
 """
 
 import logging
@@ -99,13 +111,17 @@ class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
     snapshots (see PwM_CONSUMPTION_SNAPSHOTS_ATTRIBUTES) as attributes, one
     set per configured category.
 
-    Each category gets its own local-midnight alarm (captures that day's
-    baseline) plus one alarm per entry in _SAMPLE_TIMES (captures that
-    time's since-midnight snapshot via calculate_since_midnight()).
-    Baseline and snapshots survive a restart via RestoreEntity, restored
-    from this entity's own previous attributes. Whenever a category
-    doesn't have a same-day baseline that way, it's reconstructed from
-    Recorder history instead -- see _backfill_category_from_history().
+    Each category gets its own 00:02 alarm (clears yesterday's kl_*
+    attributes and captures that day's baseline -- see
+    _reset_for_new_day() for why 00:02 and not literally midnight) plus
+    one alarm per entry in _SAMPLE_TIMES (captures that time's
+    since-midnight snapshot via calculate_since_midnight()). Baseline and
+    snapshots survive a restart via RestoreEntity, restored from this
+    entity's own previous attributes. Whenever a category doesn't have a
+    same-day baseline that way, it's reconstructed from Recorder history
+    instead -- see _backfill_category_from_history(). A baseline restored
+    for an entity that's no longer this category's configured source is
+    thrown away instead -- see _discard_stale_entity_baseline().
     """
 
     _attr_has_entity_name = True
@@ -130,13 +146,17 @@ class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
             category: entity_map.get(entity_key) or None
             for category, entity_key in _CATEGORIES
         }
-        # category -> (baseline value, ISO date it was captured for)
-        self._midnight_baselines: dict[str, tuple[float, str]] = {}
+        # category -> (baseline value, ISO date it was captured for, the
+        # entity_id it was read from -- None for a baseline restored from
+        # before this field existed, see _discard_stale_entity_baseline())
+        self._midnight_baselines: dict[str, tuple[float, str, str | None]] = {}
 
     async def async_added_to_hass(self) -> None:
-        """Restore any previous snapshots and baselines, backfill from
-        Recorder history whatever a category still doesn't have a same-day
-        baseline for, then start the per-category daily alarms."""
+        """Restore any previous snapshots and baselines, discard any
+        baseline whose source entity no longer matches this category's
+        configured one, backfill from Recorder history whatever a
+        category still doesn't have a same-day baseline for, then start
+        the per-category daily alarms."""
         await super().async_added_to_hass()
 
         last_state = await self.async_get_last_state()
@@ -149,14 +169,24 @@ class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
                 baseline_date = last_state.attributes.get(
                     f"_midnight_baseline_date_{category}"
                 )
+                baseline_entity_id = last_state.attributes.get(
+                    f"_midnight_baseline_entity_{category}"
+                )
                 if baseline is not None and baseline_date is not None:
-                    self._midnight_baselines[category] = (float(baseline), baseline_date)
+                    self._midnight_baselines[category] = (
+                        float(baseline),
+                        baseline_date,
+                        baseline_entity_id,
+                    )
                     self._attr_extra_state_attributes[
                         f"_midnight_baseline_{category}"
                     ] = baseline
                     self._attr_extra_state_attributes[
                         f"_midnight_baseline_date_{category}"
                     ] = baseline_date
+                    self._attr_extra_state_attributes[
+                        f"_midnight_baseline_entity_{category}"
+                    ] = baseline_entity_id
 
         today = dt_util.now().date().isoformat()
         for category, _ in _CATEGORIES:
@@ -169,6 +199,8 @@ class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
                 )
                 continue
 
+            self._discard_stale_entity_baseline(category, entity_id)
+
             baseline = self._midnight_baselines.get(category)
             if baseline is None or baseline[1] != today:
                 await self._backfill_category_from_history(category, entity_id, today)
@@ -178,7 +210,7 @@ class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
                     self.hass,
                     self._make_midnight_handler(category),
                     hour=0,
-                    minute=0,
+                    minute=2,
                     second=0,
                 )
             )
@@ -196,16 +228,60 @@ class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
         self._attr_available = True
         self.async_write_ha_state()
 
+    def _discard_stale_entity_baseline(self, category: str, entity_id: str) -> None:
+        """Throw away category's restored baseline (and today's
+        in-progress kl_* attributes) if it was captured from a different
+        entity than the one now configured -- e.g. Kasper repointed the
+        mapping at a new inverter/meter under Options.
+
+        Since-midnight only means anything when the baseline and every
+        later reading come from the same physical counter: mixing a
+        baseline from the old entity with readings from the new one would
+        report either a huge jump (the new entity's own lifetime total,
+        if it's been running elsewhere) or a negative one (if it's
+        freshly at/near 0) -- neither has anything to do with today's
+        real consumption. Rather than try to patch that number, today's
+        snapshots for this category are dropped entirely; the very next
+        _backfill_category_from_history() call right after this one, or
+        the next local-midnight alarm, establishes a fresh baseline
+        against the new entity and today (or tomorrow) is measured
+        cleanly against it alone.
+        """
+        baseline = self._midnight_baselines.get(category)
+        if baseline is None:
+            return
+
+        _, _, baseline_entity_id = baseline
+        if baseline_entity_id == entity_id:
+            return
+
+        LOGGER.warning(
+            "PwMngt: source entity for consumption category '%s' changed "
+            "(was %s, now %s) -- discarding today's in-progress snapshots "
+            "so they don't mix readings from two different meters; a "
+            "fresh baseline will be captured against the new entity",
+            category,
+            baseline_entity_id,
+            entity_id,
+        )
+        self._midnight_baselines.pop(category, None)
+        self._attr_extra_state_attributes[f"_midnight_baseline_{category}"] = None
+        self._attr_extra_state_attributes[f"_midnight_baseline_date_{category}"] = None
+        self._attr_extra_state_attributes[f"_midnight_baseline_entity_{category}"] = None
+        for time_key, _, _ in _SAMPLE_TIMES:
+            self._attr_extra_state_attributes[f"{category}_kl_{time_key}"] = None
+
     async def _backfill_category_from_history(
         self, category: str, entity_id: str, today: str
     ) -> None:
         """Reconstruct this category's midnight baseline and any
         already-passed sample attributes from Recorder history, for when
         we don't have a same-day baseline yet -- a fresh install, a
-        source configured for the first time, or a restored baseline
-        from a previous day. Leaves everything as None if Recorder isn't
-        available or has no history yet -- _sample()'s own lazy-bootstrap
-        fallback still covers that case.
+        source configured for the first time (including right after
+        _discard_stale_entity_baseline() above threw an old one away),
+        or a restored baseline from a previous day. Leaves everything as
+        None if Recorder isn't available or has no history yet --
+        _sample()'s own lazy-bootstrap fallback still covers that case.
         """
         local_midnight = dt_util.start_of_local_day()
         changes = await fetch_state_changes_since(
@@ -218,9 +294,10 @@ class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
         if baseline_value is None:
             return
 
-        self._midnight_baselines[category] = (baseline_value, today)
+        self._midnight_baselines[category] = (baseline_value, today, entity_id)
         self._attr_extra_state_attributes[f"_midnight_baseline_{category}"] = baseline_value
         self._attr_extra_state_attributes[f"_midnight_baseline_date_{category}"] = today
+        self._attr_extra_state_attributes[f"_midnight_baseline_entity_{category}"] = entity_id
 
         sample_times = [
             (time_key, local_midnight.replace(hour=hour, minute=minute))
@@ -267,7 +344,7 @@ class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
 
         @callback
         def _handler(_now) -> None:
-            self._capture_midnight_baseline(category)
+            self._reset_for_new_day(category)
 
         return _handler
 
@@ -279,18 +356,39 @@ class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
         return _handler
 
     @callback
-    def _capture_midnight_baseline(self, category: str) -> None:
-        """Local-midnight alarm: record this category's raw counter value
+    def _reset_for_new_day(self, category: str) -> None:
+        """00:02 alarm (2 minutes past local midnight, not 00:00 -- see
+        below): clear yesterday's kl_* snapshots so they can never be
+        mistaken for today's before today's own sample alarms have
+        re-populated them, then record this category's raw counter value
         right now as the baseline every later reading today gets compared
-        against."""
-        value = read_float_state(self.hass.states.get(self._category_entity_ids[category]))
+        against.
+
+        Why 00:02 and not literally at midnight: data/consumption_averages_data.py's
+        PwMngtConsumptionAveragesSensor reads the day that just ended at
+        00:01, straight out of these same kl_* attributes -- it relies on
+        them still holding yesterday's values at that point (the last one,
+        kl_23_59, was captured at 23:58 the evening before and nothing
+        else touches them until this alarm). Clearing at 00:00 would wipe
+        that data out from under it one minute before it gets read, so
+        this alarm runs one minute after that instead. Either way it's
+        long done before the earliest real sample time (06:00), so the
+        2-minute delay to the baseline itself doesn't matter.
+        """
+        for time_key, _, _ in _SAMPLE_TIMES:
+            self._attr_extra_state_attributes[f"{category}_kl_{time_key}"] = None
+
+        entity_id = self._category_entity_ids[category]
+        value = read_float_state(self.hass.states.get(entity_id))
         if value is None:
+            self.async_write_ha_state()
             return
 
         today = dt_util.now().date().isoformat()
-        self._midnight_baselines[category] = (value, today)
+        self._midnight_baselines[category] = (value, today, entity_id)
         self._attr_extra_state_attributes[f"_midnight_baseline_{category}"] = value
         self._attr_extra_state_attributes[f"_midnight_baseline_date_{category}"] = today
+        self._attr_extra_state_attributes[f"_midnight_baseline_entity_{category}"] = entity_id
         self.async_write_ha_state()
 
     @callback
@@ -298,7 +396,8 @@ class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
         """One of the fixed daily alarms: read this category's current
         raw value and store how much it's risen since today's local
         midnight."""
-        raw_value = read_float_state(self.hass.states.get(self._category_entity_ids[category]))
+        entity_id = self._category_entity_ids[category]
+        raw_value = read_float_state(self.hass.states.get(entity_id))
         if raw_value is None:
             return
 
@@ -306,15 +405,20 @@ class PwMngtConsumptionSnapshotsSensor(RestoreEntity, SensorEntity):
         baseline = self._midnight_baselines.get(category)
         if baseline is None or baseline[1] != today:
             # No baseline captured for today yet -- e.g. this fires before
-            # the first local-midnight alarm has (right after setup, or a
-            # restart overnight). Treat "now" as the baseline so this
-            # reports 0 rather than a huge/garbage number -- same fallback
-            # Home Assistant's own utility_meter uses on first seeing its
+            # the first local-midnight alarm has (right after setup, a
+            # restart overnight, or right after
+            # _discard_stale_entity_baseline() above threw the previous
+            # one away). Treat "now" as the baseline so this reports 0
+            # rather than a huge/garbage number -- same fallback Home
+            # Assistant's own utility_meter uses on first seeing its
             # source.
-            baseline = (raw_value, today)
+            baseline = (raw_value, today, entity_id)
             self._midnight_baselines[category] = baseline
             self._attr_extra_state_attributes[f"_midnight_baseline_{category}"] = raw_value
             self._attr_extra_state_attributes[f"_midnight_baseline_date_{category}"] = today
+            self._attr_extra_state_attributes[f"_midnight_baseline_entity_{category}"] = (
+                entity_id
+            )
 
         self._attr_extra_state_attributes[f"{category}_kl_{time_key}"] = (
             calculate_since_midnight(raw_value, baseline[0])
