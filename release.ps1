@@ -46,7 +46,10 @@ if ($existingTag) {
 }
 
 Write-Host "Creating annotated tag $tag from manifest.json version $version ..."
-git tag -a $tag -F RELEASE_NOTES.md
+# --cleanup=verbatim: without it git strips every line starting with "#"
+# as a comment, so Markdown headings ("## ...") silently vanished from
+# the release body (v0.3.14).
+git tag -a $tag -F RELEASE_NOTES.md --cleanup=verbatim
 
 Write-Host "Pushing tag $tag to origin ..."
 git push origin $tag

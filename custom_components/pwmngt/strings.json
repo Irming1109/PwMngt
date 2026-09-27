@@ -47,7 +47,7 @@
             },
             "data_description": {
               "battery_soc": "The entity that reports your home battery's state of charge (%), e.g. your inverter's battery SoC sensor. Only \"%\"-unit sensors are listed.",
-              "battery_pv_charged": "The entity that reports total energy charged into the battery (kWh), e.g. from your inverter. Only \"kWh\"-unit sensors are listed.",
+              "battery_pv_charged": "The entity that reports total energy charged into the battery (kWh) from your solar plant, e.g. from your inverter. Only \"kWh\"-unit sensors are listed.",
               "battery_pv_discharged": "The entity that reports total energy discharged from the battery (kWh). Only \"kWh\"-unit sensors are listed.",
               "battery_power": "The entity that reports the battery's current charge/discharge power (W). Only \"W\"-unit sensors are listed."
             }
@@ -124,7 +124,7 @@
         },
         "data_description": {
           "battery_soc": "The entity that reports your home battery's state of charge (%), e.g. your inverter's battery SoC sensor. Only \"%\"-unit sensors are listed.",
-          "battery_pv_charged": "The entity that reports total energy charged into the battery (kWh), e.g. from your inverter. Only \"kWh\"-unit sensors are listed.",
+          "battery_pv_charged": "The entity that reports total energy charged into the battery (kWh) from your solar plant, e.g. from your inverter. Only \"kWh\"-unit sensors are listed.",
           "battery_pv_discharged": "The entity that reports total energy discharged from the battery (kWh). Only \"kWh\"-unit sensors are listed.",
           "battery_power": "The entity that reports the battery's current charge/discharge power (W). Only \"W\"-unit sensors are listed.",
           "pv1_power": "The entity that reports PV string 1's current power output (W). Only \"W\"-unit sensors are listed.",
