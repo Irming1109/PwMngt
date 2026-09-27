@@ -37,6 +37,7 @@ from .const import (
     DEPENDENCY_SOLCAST_SOLAR,
     DEPENDENCY_STROMLIGNING,
     CHARGER_TYPE_INTEGRATION_DOMAINS,
+    CHARGER_TYPE_NOT_INSTALLED,
     CHARGER_CONSUMPTION_SOURCE_TRANSLATION_KEYS,
     INVERTER_TYPE_INTEGRATION_DOMAINS,
     INVERTER_CORE_AUTO_DETECT_NAMES,
@@ -1012,9 +1013,15 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         text.<id>_consumption_source_entity (PwM_CHARGER_CONFIG_TEXTS in
         text.py); not stored in the config entry's options.
 
-        Always shown for every charger regardless of type, same
-        reasoning as page 4a: filling it in for a "Not installed"
-        charger just has no effect yet.
+        Only shown for chargers whose type (just saved by page 4a) is
+        not "Not installed" -- unlike page 4a, whose fields are always
+        shown because type is picked on that same page and the form
+        can't react live, this page renders after type is saved, so it
+        can hide what's irrelevant (Kasper, 2026-09-28). A hidden
+        charger's saved consumption source is left untouched, not
+        cleared, so switching its type back later doesn't lose the old
+        pick. If no charger is installed at all, the page is skipped
+        entirely and the flow moves on to the next segment.
 
         A searchable entity picker (like the Solar PV Plant page's
         fields), restricted to sensors with device_class "energy".
@@ -1040,8 +1047,19 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         (Home Assistant has no per-field equivalent) and why it never
         lingers once a value is actually saved.
         """
+        # Chargers to show on this page -- see docstring. Computed before
+        # the submit branch too, so a hidden charger's value is never
+        # overwritten with "" just because it wasn't in the form.
+        installed_chargers = [
+            charger
+            for charger in CHARGERS
+            if self._charger_type_current_value(charger) != CHARGER_TYPE_NOT_INSTALLED
+        ]
+        if not installed_chargers:
+            return await self._advance()
+
         if user_input is not None:
-            for charger in CHARGERS:
+            for charger in installed_chargers:
                 text_entity_id = self._charger_text_entity_id(
                     charger, "consumption_source_entity"
                 )
@@ -1062,7 +1080,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         schema_dict: dict[Any, Any] = {}
         suggested_values: dict[str, str] = {}
         auto_filled_labels: list[str] = []
-        for charger in CHARGERS:
+        for charger in installed_chargers:
             current_type_value = self._charger_type_current_value(charger)
             current_device_value = self._charger_text_current_value(
                 charger, "charging_device_id"

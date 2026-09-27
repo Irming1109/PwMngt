@@ -36,6 +36,12 @@ CHARGER_TYPE_INTEGRATION_DOMAINS: dict[str, str] = {
     "Easee": "easee",
 }
 
+# The charger "<id>_type" select's "no charger here" option (select.py,
+# PwM_CONFIG_SELECTS). Named so config_flow.py can skip per-charger fields
+# that only make sense for an installed charger, without repeating the
+# literal string.
+CHARGER_TYPE_NOT_INSTALLED = "Not installed"
+
 # ---------------------------------------------------------------------------
 # Each brand's own sensor for "how much energy this charger has added,
 # reset at the start of every new charging session" -- used by
