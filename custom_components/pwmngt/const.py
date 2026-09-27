@@ -183,8 +183,21 @@ INVERTER_CORE_AUTO_DETECT_NAMES: dict[str, dict[str, tuple[str, str]]] = {
         ENTITY_KEY_PV2_POWER: ("kostal_plenticore", "DC2 Power"),
         ENTITY_KEY_PV3_POWER: ("kostal_plenticore", "DC3 Power"),
         ENTITY_KEY_PV_DIRECT_CONSUMPTION: ("kostal_plenticore", "Home Power from PV"),
-        ENTITY_KEY_PV_TOTAL_CONSUMPTION: ("kostal_plenticore", "Home Consumption Total"),
+        # "from PV" -- NOT plain "Home Consumption Total", which is the
+        # whole house (PV + battery + grid) and belongs to
+        # ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL below. This entry used to
+        # point at "Home Consumption Total" by mistake; caught 2026-09-27
+        # against Kasper's live install, where his own manual picks were
+        # already right (pv_total_consumption mirror = 11669.2 =
+        # "Home Consumption from PV Total"; property baseline tracks
+        # "Home Consumption Total" = 37536.9). His install was never
+        # affected since auto-detect never overwrites an existing pick.
+        ENTITY_KEY_PV_TOTAL_CONSUMPTION: ("kostal_plenticore", "Home Consumption from PV Total"),
         ENTITY_KEY_GRID_POWER: ("kostal_plenticore", "Grid Power"),
+        # Raw lifetime counter (state_class total_increasing, never resets)
+        # -- exactly what data/consumption_snapshots_data.py needs. Confirmed
+        # live 2026-09-27 on Kasper's install (sensor.pileaas_sol_home_consumption_total).
+        ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL: ("kostal_plenticore", "Home Consumption Total"),
     },
     "Growatt": {
         # -- best-effort, unverified -- see the dict's own docstring above.
@@ -195,6 +208,10 @@ INVERTER_CORE_AUTO_DETECT_NAMES: dict[str, dict[str, tuple[str, str]]] = {
         ENTITY_KEY_PV_DIRECT_CONSUMPTION: ("growatt_server", "Solar power production"),
         ENTITY_KEY_PV_TOTAL_CONSUMPTION: ("growatt_server", "Load consumption"),
         ENTITY_KEY_GRID_POWER: ("growatt_server", "Import from grid"),
+        # No ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL guess: it must be a raw,
+        # never-resetting lifetime counter, and no Growatt sensor name is
+        # known to be one -- left for manual pick rather than risk
+        # auto-filling a daily-resetting sensor.
     },
 }
 

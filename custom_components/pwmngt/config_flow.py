@@ -83,22 +83,48 @@ _FIELD_UNIT_BY_KEY: dict[str, str] = {
 # `section()` in async_step_solar_pv_plant), doesn't change the entity
 # map's shape or any field's required-ness. Each entry is (group_key,
 # collapsed_by_default, [entity_map keys in this group]). Every key in
-# _SOLAR_PV_PLANT_FIELDS must appear in exactly one group.
+# _SOLAR_PV_PLANT_FIELDS must appear in exactly one group. List order is
+# display order.
+#
+# The first three groups used to be one "core" group (plus a separate
+# "consumption" group at the very bottom, after Solar forecast and
+# Stromligning). Split by what the value measures instead (Kasper,
+# 2026-09-27): the property's own consumption now sits with grid/PV
+# consumption rather than below the two external-integration groups.
+# "Core fields" elsewhere in this file / const.py
+# (INVERTER_CORE_AUTO_DETECT_NAMES) still means the inverter-sourced fields
+# -- they now just span these three groups, and include Total property
+# consumption (Kostal Plenticore only so far, see const.py). Renaming
+# group keys is safe for existing installs: they
+# only exist in the form, the stored entity map is flat.
 _SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
     (
-        "core",
+        "battery",
         False,
         [
             ENTITY_KEY_BATTERY_SOC,
             ENTITY_KEY_BATTERY_PV_CHARGED,
             ENTITY_KEY_BATTERY_PV_DISCHARGED,
             ENTITY_KEY_BATTERY_POWER,
+        ],
+    ),
+    (
+        "pv_production",
+        False,
+        [
             ENTITY_KEY_PV1_POWER,
             ENTITY_KEY_PV2_POWER,
             ENTITY_KEY_PV3_POWER,
+        ],
+    ),
+    (
+        "grid_consumption",
+        False,
+        [
+            ENTITY_KEY_GRID_POWER,
             ENTITY_KEY_PV_DIRECT_CONSUMPTION,
             ENTITY_KEY_PV_TOTAL_CONSUMPTION,
-            ENTITY_KEY_GRID_POWER,
+            ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL,
         ],
     ),
     (
@@ -114,13 +140,6 @@ _SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
         False,
         [
             ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
-        ],
-    ),
-    (
-        "consumption",
-        False,
-        [
-            ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL,
         ],
     ),
 ]
@@ -167,6 +186,7 @@ _AUTO_DETECT_LABELS: dict[str, str] = {
     ENTITY_KEY_PV_DIRECT_CONSUMPTION: "PV direct consumption",
     ENTITY_KEY_PV_TOTAL_CONSUMPTION: "PV total consumption",
     ENTITY_KEY_GRID_POWER: "Grid power",
+    ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL: "Total property consumption",
 }
 
 LOGGER = logging.getLogger(__name__)
@@ -735,7 +755,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         # ... add_suggested_values_to_schema(new_val.schema,
         # suggested_values[key])"). A flat dict keyed straight by field name
         # (e.g. {"battery_soc": "sensor...."}) -- what this used to build --
-        # never has "core"/"solar_forecast"/"stromligning" as a key, so that
+        # never has a group key ("battery"/"solar_forecast"/...) as a key, so that
         # check was always false and no section's fields ever got a
         # suggested_value: confirmed live via the options flow's own raw
         # JSON (fetched directly through Home Assistant's REST API,
@@ -864,8 +884,33 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         empty state to get stuck in), but it's built the same way as
         everything else now rather than being the one field still using
         default=.
+
+        The same physical device can't be picked for two chargers: on
+        submit, any charger whose device is already picked by an earlier
+        charger (CHARGERS order) gets a "duplicate_charger_device" error
+        on its own device field and nothing is saved. This is checked on
+        submit rather than by hiding the device from the other chargers'
+        pickers because an options-flow form is rendered once, server
+        side -- the frontend never re-renders Charger2's picker when
+        Charger1's changes -- and DeviceSelector can only filter by
+        integration/manufacturer/model, not exclude specific device ids.
+        On such an error the page re-renders with the user's just-
+        submitted values as suggestions (not the saved ones), so no
+        pick is lost while fixing it.
         """
+        errors: dict[str, str] = {}
         if user_input is not None:
+            seen_devices: set[str] = set()
+            for charger in CHARGERS:
+                device_key = f"{charger['id']}_device"
+                device_id = user_input.get(device_key, "")
+                if not device_id:
+                    continue
+                if device_id in seen_devices:
+                    errors[device_key] = "duplicate_charger_device"
+                seen_devices.add(device_id)
+
+        if user_input is not None and not errors:
             for charger in CHARGERS:
                 type_entity_id = self._charger_type_entity_id(charger)
                 if type_entity_id is not None:
@@ -902,8 +947,21 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         suggested_values: dict[str, str] = {}
         for charger in CHARGERS:
             description = _CHARGER_TYPE_DESCRIPTIONS[charger["id"]]
-            current_type_value = self._charger_type_current_value(charger)
             type_key = f"{charger['id']}_type"
+            device_key = f"{charger['id']}_device"
+            # Re-render after a validation error (user_input is only
+            # non-None here when errors is non-empty): suggest what was
+            # just submitted, not what's saved -- see docstring.
+            if user_input is not None:
+                current_type_value = user_input.get(
+                    type_key
+                ) or self._charger_type_current_value(charger)
+                current_device_value = user_input.get(device_key, "")
+            else:
+                current_type_value = self._charger_type_current_value(charger)
+                current_device_value = self._charger_text_current_value(
+                    charger, "charging_device_id"
+                )
             schema_dict[vol.Optional(type_key)] = selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=_installed_charger_type_options(
@@ -918,10 +976,6 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             # user_input[type_key] (no .get()) stays safe.
             suggested_values[type_key] = current_type_value
 
-            current_device_value = self._charger_text_current_value(
-                charger, "charging_device_id"
-            )
-            device_key = f"{charger['id']}_device"
             schema_dict[vol.Optional(device_key)] = selector.DeviceSelector(
                 selector.DeviceSelectorConfig(
                     filter=[
@@ -938,6 +992,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             data_schema=self.add_suggested_values_to_schema(
                 vol.Schema(schema_dict), suggested_values
             ),
+            errors=errors,
         )
 
     async def async_step_ev_charging_consumption(self, user_input: Any | None = None):
