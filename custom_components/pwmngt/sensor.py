@@ -12,7 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 
@@ -73,8 +73,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         LOGGER.info("Added PV split sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
-    for description, source_entity_id in PwM_PV_INTEGRAL_SENSORS:
-        entity = PwMngtEnergyIntegrationSensor(description, entry, source_entity_id)
+    for description, source_split_key in PwM_PV_INTEGRAL_SENSORS:
+        entity = PwMngtEnergyIntegrationSensor(description, entry, source_split_key)
         LOGGER.info("Added PV energy-integration sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
@@ -462,8 +462,8 @@ PwM_PV_SUM_SENSORS: list[tuple[SensorEntityDescription, tuple[str, ...]]] = [
 # and an export-only power sensor. Each tuple is (description,
 # entity_map_key of the single source, split_fn(value) -> value).
 #
-# Home Assistant's built-in "Integration - Riemann sum" helper does the
-# W -> kWh integration over time, pointed at these two sensors.
+# PwM_PV_INTEGRAL_SENSORS below integrates these two over time into kWh
+# totals (Energy import / Energy export).
 # ---------------------------------------------------------------------------
 
 PwM_PV_SPLIT_SENSORS: list[tuple[SensorEntityDescription, str, Callable[[float], float]]] = [
@@ -501,11 +501,16 @@ PwM_PV_SPLIT_SENSORS: list[tuple[SensorEntityDescription, str, Callable[[float],
 # over time into a cumulative energy (kWh) total -- a left-Riemann-sum
 # approximation, same method as Home Assistant's built-in "Integration -
 # Riemann sum" helper (`platform: integration`, method: left, unit_prefix:
-# k, round: 2). Each tuple is (description, source_entity_id).
+# k, round: 2). Each tuple is (description, source_split_key).
 #
-# source_entity_id is the PwMngt split sensor's own predictable entity_id
-# (domain "sensor" + slug of its fixed name from PwM_PV_SPLIT_SENSORS
-# above) -- not something the user maps.
+# source_split_key is the description key of the PwMngt split sensor in
+# PwM_PV_SPLIT_SENSORS above -- not something the user maps. It's resolved
+# to an entity_id through the entity registry (unique_id
+# "<entry_id>_pv_<key>"), never by guessing the entity_id string: that
+# depends on the device name and on Home Assistant's "_2" de-duplication
+# (Kasper's own install has sensor.pwm_pv_grid_import_power_2). A
+# hardcoded "sensor.grid_import_power" used here before never matched
+# any install, so both totals sat at 0.0 (found 2026-09-28).
 # ---------------------------------------------------------------------------
 
 PwM_PV_INTEGRAL_SENSORS: list[tuple[SensorEntityDescription, str]] = [
@@ -520,7 +525,7 @@ PwM_PV_INTEGRAL_SENSORS: list[tuple[SensorEntityDescription, str]] = [
             native_unit_of_measurement="kWh",
             suggested_display_precision=2,
         ),
-        "sensor.grid_import_power",
+        "grid_import_power",
     ),
     # Old key="integration_grid_samlet_salg". Integrates grid_export_power.
     (
@@ -533,7 +538,7 @@ PwM_PV_INTEGRAL_SENSORS: list[tuple[SensorEntityDescription, str]] = [
             native_unit_of_measurement="kWh",
             suggested_display_precision=2,
         ),
-        "sensor.grid_export_power",
+        "grid_export_power",
     ),
 ]
 
@@ -860,14 +865,17 @@ class PwMngtEnergyIntegrationSensor(RestoreEntity, SensorEntity):
         self,
         description: SensorEntityDescription,
         entry: ConfigEntry,
-        source_entity_id: str,
+        source_split_key: str,
     ) -> None:
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
         self._attr_device_info = pv_device_info(entry)
         self._attr_native_value = 0.0
         self._attr_available = False
-        self._source_entity_id = source_entity_id
+        # unique_id of the PwM_PV_SPLIT_SENSORS sensor this integrates --
+        # resolved to an entity_id in _start_source_tracking().
+        self._source_unique_id = f"{entry.entry_id}_pv_{source_split_key}"
+        self._source_entity_id: str | None = None
         self._last_source_value: float | None = None
         self._last_update_time = None
 
@@ -882,20 +890,47 @@ class PwMngtEnergyIntegrationSensor(RestoreEntity, SensorEntity):
         self._attr_available = True
         self.async_write_ha_state()
 
+        if not self._start_source_tracking():
+            # First-ever setup: the split sensor is added in the same batch
+            # and may not be in the entity registry yet -- retry once,
+            # same pattern as PwMngtText's _start_visibility_tracking.
+            @callback
+            def _retry(_now) -> None:
+                if not self._start_source_tracking():
+                    LOGGER.warning(
+                        "Could not find the source sensor (unique_id %s) for "
+                        "%s; it will not integrate anything",
+                        self._source_unique_id,
+                        self.entity_id,
+                    )
+
+            self.async_on_remove(async_call_later(self.hass, 2, _retry))
+
+    def _start_source_tracking(self) -> bool:
+        """Resolve the source split sensor through the entity registry
+        and start tracking it. False if it isn't registered yet."""
+        source_entity_id = er.async_get(self.hass).async_get_entity_id(
+            "sensor", DOMAIN, self._source_unique_id
+        )
+        if not source_entity_id:
+            return False
+        self._source_entity_id = source_entity_id
+
         @callback
         def _handle_source_update(event) -> None:
             self._integrate(event.data.get("new_state"))
 
         self.async_on_remove(
             async_track_state_change_event(
-                self.hass, [self._source_entity_id], _handle_source_update
+                self.hass, [source_entity_id], _handle_source_update
             )
         )
         # Pick up whatever the source already reports right now (in case we
         # missed its own startup state-write due to add-order), so the
         # elapsed-time baseline is anchored immediately rather than waiting
         # for the source's next real update.
-        self._integrate(self.hass.states.get(self._source_entity_id))
+        self._integrate(self.hass.states.get(source_entity_id))
+        return True
 
     @callback
     def _integrate(self, new_state) -> None:
