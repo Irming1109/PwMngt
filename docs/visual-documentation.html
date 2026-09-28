@@ -766,7 +766,7 @@
   <div class="topbar">
     <span class="eyebrow">PwMngt &middot; Home Assistant custom integration</span>
     <h1>Home Assistant Integration Power Management</h1>
-    <span class="version-chip" id="version-chip">v0.3.17</span>
+    <span class="version-chip" id="version-chip">v0.3.20</span>
   </div>
 
   <div class="crumbrow" id="crumbrow"></div>
@@ -848,7 +848,7 @@
   }
 
   /* ============== CONTENT MODEL ============== */
-  /* Read from the live PwMngt repo (custom_components/pwmngt) as of v0.3.17.
+  /* Read from the live PwMngt repo (custom_components/pwmngt) as of v0.3.20 (working tree).
      "segment" is the wizard page a file is filed under here for
      documentation purposes; "deviceKey"/"readsDeviceKey" is the literal HA
      device from the code (see DEVICE_META above) -- they aren't always the
@@ -903,7 +903,7 @@
 
     solar_pv_plant: {
       title: 'Solar PV Plant', icon: 'pv', kind: 'mandatory',
-      description: "Maps your solar plant's core data — battery, PV production, grid power and spot price — into PwMngt. The only segment that's fully live today.",
+      description: "Maps your solar plant's core data — battery, PV production, grid power and spot price — into PwMngt, and calculates household consumption averages and the battery's minimum SoC.",
       layers: {
         data: [
           {
@@ -930,6 +930,30 @@
               { name: 'last_day', type: 'str (ISO date)', example: '"2026-09-27"', internal: true }
             ],
             note: 'Every value is read per completed day straight from Recorder\'s hourly long-term statistics, so all 30 days are available immediately; a counter without statistics falls back to plain state history (about 10 days). Averages cover the last 7/14/21/30 calendar days (select.&lt;hub&gt;_pv_history_period_days). car_charger_consumption sums every installed charger\'s consumption source (picked on the EV Charging page) and is subtracted in daytime_average_adjusted. Pool heating, PV surplus and heat pump stay None until those segments exist. If a configured source changes, the histories are rebuilt from Recorder.'
+          },
+          {
+            file: 'battery_data.py', cls: 'PwMngtBatteryDataSensor', deviceKey: 'pv',
+            triggers: [
+              { kind: 'entity', text: 'Battery SoC changes (the source picked on the Solar PV Plant page).' },
+              { kind: 'entity', text: 'sensor.&lt;hub&gt;_pv_battery_nightly_target changes — only between 00:01 and 16:59.' },
+              { kind: 'entity', text: 'select.&lt;hub&gt;_pv_battery_target_end_time, select.&lt;hub&gt;_pv_battery_command or either charger\'s State sensor changes.' },
+              { kind: 'time', text: 'Every 15 minutes from 06:00 to 23:45.' },
+              { kind: 'time', text: 'Once at startup.' }
+            ],
+            attributes: [
+              { name: 'min_soc (the sensor\'s state)', type: 'int (%)', example: '42' },
+              { name: 'soc_grid', type: 'float (%-points)', example: '12.0' },
+              { name: 'soc_pv', type: 'float (%-points)', example: '30.0' },
+              { name: 'soc_cells', type: 'list[float]', example: '[1.84, 1.62, 0.0, …]' },
+              { name: 'soc_count', type: 'int', example: '42' },
+              { name: 'total_discharge_pct_cum', type: 'float (%-points)', example: '318.0' },
+              { name: 'grid_discharge_pct_cum', type: 'float (%-points)', example: '57.0' },
+              { name: 'forced_charge', type: 'ENUM', example: 'off' },
+              { name: 'avg_cheapest_hours', type: 'float (kr/kWh)', example: 'None (not set yet)' },
+              { name: 'soc_previous', type: 'float (%)', example: '97.0', internal: true },
+              { name: 'grid_charge_previous', type: 'float (kWh)', example: '1.8', internal: true }
+            ],
+            note: 'Port of Claus\'s Node-RED "Min_SOC beregning". The state is the minimum SoC the battery may discharge to right now, following a charge curve from 09:00 towards the nightly target by the target end time, with separate rules for November–January. The ledger books every SoC rise as grid- or PV-charged (via the "Battery grid charged (day)" counter, which resets at midnight) and protects grid-bought energy until the target end time and at night when the price is too low. forced_charge is "on" while min_soc is above the current SoC. Calculation only — nothing is written to the inverter. Battery nightly target isn\'t calculated yet, so 5 % is used until it is. Runs at most once per 5 seconds.'
           }
         ],
         properties: [
@@ -937,9 +961,34 @@
             file: 'pv_properties.py', readsDeviceKey: 'pv',
             wraps: [
               {
-                entity: '<code>sensor.&lt;hub&gt;_pv_forced_charge</code>',
+                entity: '<code>sensor.&lt;hub&gt;_pv_battery_data</code> — attribute <code>forced_charge</code>',
                 type: 'ENUM',
-                example: 'On'
+                example: 'off'
+              },
+              {
+                entity: '<code>sensor.&lt;hub&gt;_pv_battery_nightly_target</code>',
+                type: 'float (%)',
+                example: '67'
+              },
+              {
+                entity: '<code>sensor.&lt;hub&gt;_pv_battery_charge_status</code>',
+                type: 'ENUM',
+                example: 'not_calculated'
+              },
+              {
+                entity: '<code>select.&lt;hub&gt;_pv_battery_target_end_time</code>',
+                type: 'ENUM',
+                example: '16:45'
+              },
+              {
+                entity: '<code>select.&lt;hub&gt;_pv_battery_command</code>',
+                type: 'ENUM',
+                example: 'internal'
+              },
+              {
+                entity: '<code>select.&lt;hub&gt;_pv_pv_battery_price_difference</code>',
+                type: 'ENUM',
+                example: '0.80'
               },
               {
                 entity: '<code>select.&lt;hub&gt;_pv_history_period_days</code>',
