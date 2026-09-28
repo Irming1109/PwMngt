@@ -766,7 +766,7 @@
   <div class="topbar">
     <span class="eyebrow">PwMngt &middot; Home Assistant custom integration</span>
     <h1>Home Assistant Integration Power Management</h1>
-    <span class="version-chip" id="version-chip">v0.3.06</span>
+    <span class="version-chip" id="version-chip">v0.3.17</span>
   </div>
 
   <div class="crumbrow" id="crumbrow"></div>
@@ -848,7 +848,7 @@
   }
 
   /* ============== CONTENT MODEL ============== */
-  /* Read from the live PwMngt repo (custom_components/pwmngt) as of v0.3.06.
+  /* Read from the live PwMngt repo (custom_components/pwmngt) as of v0.3.17.
      "segment" is the wizard page a file is filed under here for
      documentation purposes; "deviceKey"/"readsDeviceKey" is the literal HA
      device from the code (see DEVICE_META above) -- they aren't always the
@@ -882,7 +882,13 @@
           {
             file: 'history_helper.py',
             methods: [
-              { sig: 'fetch_state_changes_since(hass, entity_id, start_time)', desc: 'Every recorded state change for entity_id from start_time to now, gap-free (via Recorder\'s "include_start_time_state"). Returns None if Recorder isn\'t loaded, there\'s no history, or the query fails.' }
+              { sig: 'fetch_state_changes_since(hass, entity_id, start_time, end_time=None)', desc: 'Every recorded state change for entity_id from start_time to end_time (or now), gap-free (via Recorder\'s "include_start_time_state"). The fallback source for a counter without long-term statistics — only reaches back Recorder\'s purge_keep_days (default 10). Returns None if Recorder isn\'t loaded, there\'s no history, or the query fails.' }
+            ]
+          },
+          {
+            file: 'statistics_helper.py',
+            methods: [
+              { sig: 'fetch_hourly_sums(hass, statistic_ids, start_time, end_time)', desc: 'Each statistic_id\'s hourly "sum" from Recorder\'s long-term statistics (kept indefinitely), keyed by the moment each hour ends — i.e. the counter\'s value as of that time. Reset-aware, so a per-session charger counter works too. An entity without statistics (no state_class) is simply absent from the result; returns {} if Recorder isn\'t loaded or the query fails.' }
             ]
           },
           {
@@ -901,43 +907,29 @@
       layers: {
         data: [
           {
-            file: 'consumption_snapshots_data.py', cls: 'PwMngtConsumptionSnapshotsSensor', deviceKey: 'pv',
+            file: 'consumption_data.py', cls: 'PwMngtConsumptionDataSensor', deviceKey: 'pv',
             triggers: [
-              { kind: 'time', text: 'Local midnight (00:00) per category — captures that day\'s baseline reading.' },
-              { kind: 'time', text: '8 fixed times/day per category: 06:00, 07:00, 08:00, 09:00, 16:00, 17:00, 21:00, 23:58.' }
+              { kind: 'time', text: 'Daily at 00:15 — adds every day of the last 30 (ending yesterday) that isn\'t in the histories yet, read from Recorder.' },
+              { kind: 'time', text: 'Once shortly after startup (when Home Assistant has started, or 30 s after an Options reload) — same fill, so days missed while Home Assistant was down are caught up.' },
+              { kind: 'entity', text: 'select.&lt;hub&gt;_pv_history_period_days changes — recalculates the averages over the new period.' }
             ],
             attributes: [
-              { name: 'property_kl_6', type: 'float (kWh, 3 dp)', example: '0.412' },
-              { name: 'property_kl_7', type: 'float (kWh, 3 dp)', example: '1.05' },
-              { name: 'property_kl_8', type: 'float (kWh, 3 dp)', example: '2.318' },
-              { name: 'property_kl_9', type: 'float (kWh, 3 dp)', example: '3.102' },
-              { name: 'property_kl_16', type: 'float (kWh, 3 dp)', example: '14.87' },
-              { name: 'property_kl_17', type: 'float (kWh, 3 dp)', example: '15.9' },
-              { name: 'property_kl_21', type: 'float (kWh, 3 dp)', example: '22.4' },
-              { name: 'property_kl_23_59', type: 'float (kWh, 3 dp)', example: '24.65' },
-              { name: '_midnight_baseline_property', type: 'float (kWh)', example: '15234.802', internal: true },
-              { name: '_midnight_baseline_date_property', type: 'str (ISO date)', example: '"2026-09-24"', internal: true }
+              { name: 'daytime_average (08–16)', type: 'float (kWh)', example: '5.84' },
+              { name: 'daytime_average_adjusted (08–16, minus chargers)', type: 'float (kWh)', example: '5.84' },
+              { name: 'early_morning_average (06–07)', type: 'float (kWh)', example: '0.41' },
+              { name: 'morning_average (07–08)', type: 'float (kWh)', example: '0.52' },
+              { name: 'late_morning_average (08–09)', type: 'float (kWh)', example: '0.63' },
+              { name: 'evening_average (17–21)', type: 'float (kWh)', example: '2.35' },
+              { name: 'nighttime_average (17–24 + 00–06, same day)', type: 'float (kWh)', example: '3.9' },
+              { name: 'full_day_average (00–24)', type: 'float (kWh)', example: '10.2' },
+              { name: 'pool_heating_consumption (08–16)', type: 'float (kWh)', example: 'None (not built yet)' },
+              { name: 'pv_surplus_consumption (08–16)', type: 'float (kWh)', example: 'None (not built yet)' },
+              { name: 'car_charger_consumption (08–16)', type: 'float (kWh)', example: '0.0' },
+              { name: 'heat_pump_consumption (08–16)', type: 'float (kWh)', example: 'None (not built yet)' },
+              { name: 'history_days', type: 'int', example: '30', internal: true },
+              { name: 'last_day', type: 'str (ISO date)', example: '"2026-09-27"', internal: true }
             ],
-            note: 'Its category list is designed to grow across every future segment (PV Surplus, chargers, pool heat, heat pump); only the "property" (whole-household) category exists today.'
-          },
-          {
-            file: 'consumption_averages_data.py', cls: 'PwMngtConsumptionAveragesSensor', deviceKey: 'pv',
-            triggers: [],
-            attributes: [
-              { name: 'daytime_average', type: 'float (kWh)', example: 'None (not built yet)' },
-              { name: 'daytime_average_adjusted', type: 'float (kWh)', example: 'None (not built yet)' },
-              { name: 'early_morning_average', type: 'float (kWh)', example: 'None (not built yet)' },
-              { name: 'morning_average', type: 'float (kWh)', example: 'None (not built yet)' },
-              { name: 'late_morning_average', type: 'float (kWh)', example: 'None (not built yet)' },
-              { name: 'evening_average', type: 'float (kWh)', example: 'None (not built yet)' },
-              { name: 'nighttime_average', type: 'float (kWh)', example: 'None (not built yet)' },
-              { name: 'full_day_average', type: 'float (kWh)', example: 'None (not built yet)' },
-              { name: 'pool_heating_consumption', type: 'float (kWh)', example: 'None (not built yet)' },
-              { name: 'pv_surplus_consumption', type: 'float (kWh)', example: 'None (not built yet)' },
-              { name: 'car_charger_consumption', type: 'float (kWh)', example: 'None (not built yet)' },
-              { name: 'heat_pump_consumption', type: 'float (kWh)', example: 'None (not built yet)' }
-            ],
-            note: 'Pure scaffolding — no trigger wired up yet, so state and every attribute always read None. Will consume the snapshot data above plus each segment\'s consumption once the averaging logic is built.'
+            note: 'Every value is read per completed day straight from Recorder\'s hourly long-term statistics, so all 30 days are available immediately; a counter without statistics falls back to plain state history (about 10 days). Averages cover the last 7/14/21/30 calendar days (select.&lt;hub&gt;_pv_history_period_days). car_charger_consumption sums every installed charger\'s consumption source (picked on the EV Charging page) and is subtracted in daytime_average_adjusted. Pool heating, PV surplus and heat pump stay None until those segments exist. If a configured source changes, the histories are rebuilt from Recorder.'
           }
         ],
         properties: [
@@ -948,6 +940,11 @@
                 entity: '<code>sensor.&lt;hub&gt;_pv_forced_charge</code>',
                 type: 'ENUM',
                 example: 'On'
+              },
+              {
+                entity: '<code>select.&lt;hub&gt;_pv_history_period_days</code>',
+                type: 'ENUM',
+                example: '7'
               }
             ]
           }
@@ -960,24 +957,7 @@
       title: 'EV Charging', icon: 'ev', kind: 'optional',
       description: 'Configures up to two EV chargers: type, consumption source, and — planned — load control based on solar surplus.',
       layers: {
-        data: [
-          {
-            file: 'consumption_charger_data.py', cls: 'PwMngtChargerConsumptionSensor', deviceKey: 'charger',
-            triggers: [
-              { kind: 'entity', text: "Tracks whichever entity_id is currently typed into this charger's own \"Consumption source entity\" text field — re-subscribes if it changes." },
-              { kind: 'time', text: 'Local midnight (00:00) — resets the running since-midnight total to 0.' },
-              { kind: 'time', text: '2 fixed times/day: 08:00 and 16:00 — snapshot the running total.' }
-            ],
-            attributes: [
-              { name: 'native value', type: 'float (kWh)', example: '2.885' },
-              { name: 'kl_8', type: 'float (kWh)', example: '1.204' },
-              { name: 'kl_16', type: 'float (kWh)', example: '4.51' },
-              { name: '_last_raw', type: 'float', example: '48213.7', internal: true },
-              { name: '_total_date', type: 'str (ISO date)', example: '"2026-09-24"', internal: true }
-            ],
-            note: 'One sensor instance per charger — each attaches to its own device (PwM Charger1 or PwM Charger2), never shared. This file also defines a standalone function, total_charger_consumption(), that sums both chargers\' kl_8/kl_16 snapshots — the native replacement for Claus\'s Node-RED "Forbrug_billadere". Built, but not yet called from anywhere.'
-          }
-        ],
+        data: [],
         properties: [],
         helpers: []
       }
