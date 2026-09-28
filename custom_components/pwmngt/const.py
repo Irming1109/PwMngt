@@ -65,7 +65,7 @@ CHARGER_TYPE_NOT_INSTALLED = "Not installed"
 # against, since Kasper doesn't have one) is "session_energy" -- not
 # "lifetime_energy". Easee's API exposes both: sessionEnergy resets at the
 # start of each charging session (same behaviour as Wallbox's added_energy,
-# and what data/consumption_charger_data.py's accumulate() is built to
+# and what data/consumption_data.py's car_charger_consumption is built to
 # handle), while lifetimeEnergy is a never-resetting odometer-style total
 # -- the wrong shape for this field.
 # ---------------------------------------------------------------------------
@@ -129,12 +129,11 @@ ENTITY_KEY_PV_FORECAST_TOMORROW = "pv_forecast_tomorrow"
 # though the sensor itself lives on the Hub device.
 ENTITY_KEY_SPOT_ELECTRICITY_PRICE = "spot_electricity_price"
 
-# Consumption tracking -- entity_map field(s) feeding
-# data/consumption_snapshots_data.py's since-local-midnight snapshots, which in
-# turn feed data/consumption_averages_data.py's rolling averages once those are built.
-# Each is a raw, ever-increasing lifetime counter (kWh) -- NOT a Daily
-# Utility Meter helper -- PwMngt captures its own local-midnight
-# baseline internally instead of relying on one configured in YAML.
+# Consumption tracking -- entity_map field(s) read by
+# data/consumption_data.py straight from Recorder (hourly long-term
+# statistics) to build its rolling averages. Each is a raw,
+# ever-increasing lifetime counter (kWh) with a state_class -- NOT a
+# Daily Utility Meter helper.
 ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL = "property_consumption_total"
 
 # ---------------------------------------------------------------------------
@@ -201,7 +200,7 @@ INVERTER_CORE_AUTO_DETECT_NAMES: dict[str, dict[str, tuple[str, str]]] = {
         ENTITY_KEY_PV_TOTAL_CONSUMPTION: ("kostal_plenticore", "Home Consumption from PV Total"),
         ENTITY_KEY_GRID_POWER: ("kostal_plenticore", "Grid Power"),
         # Raw lifetime counter (state_class total_increasing, never resets)
-        # -- exactly what data/consumption_snapshots_data.py needs. Confirmed
+        # -- exactly what data/consumption_data.py needs. Confirmed
         # live 2026-09-27 on Kasper's install (sensor.pileaas_sol_home_consumption_total).
         ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL: ("kostal_plenticore", "Home Consumption Total"),
     },

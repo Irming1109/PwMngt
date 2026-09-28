@@ -66,12 +66,11 @@ _SOLAR_PV_PLANT_FIELDS = [
     # Hub value (Stromligning spot price) -- lives here rather than a
     # dedicated page.
     (ENTITY_KEY_SPOT_ELECTRICITY_PRICE, "kr/kWh", True),
-    # Consumption tracking -- required even though only the "property"
-    # category (data/consumption_snapshots_data.py) exists so far (Kasper's call:
-    # every install should have this wired up from the start, not just
-    # the ones migrating this segment first). See that module's
-    # docstring for why this must be a raw, ever-increasing counter
-    # rather than a Daily Utility Meter helper.
+    # Consumption tracking -- required (Kasper's call: every install
+    # should have this wired up from the start). Read by
+    # data/consumption_data.py from Recorder; must be a raw,
+    # ever-increasing counter with a state_class (so Home Assistant keeps
+    # long-term statistics for it), not a Daily Utility Meter helper.
     (ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL, "kWh", True),
 ]
 

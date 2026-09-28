@@ -45,7 +45,7 @@ LOGGER = logging.getLogger(__name__)
 # Naming convention: a "*_data" key/name means the value comes from an
 # ongoing internal trigger (here, a 10-second timer) rather than
 # mirroring one external entity -- same convention as
-# PwM_CONSUMPTION_AVERAGES_SENSORS in data/consumption_averages_data.py.
+# PwM_CONSUMPTION_DATA_SENSORS in data/consumption_data.py.
 #
 # Old key="balance_30_sek" (sensor.balance_30_sek) -> attribute "balance_30_sec"
 # Old key="balance_1_min" (sensor.balance_1_min) -> attribute "balance_1_min"

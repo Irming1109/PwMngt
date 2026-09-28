@@ -32,7 +32,7 @@ def history_period_days_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> st
     PwM_PV_CONFIG_SELECTS in select.py), or None if it isn't registered
     yet. Split out from history_period_days() below so a caller that
     needs to subscribe to this select's state changes (see
-    data/consumption_averages_data.py) doesn't have to repeat the
+    data/consumption_data.py) doesn't have to repeat the
     entity-registry lookup itself.
     """
     unique_id = f"{entry.entry_id}_pv_history_period_days"
@@ -42,7 +42,7 @@ def history_period_days_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> st
 def history_period_days(hass: HomeAssistant, entry: ConfigEntry) -> int:
     """The number of days select.pwm_pv_history_period_days is currently
     set to (7/14/21/30) -- how far back a rolling consumption average
-    (see data/consumption_averages_data.py) should look.
+    (see data/consumption_data.py) should look.
 
     Falls back to _DEFAULT_HISTORY_PERIOD_DAYS in both cases where
     there's nothing real to read yet: the entity hasn't been registered
@@ -57,25 +57,3 @@ def history_period_days(hass: HomeAssistant, entry: ConfigEntry) -> int:
         return int(state.state)
     except ValueError:
         return _DEFAULT_HISTORY_PERIOD_DAYS
-
-
-def consumption_snapshot_kl(
-    hass: HomeAssistant, entry: ConfigEntry, category: str, time_key: str
-) -> float | None:
-    """One category's since-local-midnight consumption snapshot at one of
-    data/consumption_snapshots_data.py's fixed sample times -- e.g.
-    category="property", time_key="16" reads that sensor's
-    "property_kl_16" attribute.
-
-    Returns None if that sensor isn't registered yet, or hasn't captured
-    this particular sample yet (e.g. it's earlier in the day than
-    time_key, or a fresh install with no history to backfill from). No
-    caching -- same reasoning as is_forced_charging() above.
-    """
-    unique_id = f"{entry.entry_id}_pv_consumption_snapshots_data"
-    entity_id = er.async_get(hass).async_get_entity_id("sensor", DOMAIN, unique_id)
-    state = hass.states.get(entity_id) if entity_id else None
-    if state is None:
-        return None
-    value = state.attributes.get(f"{category}_kl_{time_key}")
-    return float(value) if value is not None else None

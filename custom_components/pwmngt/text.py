@@ -82,9 +82,8 @@ PwM_CHARGER_CONFIG_TEXTS: list[PwMngtTextEntityDescription] = [
     # New (no Node-RED equivalent by this name -- Claus's flow read a
     # fixed entity_id, sensor.wallbox_portal_added_energy, hardcoded in
     # his function node). The entity that reports this charger's own
-    # added-energy counter, read by PwMngtChargerConsumptionSensor
-    # (data/consumption_charger_data.py) to compute its since-midnight
-    # consumption. Deliberately a plain typed entity_id, not part of
+    # added-energy counter, read by data/consumption_data.py (from
+    # Recorder) to compute car_charger_consumption. Deliberately a plain typed entity_id, not part of
     # entry.options[CONF_ENTITY_MAP] like every other PwMngt source --
     # CONF_ENTITY_MAP fields are all picked via _entity_picker()'s
     # EntitySelector in the Options wizard, but this needs to exist as

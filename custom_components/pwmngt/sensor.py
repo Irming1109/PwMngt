@@ -35,11 +35,10 @@ from .const import (
 )
 from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
 from .data.balance_data import PwM_BALANCE_DATA_SENSORS, PwMngtBalanceDataSensor
-from .data.consumption_charger_data import PwMngtChargerConsumptionSensor
-from .data.consumption_averages_data import PwM_CONSUMPTION_AVERAGES_SENSORS, PwMngtConsumptionAveragesSensor
-from .data.consumption_snapshots_data import (
-    PwM_CONSUMPTION_SNAPSHOTS_SENSORS,
-    PwMngtConsumptionSnapshotsSensor,
+from .data.consumption_data import (
+    PwM_CONSUMPTION_DATA_SENSORS,
+    PwMngtConsumptionDataSensor,
+    async_remove_legacy_consumption_entities,
 )
 from .helpers.state_helper import read_float_state
 
@@ -48,6 +47,11 @@ LOGGER = logging.getLogger(__name__)
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):   
     """Setup sensors."""
     sensors = []
+
+    # consumption_data replaced consumption_snapshots_data,
+    # consumption_averages_data and each charger's consumption_data
+    # (v0.3.17) -- drop those from the entity registry.
+    async_remove_legacy_consumption_entities(hass, entry)
 
     for description in PwM_BALANCE_DATA_SENSORS:
         entity = PwMngtBalanceDataSensor(description, entry)
@@ -84,25 +88,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         LOGGER.info("Added PV scaffold sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
-    for description in PwM_CONSUMPTION_AVERAGES_SENSORS:
-        entity = PwMngtConsumptionAveragesSensor(description, entry)
-        LOGGER.info("Added PV consumption-averages sensor with entity_id '%s'", entity.entity_id)
-        sensors.append(entity)
-
-    for description in PwM_CONSUMPTION_SNAPSHOTS_SENSORS:
-        entity = PwMngtConsumptionSnapshotsSensor(description, entry)
-        LOGGER.info("Added PV consumption-snapshots sensor with entity_id '%s'", entity.entity_id)
+    for description in PwM_CONSUMPTION_DATA_SENSORS:
+        entity = PwMngtConsumptionDataSensor(description, entry)
+        LOGGER.info("Added PV consumption-data sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
     for charger in CHARGERS:
         for description in PwM_CHARGER_SENSORS:
-            if description.key == "consumption_data":
-                # Real behaviour (reset-aware since-midnight accumulator)
-                # -- see data/consumption_charger_data.py. Every other charger
-                # sensor below stays pure scaffolding for now.
-                entity = PwMngtChargerConsumptionSensor(description, entry, charger)
-            else:
-                entity = PwMngtChargerSensor(description, entry, charger)
+            entity = PwMngtChargerSensor(description, entry, charger)
             LOGGER.info("Added charger sensor with entity_id '%s'", entity.entity_id)
             sensors.append(entity)
 
@@ -131,26 +124,12 @@ PwM_CHARGER_SENSORS: list[SensorEntityDescription] = [
         icon="mdi:flash",
         native_unit_of_measurement="W",
     ),
-    # Old key="ladeboks_1_forbrug" (ladeboks_2_... equivalent for Charger2)
-    # Old name="Ladeboks 1 forbrug" (Ladeboks 2 ... equivalent for Charger2)
-    # Real behaviour, unlike every other entry in this list -- see
-    # PwMngtChargerConsumptionSensor in data/consumption_charger_data.py
-    # (instantiated for this key specifically in async_setup_entry below).
-    SensorEntityDescription(
-        key="consumption_data",
-        name="Consumption data",
-        icon="mdi:lightning-bolt",
-        native_unit_of_measurement="kWh",
-        # Deliberately no state_class: this resets to 0 every local
-        # midnight by design (see PwMngtChargerConsumptionSensor), so
-        # TOTAL_INCREASING would be wrong (HA's statistics engine treats
-        # any decrease on that state_class as an unplanned device reset
-        # and tries to bridge across it into one ever-growing lifetime
-        # figure -- not what a daily "since midnight" value should do).
-        # SensorStateClass.TOTAL with a last_reset timestamp would be the
-        # correct way to get long-term statistics/Energy-dashboard
-        # support later; not needed for anything asked for so far.
-    ),
+    # Old key="ladeboks_1_forbrug" / name="Ladeboks 1 forbrug" (the
+    # current charging session's energy, from Node-RED) is deliberately
+    # not ported: nothing in Kasper's or Claus's Node-RED, dashboards or
+    # automations reads it (checked 2026-09-28). The chargers' 08-16
+    # consumption the averages need now comes straight from Recorder --
+    # see car_charger_consumption in data/consumption_data.py.
     # Old key="ladeboks_1_km" (ladeboks_2_... equivalent for Charger2)
     # Old name="Ladeboks 1 km" (Ladeboks 2 ... equivalent for Charger2)
     SensorEntityDescription(
@@ -390,7 +369,7 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 # ---------------------------------------------------------------------------
 # PV-device sensors for values PwMngt computes internally itself, rather
 # than mirror an external entity -- same scaffold-now-compute-later
-# pattern as PwMngtConsumptionAveragesSensor in data/consumption_averages_data.py. Each
+# pattern as the other scaffold sensors in this file. Each
 # stays at native_value=None ("unknown") until that calculation lands.
 # ---------------------------------------------------------------------------
 
@@ -443,7 +422,7 @@ PwM_PV_SCAFFOLD_SENSORS: list[SensorEntityDescription] = [
 class PwMngtScaffoldSensor(SensorEntity):
     """A PV-device sensor for a value PwMngt computes internally itself
     (see PwM_PV_SCAFFOLD_SENSORS). Stays at native_value=None until
-    then, same pattern as PwMngtConsumptionAveragesSensor in data/consumption_averages_data.py.
+    then.
     """
 
     _attr_has_entity_name = True
@@ -583,8 +562,8 @@ PwM_HUB_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 
 
 # ---------------------------------------------------------------------------
-# PV-device "consumption averages" sensor -- moved to data/consumption_averages_data.py
-# (PwM_CONSUMPTION_AVERAGES_SENSORS, PwMngtConsumptionAveragesSensor), imported above.
+# PV-device "consumption data" sensor -- lives in data/consumption_data.py
+# (PwM_CONSUMPTION_DATA_SENSORS, PwMngtConsumptionDataSensor), imported above.
 # ---------------------------------------------------------------------------
 
 
