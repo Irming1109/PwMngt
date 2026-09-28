@@ -41,6 +41,14 @@ from .data.consumption_data import (
     PwMngtConsumptionDataSensor,
     async_remove_legacy_consumption_entities,
 )
+from .data.solar_data import (
+    PwM_BATTERY_NIGHTLY_TARGET_SENSORS,
+    PwM_SOLAR_DATA_SENSORS,
+    PwMngtBatteryNightlyTargetSensor,
+    PwMngtSolarDataCoordinator,
+    PwMngtSolarDataSensor,
+    async_remove_legacy_solar_entities,
+)
 from .data.battery_data import (
     PwM_BATTERY_DATA_SENSORS,
     PwMngtBatteryDataSensor,
@@ -62,6 +70,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     # battery_data's forced_charge attribute replaced the forced_charge
     # scaffold sensor (v0.3.21).
     async_remove_legacy_battery_entities(hass, entry)
+    # solar_data's attributes replaced the pv_forecast_daytime_today/
+    # _tomorrow scaffold sensors (v0.3.22).
+    async_remove_legacy_solar_entities(hass, entry)
 
     for description in PwM_BALANCE_DATA_SENSORS:
         entity = PwMngtBalanceDataSensor(description, entry)
@@ -107,6 +118,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         entity = PwMngtStatusSensor(description, entry, initial_option, initial_attributes)
         LOGGER.info("Added PV status sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
+
+    solar = PwMngtSolarDataCoordinator(hass, entry)
+    for description in PwM_SOLAR_DATA_SENSORS:
+        entity = PwMngtSolarDataSensor(solar, description, entry)
+        LOGGER.info("Added PV solar-data sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+    for description in PwM_BATTERY_NIGHTLY_TARGET_SENSORS:
+        entity = PwMngtBatteryNightlyTargetSensor(solar, description, entry)
+        LOGGER.info("Added PV battery nightly target sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+    solar.async_start()
+    entry.async_on_unload(solar.async_stop)
 
     for description in PwM_BATTERY_DATA_SENSORS:
         entity = PwMngtBatteryDataSensor(description, entry)
@@ -409,36 +432,14 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 # ---------------------------------------------------------------------------
 
 PwM_PV_SCAFFOLD_SENSORS: list[SensorEntityDescription] = [
-    # Old key="batteri target" (sensor.batteri_target), from Node-RED.
-    SensorEntityDescription(
-        key="battery_nightly_target",
-        name="Battery nightly target",
-        icon="mdi:battery-clock-outline",
-        device_class=SensorDeviceClass.BATTERY,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="%",
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    # Old key="solproduktion 11_16" (sensor.solproduktion_11_16), from Node-RED.
-    SensorEntityDescription(
-        key="pv_forecast_daytime_today",
-        name="PV forecast daytime today",
-        icon="mdi:sun-clock-outline",
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="kWh",
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
-    # Old key="solproduktion_imorgen_11_16" (sensor.solproduktion_imorgen_11_16), from Node-RED.
-    SensorEntityDescription(
-        key="pv_forecast_daytime_tomorrow",
-        name="PV forecast daytime tomorrow",
-        icon="mdi:sun-clock-outline",
-        device_class=SensorDeviceClass.ENERGY,
-        state_class=SensorStateClass.MEASUREMENT,
-        native_unit_of_measurement="kWh",
-        entity_category=EntityCategory.DIAGNOSTIC,
-    ),
+    # battery_nightly_target, pv_forecast_daytime_today and
+    # pv_forecast_daytime_tomorrow used to be scaffold sensors here. All
+    # three are now calculated by data/solar_data.py (v0.3.22):
+    # battery_nightly_target stays a sensor (same unique_id, so its
+    # entity_id is unchanged); the two forecasts are now solar_data
+    # handled by solar_data (pv_forecast_11_16_today is an attribute; the
+    # 11-16 tomorrow figure isn't ported) and the old entities are removed
+    # by async_remove_legacy_solar_entities().
     # "forced_charge" (old: input_boolean.tvangslad_batteri) used to be a
     # scaffold sensor here. It's now the "forced_charge" attribute of
     # data/battery_data.py's battery_data sensor (v0.3.21), read through

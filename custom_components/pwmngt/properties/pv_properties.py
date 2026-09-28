@@ -45,9 +45,20 @@ def is_forced_charging(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return state is not None and state.attributes.get("forced_charge") == "on"
 
 
+def consumption_data_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+    """Entity id of data/consumption_data.py's consumption_data sensor."""
+    return _pv_entity_id(hass, entry, "sensor", "consumption_data")
+
+
+def battery_size_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+    """Entity id of select.<pv>_battery_size (see PwM_PV_CONFIG_SELECTS in
+    select.py)."""
+    return _pv_entity_id(hass, entry, "select", "battery_size")
+
+
 def battery_nightly_target_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
     """Entity id of the PV device's Battery nightly target sensor (see
-    PwM_PV_SCAFFOLD_SENSORS in sensor.py)."""
+    PwM_BATTERY_NIGHTLY_TARGET_SENSORS in data/solar_data.py)."""
     return _pv_entity_id(hass, entry, "sensor", "battery_nightly_target")
 
 
