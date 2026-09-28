@@ -64,6 +64,7 @@ from ..helpers.history_helper import fetch_state_changes_since
 from ..helpers.state_helper import read_float_state
 from ..helpers.statistics_helper import fetch_hourly_sums
 from ..properties import pv_properties
+from . import DATA_SENSOR_STATE
 
 LOGGER = logging.getLogger(__name__)
 
@@ -418,7 +419,10 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
         self._attr_device_info = pv_device_info(entry)
-        self._attr_native_value = None
+        # Attribute-only "_data" sensor: a constant state instead of None
+        # so the UI doesn't show "Unknown" -- see DATA_SENSOR_STATE in
+        # data/__init__.py.
+        self._attr_native_value = DATA_SENSOR_STATE
         self._attr_available = False
         self._attr_extra_state_attributes = {
             key: None for key in PwM_CONSUMPTION_DATA_ATTRIBUTES
