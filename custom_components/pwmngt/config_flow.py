@@ -25,6 +25,7 @@ from .const import (
     ENTITY_KEY_BATTERY_PV_CHARGED,
     ENTITY_KEY_BATTERY_PV_DISCHARGED,
     ENTITY_KEY_BATTERY_POWER,
+    ENTITY_KEY_BATTERY_GRID_CHARGED_DAY,
     ENTITY_KEY_PV1_POWER,
     ENTITY_KEY_PV2_POWER,
     ENTITY_KEY_PV3_POWER,
@@ -56,6 +57,9 @@ _SOLAR_PV_PLANT_FIELDS = [
     (ENTITY_KEY_BATTERY_PV_CHARGED, "kWh", True),
     (ENTITY_KEY_BATTERY_PV_DISCHARGED, "kWh", True),
     (ENTITY_KEY_BATTERY_POWER, "W", True),
+    # Required (Kasper, 2026-09-28) -- data/battery_data.py needs it to
+    # tell grid-charged SoC from PV-charged SoC.
+    (ENTITY_KEY_BATTERY_GRID_CHARGED_DAY, "kWh", True),
     (ENTITY_KEY_PV1_POWER, "W", True),
     (ENTITY_KEY_PV2_POWER, "W", False),
     (ENTITY_KEY_PV3_POWER, "W", False),
@@ -107,6 +111,7 @@ _SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
             ENTITY_KEY_BATTERY_PV_CHARGED,
             ENTITY_KEY_BATTERY_PV_DISCHARGED,
             ENTITY_KEY_BATTERY_POWER,
+            ENTITY_KEY_BATTERY_GRID_CHARGED_DAY,
         ],
     ),
     (
@@ -181,6 +186,7 @@ _AUTO_DETECT_LABELS: dict[str, str] = {
     ENTITY_KEY_BATTERY_PV_CHARGED: "Battery PV charged",
     ENTITY_KEY_BATTERY_PV_DISCHARGED: "Battery PV discharged",
     ENTITY_KEY_BATTERY_POWER: "Battery power",
+    ENTITY_KEY_BATTERY_GRID_CHARGED_DAY: "Battery grid charged (day)",
     ENTITY_KEY_PV1_POWER: "PV1 power",
     ENTITY_KEY_PV2_POWER: "PV2 power",
     ENTITY_KEY_PV3_POWER: "PV3 power",

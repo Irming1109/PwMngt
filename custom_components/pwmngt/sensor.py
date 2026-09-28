@@ -23,6 +23,7 @@ from .const import (
     ENTITY_KEY_BATTERY_PV_CHARGED,
     ENTITY_KEY_BATTERY_PV_DISCHARGED,
     ENTITY_KEY_BATTERY_POWER,
+    ENTITY_KEY_BATTERY_GRID_CHARGED_DAY,
     ENTITY_KEY_PV1_POWER,
     ENTITY_KEY_PV2_POWER,
     ENTITY_KEY_PV3_POWER,
@@ -40,6 +41,11 @@ from .data.consumption_data import (
     PwMngtConsumptionDataSensor,
     async_remove_legacy_consumption_entities,
 )
+from .data.battery_data import (
+    PwM_BATTERY_DATA_SENSORS,
+    PwMngtBatteryDataSensor,
+    async_remove_legacy_battery_entities,
+)
 from .base import use_description_key_as_translation_key
 from .helpers.state_helper import read_float_state
 
@@ -53,6 +59,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     # consumption_averages_data and each charger's consumption_data
     # (v0.3.17) -- drop those from the entity registry.
     async_remove_legacy_consumption_entities(hass, entry)
+    # battery_data's forced_charge attribute replaced the forced_charge
+    # scaffold sensor (v0.3.21).
+    async_remove_legacy_battery_entities(hass, entry)
 
     for description in PwM_BALANCE_DATA_SENSORS:
         entity = PwMngtBalanceDataSensor(description, entry)
@@ -92,6 +101,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     for description in PwM_CONSUMPTION_DATA_SENSORS:
         entity = PwMngtConsumptionDataSensor(description, entry)
         LOGGER.info("Added PV consumption-data sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    for description, initial_option, initial_attributes in PwM_PV_STATUS_SENSORS:
+        entity = PwMngtStatusSensor(description, entry, initial_option, initial_attributes)
+        LOGGER.info("Added PV status sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    for description in PwM_BATTERY_DATA_SENSORS:
+        entity = PwMngtBatteryDataSensor(description, entry)
+        LOGGER.info("Added PV battery-data sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
     for charger in CHARGERS:
@@ -269,6 +288,20 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
         ),
         ENTITY_KEY_BATTERY_POWER,
     ),
+    # Old key="batteri_ladet_fra_grid_pr_dag" (sensor.batteri_ladet_fra_grid_pr_dag),
+    # a daily utility_meter in Claus's HA. Resets at local midnight --
+    # data/battery_data.py handles the reset.
+    (
+        SensorEntityDescription(
+            key="battery_grid_charged_day",
+            name="Battery grid charged (day)",
+            icon="mdi:battery-charging-high",
+            device_class=SensorDeviceClass.ENERGY,
+            state_class=SensorStateClass.TOTAL_INCREASING,
+            native_unit_of_measurement="kWh",
+        ),
+        ENTITY_KEY_BATTERY_GRID_CHARGED_DAY,
+    ),
     # Old key="PV1" (sensor.pv1), from Node-RED.
     (
         SensorEntityDescription(
@@ -406,19 +439,74 @@ PwM_PV_SCAFFOLD_SENSORS: list[SensorEntityDescription] = [
         native_unit_of_measurement="kWh",
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
-    # Old key="tvangslad_batteri" (input_boolean.tvangslad_batteri), from
-    # Node-RED. Not user-mapped -- PwMngt will set this itself once the
-    # battery forced-charge logic is built. PwMngtBalanceDataSensor reads
-    # it to decide whether to skip Battery power in its calculation.
-    SensorEntityDescription(
-        key="forced_charge",
-        name="Forced charge",
-        icon="mdi:battery-lock",
-        device_class=SensorDeviceClass.ENUM,
-        options=["on", "off"],
-        entity_category=EntityCategory.DIAGNOSTIC,
+    # "forced_charge" (old: input_boolean.tvangslad_batteri) used to be a
+    # scaffold sensor here. It's now the "forced_charge" attribute of
+    # data/battery_data.py's battery_data sensor (v0.3.21), read through
+    # pv_properties.is_forced_charging(); the old entity is removed from
+    # the registry by async_remove_legacy_battery_entities().
+]
+
+
+# ---------------------------------------------------------------------------
+# PV-device ENUM status sensors that a not-yet-ported Node-RED flow will
+# set. Unlike PwM_PV_SCAFFOLD_SENSORS they start at a real "nothing
+# decided yet" option instead of None ("Unknown"). Options are translation
+# keys; the display text (English/Danish) lives in strings.json /
+# translations/*.json under entity.sensor.<key>.state.
+# ---------------------------------------------------------------------------
+
+PwM_PV_STATUS_SENSORS: list[tuple[SensorEntityDescription, str, dict]] = [
+    # Old key="pv_battery_charge" (sensor.pv_battery_charge), from Node-RED.
+    # Old name="Battery charge"
+    # Whether the battery should be charged from the grid, written by
+    # Node-RED's "Skal batteri lades" (not ported yet -- nothing sets this
+    # in PwMngt so far). data/battery_data.py reads the state
+    # ("yes_today" matters) and the avg_cheapest_hours attribute.
+    (
+        SensorEntityDescription(
+            key="battery_charge_status",
+            name="Battery charge status",
+            icon="mdi:battery-charging-outline",
+            device_class=SensorDeviceClass.ENUM,
+            options=[
+                "not_calculated",   # Old: "Ikke beregnet"
+                "yes_today",        # Old: "Ja (i dag)"
+                "yes_tomorrow",     # Old: "Ja (i morgen)"
+                "no_charge_needed", # Old: "Nej (intet ladebehov)"
+                "no_surplus",       # Old: "Nej (overskud)"
+                "no_price",         # Old: "Nej (pris)"
+                "no_deferred",      # Old: "Nej (udskudt)"
+            ],
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+        "not_calculated",
+        # Old attribute "gns_billigste_timer": average price of the
+        # cheapest hours picked for grid charging.
+        {"avg_cheapest_hours": None},
     ),
 ]
+
+
+class PwMngtStatusSensor(SensorEntity):
+    """A PV-device ENUM status sensor (see PwM_PV_STATUS_SENSORS). Holds
+    its initial option and attributes until the flow that sets it is
+    ported."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+
+    def __init__(
+        self,
+        description: SensorEntityDescription,
+        entry: ConfigEntry,
+        initial_option: str,
+        initial_attributes: dict,
+    ) -> None:
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
+        self._attr_device_info = pv_device_info(entry)
+        self._attr_native_value = initial_option
+        self._attr_extra_state_attributes = dict(initial_attributes)
 
 
 class PwMngtScaffoldSensor(SensorEntity):

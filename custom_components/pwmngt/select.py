@@ -210,6 +210,46 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["Not installed", "Kostal Plenticore", "Growatt"],
         default_option="Not installed",
     ),
+    # Old key="PV_batteri_target_sluttid" (select.pv_batteri_target_sluttid), from Node-RED.
+    # Old name="Slut tid for target"
+    # When the battery should have reached battery_nightly_target. Read by
+    # data/battery_data.py. Plain clock times -- nothing to translate.
+    PwMngtSelectEntityDescription(
+        key="battery_target_end_time",
+        name="Battery target end time",
+        icon="mdi:battery-clock",
+        entity_category=EntityCategory.CONFIG,
+        options=["13:30", "16:45"],
+        default_option="16:45",
+    ),
+    # Old key="PV_batteri_styring" (select.pv_batteri_styring), from Node-RED.
+    # Old name="PV_batteri_kommando"
+    # The command currently given to the battery. In Node-RED many flows
+    # write it (and the user can set it by hand); in PwMngt nothing sets it
+    # yet -- only data/battery_data.py reads it (it reacts to
+    # "block_charging"). Options are translation keys; the display text
+    # (English/Danish) lives in strings.json / translations/*.json under
+    # entity.select.battery_command.state.
+    PwMngtSelectEntityDescription(
+        key="battery_command",
+        name="Battery command",
+        icon="mdi:home-battery-outline",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        options=[
+            "internal",          # Old: "Intern"
+            "block_battery",     # Old: "Bloker batteri"
+            "block_charging",    # Old: "Bloker ladning"
+            "charge_now_25",     # Old: "Lad nu - 25% effekt"
+            "charge_now_50",     # Old: "Lad nu - 50% effekt"
+            "charge_now_75",     # Old: "Lad nu - 75% effekt"
+            "charge_now_100",    # Old: "Lad nu - 100% effekt"
+            "discharge_now_25",  # Old: "Aflad nu - 25% effekt"
+            "discharge_now_50",  # Old: "Aflad nu - 50% effekt"
+            "discharge_now_75",  # Old: "Aflad nu - 75% effekt"
+            "discharge_now_100", # Old: "Aflad nu - 100% effekt"
+        ],
+        default_option="internal",
+    ),
 ]
 
 # Shown under each charger device's "Configuration" tab (set once, rarely changed).

@@ -108,6 +108,12 @@ ENTITY_KEY_BATTERY_SOC = "battery_soc"
 ENTITY_KEY_BATTERY_PV_CHARGED = "battery_pv_charged"
 ENTITY_KEY_BATTERY_PV_DISCHARGED = "battery_pv_discharged"
 ENTITY_KEY_BATTERY_POWER = "battery_power"
+# Energy charged into the battery from the grid today (kWh), a counter
+# that resets at local midnight. Read by data/battery_data.py to tell
+# whether a SoC rise came from the grid or from PV. Old:
+# sensor.batteri_ladet_fra_grid_pr_dag (a daily utility_meter in Claus's
+# HA, read by Node-RED's "Min_SOC beregning").
+ENTITY_KEY_BATTERY_GRID_CHARGED_DAY = "battery_grid_charged_day"
 ENTITY_KEY_PV1_POWER = "pv1_power"
 ENTITY_KEY_PV2_POWER = "pv2_power"
 ENTITY_KEY_PV3_POWER = "pv3_power"
@@ -184,6 +190,10 @@ INVERTER_CORE_AUTO_DETECT_NAMES: dict[str, dict[str, tuple[str, str]]] = {
         ENTITY_KEY_BATTERY_PV_CHARGED: ("kostal_plenticore", "Battery Charge from PV Total"),
         ENTITY_KEY_BATTERY_PV_DISCHARGED: ("kostal_plenticore", "Battery Discharge Total"),
         ENTITY_KEY_BATTERY_POWER: ("kostal_plenticore", "Battery Power"),
+        # Daily counter (resets at local midnight). Confirmed live
+        # 2026-09-28 on Kasper's install
+        # (sensor.pileaas_sol_battery_charge_from_grid_day).
+        ENTITY_KEY_BATTERY_GRID_CHARGED_DAY: ("kostal_plenticore", "Battery Charge from Grid Day"),
         ENTITY_KEY_PV1_POWER: ("kostal_plenticore", "DC1 Power"),
         ENTITY_KEY_PV2_POWER: ("kostal_plenticore", "DC2 Power"),
         ENTITY_KEY_PV3_POWER: ("kostal_plenticore", "DC3 Power"),
@@ -208,6 +218,13 @@ INVERTER_CORE_AUTO_DETECT_NAMES: dict[str, dict[str, tuple[str, str]]] = {
         # -- best-effort, unverified -- see the dict's own docstring above.
         ENTITY_KEY_BATTERY_SOC: ("growatt_server", "Battery percentage"),
         ENTITY_KEY_BATTERY_POWER: ("growatt_server", "Storage charging/discharging"),
+        # From Home Assistant's own growatt_server strings.json
+        # (storage_grid_charged_today), NOT checked against a real install.
+        # TLX/MIN inverters name theirs "Batteries charged from grid today"
+        # (tlx_batteries_charged_from_grid_today) instead -- also
+        # unverified; this dict only holds one name per field, so a TLX
+        # install has to pick it by hand for now.
+        ENTITY_KEY_BATTERY_GRID_CHARGED_DAY: ("growatt_server", "Grid charged today"),
         ENTITY_KEY_PV1_POWER: ("growatt_server", "Input 1 Wattage"),
         ENTITY_KEY_PV2_POWER: ("growatt_server", "Input 2 Wattage"),
         ENTITY_KEY_PV_DIRECT_CONSUMPTION: ("growatt_server", "Solar power production"),

@@ -1,2 +1,34 @@
 {
+  "entity": {
+    "select": {
+      "battery_command": {
+        "state": {
+          "internal": "Intern",
+          "block_battery": "Bloker batteri",
+          "block_charging": "Bloker ladning",
+          "charge_now_25": "Lad nu - 25% effekt",
+          "charge_now_50": "Lad nu - 50% effekt",
+          "charge_now_75": "Lad nu - 75% effekt",
+          "charge_now_100": "Lad nu - 100% effekt",
+          "discharge_now_25": "Aflad nu - 25% effekt",
+          "discharge_now_50": "Aflad nu - 50% effekt",
+          "discharge_now_75": "Aflad nu - 75% effekt",
+          "discharge_now_100": "Aflad nu - 100% effekt"
+        }
+      }
+    },
+    "sensor": {
+      "battery_charge_status": {
+        "state": {
+          "not_calculated": "Ikke beregnet",
+          "yes_today": "Ja (i dag)",
+          "yes_tomorrow": "Ja (i morgen)",
+          "no_charge_needed": "Nej (intet ladebehov)",
+          "no_surplus": "Nej (overskud)",
+          "no_price": "Nej (pris)",
+          "no_deferred": "Nej (udskudt)"
+        }
+      }
+    }
+  }
 }

@@ -43,13 +43,15 @@
               "battery_soc": "Battery SoC",
               "battery_pv_charged": "Battery PV charged",
               "battery_pv_discharged": "Battery PV discharged",
-              "battery_power": "Battery power"
+              "battery_power": "Battery power",
+              "battery_grid_charged_day": "Battery grid charged (day)"
             },
             "data_description": {
               "battery_soc": "The entity that reports your home battery's state of charge (%), e.g. your inverter's battery SoC sensor. Only \"%\"-unit sensors are listed.",
               "battery_pv_charged": "The entity that reports total energy charged into the battery (kWh) from your solar plant, e.g. from your inverter. Only \"kWh\"-unit sensors are listed.",
               "battery_pv_discharged": "The entity that reports total energy discharged from the battery (kWh). Only \"kWh\"-unit sensors are listed.",
-              "battery_power": "The entity that reports the battery's current charge/discharge power (W). Only \"W\"-unit sensors are listed."
+              "battery_power": "The entity that reports the battery's current charge/discharge power (W). Only \"W\"-unit sensors are listed.",
+              "battery_grid_charged_day": "The entity that reports how much energy has been charged into the battery from the grid today (kWh) -- a daily counter that resets at midnight, e.g. your inverter's own \"charge from grid today\" sensor. Only \"kWh\"-unit sensors are listed. Pre-filled automatically from your inverter if it's a supported brand. Used to tell grid-charged battery content from PV-charged."
             }
           },
           "pv_production": {
@@ -180,6 +182,38 @@
     "missing_stromligning": {
       "title": "Strømligning is not installed",
       "description": "PwMngt's \"Spot electricity price\" field (Options -> Solar PV Plant) expects a spot-price sensor (kr/kWh), which normally comes from the **Strømligning** integration. Without it there's nothing to pick for this required field, and the Solar PV Plant wizard can't be completed.\n\nInstall and set up Strømligning (via HACS, or search for it directly in Settings -> Devices & services -> Add integration), then revisit PwMngt's options to pick its price sensor. This warning clears itself automatically once Strømligning is installed."
+    }
+  },
+  "entity": {
+    "select": {
+      "battery_command": {
+        "state": {
+          "internal": "Internal",
+          "block_battery": "Block battery",
+          "block_charging": "Block charging",
+          "charge_now_25": "Charge now - 25% power",
+          "charge_now_50": "Charge now - 50% power",
+          "charge_now_75": "Charge now - 75% power",
+          "charge_now_100": "Charge now - 100% power",
+          "discharge_now_25": "Discharge now - 25% power",
+          "discharge_now_50": "Discharge now - 50% power",
+          "discharge_now_75": "Discharge now - 75% power",
+          "discharge_now_100": "Discharge now - 100% power"
+        }
+      }
+    },
+    "sensor": {
+      "battery_charge_status": {
+        "state": {
+          "not_calculated": "Not calculated",
+          "yes_today": "Yes (today)",
+          "yes_tomorrow": "Yes (tomorrow)",
+          "no_charge_needed": "No (no charge needed)",
+          "no_surplus": "No (surplus)",
+          "no_price": "No (price)",
+          "no_deferred": "No (deferred)"
+        }
+      }
     }
   }
 }
