@@ -22,7 +22,7 @@ from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .base import PwMngtSelectEntityDescription
+from .base import PwMngtSelectEntityDescription, use_description_key_as_translation_key
 from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
 
 LOGGER = logging.getLogger(__name__)
@@ -337,6 +337,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         for description in PwM_CHARGER_CONFIG_SELECTS + PwM_CHARGER_SELECTS:
             entities.append(PwMngtSelect(description, entry, charger))
 
+    use_description_key_as_translation_key(entities)
     async_add_entities(entities)
 
 

@@ -24,7 +24,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_call_later, async_track_state_change_event
 from homeassistant.helpers.restore_state import RestoreEntity
 
-from .base import PwMngtTextEntityDescription
+from .base import PwMngtTextEntityDescription, use_description_key_as_translation_key
 from .const import DOMAIN
 from .devices import CHARGERS, charger_device_info, hub_device_info
 
@@ -114,6 +114,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         for description in PwM_CHARGER_CONFIG_TEXTS:
             entities.append(PwMngtText(description, entry, charger))
 
+    use_description_key_as_translation_key(entities)
     async_add_entities(entities)
 
 

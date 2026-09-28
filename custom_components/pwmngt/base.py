@@ -19,11 +19,37 @@ every new or renamed entity across select.py, text.py, number.py,
 button.py and sensor.py.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from homeassistant.components.number import NumberEntityDescription
 from homeassistant.components.select import SelectEntityDescription
 from homeassistant.components.text import TextEntityDescription
+from homeassistant.helpers.entity import Entity
+
+
+def use_description_key_as_translation_key(entities: Iterable[Entity]) -> None:
+    """Give every entity a translation_key equal to its description key.
+
+    Called by every platform's async_setup_entry() right before
+    async_add_entities(). The point is a stable handle for the frontend:
+    translation_key shows up in the entity registry (and in the frontend's
+    hass.entities), so www/pwm-cards.js can find an entity by
+    (platform "pwmngt", device, translation_key) instead of guessing its
+    entity_id -- which changes with Home Assistant's "_2" de-duplication or
+    whenever the user renames a device (e.g. in the "Name and assign"
+    dialog right after setup).
+
+    No translations exist for these keys (yet), so Home Assistant falls
+    back to each description's own name -- names and entity_ids stay
+    exactly as before. Per-charger entities share a key across chargers
+    (e.g. both chargers' "daily_charge_limit"); the card tells them apart
+    by device.
+    """
+    for entity in entities:
+        description = getattr(entity, "entity_description", None)
+        if description is not None:
+            entity._attr_translation_key = description.key
 
 
 @dataclass

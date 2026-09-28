@@ -23,13 +23,20 @@
  *                           of entities live on the same hub device).
  *
  * Each card's field list mirrors the matching Python entity descriptions
- * (select.py / number.py / text.py) as of this writing, in the same order.
- * This file does NOT discover fields automatically -- if a config field is
- * added, removed, reordered, or renamed in Python, update the matching
- * `fields` array below to match. Automatic discovery (via hass.devices /
- * hass.entities, keyed off the "pwmngt" device identifiers) is a
- * reasonable next step once these hand-written lists get annoying to
- * maintain.
+ * (select.py / number.py / text.py / sensor.py) as of this writing, in the
+ * same order. This file does NOT discover which fields to show -- if a
+ * config field is added, removed, reordered, or renamed in Python, update
+ * the matching `fields` array below to match.
+ *
+ * Entities are never referenced by entity_id here. Each field names the
+ * PwMngt device it lives on ("hub", "pv" or a charger id) plus its Python
+ * description key, and pwmFindEntityId() resolves that through
+ * hass.devices (the "pwmngt" device identifiers) and hass.entities
+ * (platform "pwmngt" + translation_key, which every PwMngt entity sets to
+ * its description key -- see use_description_key_as_translation_key() in
+ * base.py). So the cards keep working when Home Assistant adds a "_2"
+ * suffix, or the user renames a device or an entity -- e.g. in the "Name
+ * and assign" dialog Home Assistant shows right after setup.
  *
  * The one bit of real behaviour these cards implement today: a charger's
  * "Charger identification (Easee serial number)" field is only shown
@@ -97,16 +104,65 @@ const PWM_CARD_STYLE = `
  *
  * Each entry in `fields` looks like:
  *   {
- *     entityId: "select.pwm_charger1_type",
+ *     device: "hub" | "pv" | "charger1" | ...,   // which PwMngt device
+ *     key: "charger1_type",                      // Python description key
  *     label: "Charger1 type",
  *     icon: "mdi:ev-station",
- *     type: "select" | "number" | "text" | "sensor",
- *     hideUnless: { entityId: "...", equals: "Easee" },  // optional
+ *     type: "select" | "number" | "text" | "sensor",   // also the domain
+ *     hideUnless: { device: "hub", key: "...", equals: "Easee" },  // optional, a select
  *   }
  * "sensor" is read-only: it just displays the entity's current state (plus
  * its unit_of_measurement, if any), with no input control and no service
  * call -- for informational fields like a live battery percentage.
  */
+const PWM_DOMAIN = "pwmngt";
+
+/** A device's own "pwmngt" identifier (see devices.py), or undefined. */
+function pwmIdentifier(device) {
+  const pair = (device.identifiers || []).find(([domain]) => domain === PWM_DOMAIN);
+  return pair ? pair[1] : undefined;
+}
+
+/**
+ * The Home Assistant device id of one PwMngt device, found by its
+ * identifiers (devices.py), never by its (user-renamable) name:
+ *   "hub"      -> the PwMngt device with no via_device (hub_device_info())
+ *   "pv"       -> identifier "<entry_id>_pv" (pv_device_info())
+ *   "charger1" -> identifier "charger1" (charger_device_info())
+ */
+function pwmFindDeviceId(hass, deviceRef) {
+  for (const device of Object.values(hass.devices || {})) {
+    const identifier = pwmIdentifier(device);
+    if (identifier === undefined) continue;
+    const matches =
+      deviceRef === "hub"
+        ? !device.via_device_id
+        : deviceRef === "pv"
+          ? String(identifier).endsWith("_pv")
+          : identifier === deviceRef;
+    if (matches) return device.id;
+  }
+  return undefined;
+}
+
+/** entity_id of the PwMngt entity with this device/domain/description key. */
+function pwmFindEntityId(hass, deviceRef, domain, key) {
+  const deviceId = pwmFindDeviceId(hass, deviceRef);
+  if (!deviceId) return undefined;
+  const entity = Object.values(hass.entities || {}).find(
+    (e) =>
+      e.platform === PWM_DOMAIN &&
+      e.device_id === deviceId &&
+      e.translation_key === key &&
+      e.entity_id.startsWith(`${domain}.`)
+  );
+  return entity ? entity.entity_id : undefined;
+}
+
+function pwmFieldDomain(field) {
+  return field.type === "sensor" ? "sensor" : field.type;
+}
+
 class PwMngtBaseCard extends HTMLElement {
   setConfig(config) {
     this._config = config || {};
@@ -138,11 +194,11 @@ class PwMngtBaseCard extends HTMLElement {
     const content = document.createElement("div");
     content.className = "card-content";
 
-    this._rows = {};
+    this._rows = [];
     for (const field of this.fields || []) {
       const row = this._buildRow(field);
       content.appendChild(row.rowEl);
-      this._rows[field.entityId] = row;
+      this._rows.push(row);
     }
 
     card.appendChild(content);
@@ -167,6 +223,11 @@ class PwMngtBaseCard extends HTMLElement {
     const controlWrap = document.createElement("div");
     controlWrap.className = "pwm-row-control";
 
+    // row.entityId/gateEntityId are filled in (and refreshed whenever the
+    // registries change) by _resolveEntityIds(); the listeners below read
+    // row.entityId at call time.
+    const row = { rowEl, controlEl: null, entityId: undefined, gateEntityId: undefined };
+
     let controlEl;
     if (field.type === "sensor") {
       controlEl = document.createElement("span");
@@ -174,8 +235,9 @@ class PwMngtBaseCard extends HTMLElement {
     } else if (field.type === "select") {
       controlEl = document.createElement("select");
       controlEl.addEventListener("change", () => {
+        if (!row.entityId) return;
         this._hass.callService("select", "select_option", {
-          entity_id: field.entityId,
+          entity_id: row.entityId,
           option: controlEl.value,
         });
       });
@@ -183,8 +245,9 @@ class PwMngtBaseCard extends HTMLElement {
       controlEl = document.createElement("input");
       controlEl.type = "number";
       controlEl.addEventListener("change", () => {
+        if (!row.entityId) return;
         this._hass.callService("number", "set_value", {
-          entity_id: field.entityId,
+          entity_id: row.entityId,
           value: Number(controlEl.value),
         });
       });
@@ -193,8 +256,9 @@ class PwMngtBaseCard extends HTMLElement {
       controlEl = document.createElement("input");
       controlEl.type = "text";
       controlEl.addEventListener("change", () => {
+        if (!row.entityId) return;
         this._hass.callService("text", "set_value", {
-          entity_id: field.entityId,
+          entity_id: row.entityId,
           value: controlEl.value,
         });
       });
@@ -202,26 +266,52 @@ class PwMngtBaseCard extends HTMLElement {
     controlWrap.appendChild(controlEl);
 
     rowEl.append(labelEl, controlWrap);
-    return { rowEl, controlEl };
+    row.controlEl = controlEl;
+    return row;
+  }
+
+  /**
+   * Map every field to its current entity_id via pwmFindEntityId(). Only
+   * redone when Home Assistant hands us a new entity or device registry
+   * (hass.entities / hass.devices are replaced, not mutated, on change),
+   * so a rename is picked up without scanning the registry on every
+   * state update.
+   */
+  _resolveEntityIds() {
+    if (
+      this._resolvedEntities === this._hass.entities &&
+      this._resolvedDevices === this._hass.devices
+    ) {
+      return;
+    }
+    this._resolvedEntities = this._hass.entities;
+    this._resolvedDevices = this._hass.devices;
+    (this.fields || []).forEach((field, index) => {
+      const row = this._rows[index];
+      row.entityId = pwmFindEntityId(this._hass, field.device, pwmFieldDomain(field), field.key);
+      row.gateEntityId = field.hideUnless
+        ? pwmFindEntityId(this._hass, field.hideUnless.device, "select", field.hideUnless.key)
+        : undefined;
+    });
   }
 
   _update() {
-    for (const field of this.fields || []) {
-      const row = this._rows[field.entityId];
-      if (!row) continue;
+    this._resolveEntityIds();
+    (this.fields || []).forEach((field, index) => {
+      const row = this._rows[index];
 
       // Visibility, for fields that only apply given another entity's
       // current value (e.g. the Easee-only identification field).
       let visible = true;
       if (field.hideUnless) {
-        const gate = this._hass.states[field.hideUnless.entityId];
+        const gate = row.gateEntityId ? this._hass.states[row.gateEntityId] : undefined;
         visible = !!gate && gate.state === field.hideUnless.equals;
       }
       row.rowEl.classList.toggle("pwm-hidden", !visible);
 
-      const state = this._hass.states[field.entityId];
+      const state = row.entityId ? this._hass.states[row.entityId] : undefined;
       if (!state) {
-        continue; // Entity not available yet -- leave the control as-is.
+        return; // Entity not available yet -- leave the control as-is.
       }
 
       const isBeingEdited = document.activeElement === row.controlEl;
@@ -254,15 +344,16 @@ class PwMngtBaseCard extends HTMLElement {
           row.controlEl.value = state.state;
         }
       }
-    }
+    });
   }
 }
 
 /** Builds one charger-device field descriptor for a given charger id. */
-function chargerField(charger, type, suffix, label, icon, extra) {
+function chargerField(charger, type, key, label, icon, extra) {
   return Object.assign(
     {
-      entityId: `${type}.pwm_${charger}_${suffix}`,
+      device: charger,
+      key,
       label,
       icon,
       type,
@@ -284,7 +375,7 @@ class PwMChargerCard extends PwMngtBaseCard {
       chargerField(
         charger,
         "select",
-        "driving_distance_in_km_per_kwh",
+        "driving_distance_km_per_kwh",
         "Driving distance in Km per KwH",
         "mdi:gauge"
       ),
@@ -304,7 +395,8 @@ class PwMChargerCard extends PwMngtBaseCard {
       // read-only since it's informational context for charging decisions,
       // same placement as "Batteri tilstand" on the old Ladeboks dashboard.
       {
-        entityId: "sensor.pwm_pv_battery_soc",
+        device: "pv",
+        key: "battery_soc",
         label: "Battery SoC",
         icon: "mdi:battery",
         type: "sensor",
@@ -312,10 +404,10 @@ class PwMChargerCard extends PwMngtBaseCard {
       chargerField(
         charger,
         "text",
-        "charger_identification_easee_serial_number",
+        "charger_identification",
         "Charger identification (Easee serial number)",
         "mdi:identifier",
-        { hideUnless: { entityId: `select.pwm_${charger}_type`, equals: "Easee" } }
+        { hideUnless: { device: "hub", key: `${charger}_type`, equals: "Easee" } }
       ),
     ];
     super.setConfig(config);
@@ -340,9 +432,9 @@ customElements.define("pwm-charger-card", PwMChargerCard);
 /**
  * Visual editor for pwm-charger-card: a single "Charger" dropdown, listing
  * every charger device this PwMngt install currently has (discovered via
- * hass.devices, matching on the "pwmngt" device identifier domain and a
- * "PwM Charger..." name) -- so adding a future charger in devices.py needs
- * no change here. Home Assistant wires this up automatically because of
+ * hass.devices, matching on a "pwmngt" device identifier of the form
+ * "charger<N>" -- never the device name, which the user can rename) -- so
+ * adding a future charger in devices.py needs no change here. Home Assistant wires this up automatically because of
  * PwMChargerCard.getConfigElement() above; it just needs to implement
  * setConfig()/set hass() and fire a "config-changed" event on changes.
  * See https://developers.home-assistant.io/docs/frontend/custom-ui/custom-card/#configuration-editor
@@ -360,15 +452,9 @@ class PwMChargerCardEditor extends HTMLElement {
 
   _chargerOptions() {
     if (!this._hass) return ["charger1", "charger2"];
-    const chargerDevices = Object.values(this._hass.devices).filter(
-      (d) =>
-        (d.identifiers || []).some(([domain]) => domain === "pwmngt") &&
-        d.name &&
-        d.name.startsWith("PwM Charger")
-    );
-    const ids = chargerDevices
-      .map((d) => (d.identifiers.find(([domain]) => domain === "pwmngt") || [])[1])
-      .filter(Boolean)
+    const ids = Object.values(this._hass.devices || {})
+      .map((d) => pwmIdentifier(d))
+      .filter((identifier) => /^charger\d+$/.test(String(identifier)))
       .sort();
     return ids.length ? ids : ["charger1", "charger2"];
   }
@@ -420,40 +506,40 @@ class PwMHubCard extends PwMngtBaseCard {
   setConfig(config) {
     this.cardTitle = (config && config.title) || "Power Management Configuration";
     this.fields = [
-      { entityId: "select.pwm_charger1_type", label: "Charger1 type", icon: "mdi:ev-station", type: "select" },
-      { entityId: "select.pwm_charger2_type", label: "Charger2 type", icon: "mdi:ev-station", type: "select" },
+      { device: "hub", key: "charger1_type", label: "Charger1 type", icon: "mdi:ev-station", type: "select" },
+      { device: "hub", key: "charger2_type", label: "Charger2 type", icon: "mdi:ev-station", type: "select" },
       {
-        entityId: "select.pwm_charger_priority",
+        device: "hub", key: "charger_priority",
         label: "Charger priority",
         icon: "mdi:sort-numeric-ascending",
         type: "select",
       },
       {
-        entityId: "select.pwm_minimum_solar_power_to_charge",
+        device: "hub", key: "minimum_solar_power_to_charge",
         label: "Minimum solar power to charge (%)",
         icon: "mdi:solar-power",
         type: "select",
       },
       {
-        entityId: "select.pwm_buffer_minimum_soc",
+        device: "hub", key: "buffer_minimum_soc",
         label: "Buffer minimum SoC",
         icon: "mdi:battery-arrow-down",
         type: "select",
       },
       {
-        entityId: "select.pwm_buffer_maximum_soc",
+        device: "hub", key: "buffer_maximum_soc",
         label: "Buffer maximum SoC",
         icon: "mdi:battery-arrow-up",
         type: "select",
       },
       {
-        entityId: "select.pwm_chargers_max_load_combined",
+        device: "hub", key: "chargers_max_load_combined",
         label: "Chargers max load (Combined)",
         icon: "mdi:fuse",
         type: "select",
       },
       {
-        entityId: "select.pwm_battery_reserve_car_charging",
+        device: "hub", key: "battery_reserve_car_charging",
         label: "Battery reserve car charging",
         icon: "mdi:solar-power-variant",
         type: "select",
@@ -469,26 +555,23 @@ class PwMElectricityCard extends PwMngtBaseCard {
     this.cardTitle = (config && config.title) || "Electricity";
     this.fields = [
       {
-        entityId: "select.pwm_billing_period",
+        device: "hub", key: "billing_period",
         label: "Billing period",
         icon: "mdi:calendar-month",
         type: "select",
       },
       {
-        entityId: "select.pwm_electricity_tax",
+        device: "hub", key: "electricity_tax",
         label: "Electricity tax",
         icon: "mdi:receipt-text",
         type: "select",
       },
       // Note: "Electricity pricing model" / "Fixed price agreement" /
       // "Spot price surcharge" used to be here -- retired, since
-      // sensor.pwm_spot_electricity_price below now covers this (mirrors
+      // the spot electricity price sensor below now covers this (mirrors
       // whatever product is configured in the Stromligning integration).
       {
-        // HA slugifies "(Ampere)" in the display name into an "_ampere"
-        // entity_id suffix -- the description's key alone ("tariff_fuse_
-        // size") is not the real entity_id.
-        entityId: "select.pwm_tariff_fuse_size_ampere",
+        device: "hub", key: "tariff_fuse_size",
         label: "Tariff fuse size (Ampere)",
         icon: "mdi:fuse",
         type: "select",
@@ -496,7 +579,7 @@ class PwMElectricityCard extends PwMngtBaseCard {
       // Read-only: live-mirrors sensor.stromligning_current_price_vat_2
       // (see PwM_HUB_MIRROR_SENSORS in sensor.py). Not editable.
       {
-        entityId: "sensor.pwm_spot_electricity_price",
+        device: "hub", key: "spot_electricity_price",
         label: "Spot electricity price",
         icon: "mdi:cash",
         type: "sensor",
@@ -512,25 +595,25 @@ class PwMPvCard extends PwMngtBaseCard {
     this.cardTitle = (config && config.title) || "Solar PV Plant";
     this.fields = [
       {
-        entityId: "select.pwm_pv_battery_size_kwh",
+        device: "pv", key: "battery_size",
         label: "Battery size (kWh)",
         icon: "mdi:home-battery",
         type: "select",
       },
       {
-        entityId: "select.pwm_pv_history_period_days",
+        device: "pv", key: "history_period_days",
         label: "History period (days)",
         icon: "mdi:history",
         type: "select",
       },
       {
-        entityId: "select.pwm_pv_solar_inverter_max_ac_output_kw",
+        device: "pv", key: "solar_inverter_max_ac_kw",
         label: "Solar inverter max AC output (kW)",
         icon: "mdi:solar-power",
         type: "select",
       },
       {
-        entityId: "select.pwm_pv_pv_battery_price_difference",
+        device: "pv", key: "pv_battery_price_difference",
         label: "PV battery price difference",
         icon: "mdi:currency-usd",
         type: "select",

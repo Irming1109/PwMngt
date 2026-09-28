@@ -40,6 +40,7 @@ from .data.consumption_data import (
     PwMngtConsumptionDataSensor,
     async_remove_legacy_consumption_entities,
 )
+from .base import use_description_key_as_translation_key
 from .helpers.state_helper import read_float_state
 
 LOGGER = logging.getLogger(__name__)
@@ -99,6 +100,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             LOGGER.info("Added charger sensor with entity_id '%s'", entity.entity_id)
             sensors.append(entity)
 
+    use_description_key_as_translation_key(sensors)
     async_add_entities(sensors)
 
 

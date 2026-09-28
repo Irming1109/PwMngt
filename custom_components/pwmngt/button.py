@@ -10,6 +10,7 @@ from homeassistant.components.button import ButtonEntity, ButtonEntityDescriptio
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
+from .base import use_description_key_as_translation_key
 from .devices import CHARGERS, charger_device_info
 
 LOGGER = logging.getLogger(__name__)
@@ -65,6 +66,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         for description in PwM_CHARGER_BUTTONS:
             entities.append(PwMngtButton(description, entry, charger))
 
+    use_description_key_as_translation_key(entities)
     async_add_entities(entities)
 
 
