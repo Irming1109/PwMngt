@@ -766,7 +766,7 @@
   <div class="topbar">
     <span class="eyebrow">PwMngt &middot; Home Assistant custom integration</span>
     <h1>Home Assistant Integration Power Management</h1>
-    <span class="version-chip" id="version-chip">v0.3.20</span>
+    <span class="version-chip" id="version-chip">v0.3.22</span>
   </div>
 
   <div class="crumbrow" id="crumbrow"></div>
@@ -848,7 +848,7 @@
   }
 
   /* ============== CONTENT MODEL ============== */
-  /* Read from the live PwMngt repo (custom_components/pwmngt) as of v0.3.20 (working tree).
+  /* Read from the live PwMngt repo (custom_components/pwmngt) as of v0.3.22 (working tree, Claus's Node-RED export 30-09-2026).
      "segment" is the wizard page a file is filed under here for
      documentation purposes; "deviceKey"/"readsDeviceKey" is the literal HA
      device from the code (see DEVICE_META above) -- they aren't always the
@@ -932,6 +932,22 @@
             note: 'Every value is read per completed day straight from Recorder\'s hourly long-term statistics, so all 30 days are available immediately; a counter without statistics falls back to plain state history (about 10 days). Averages cover the last 7/14/21/30 calendar days (select.&lt;hub&gt;_pv_history_period_days). car_charger_consumption sums every installed charger\'s consumption source (picked on the EV Charging page) and is subtracted in daytime_average_adjusted. Pool heating, PV surplus and heat pump stay None until those segments exist. If a configured source changes, the histories are rebuilt from Recorder.'
           },
           {
+            file: 'solar_data.py', cls: 'PwMngtSolarDataSensor', deviceKey: 'pv',
+            triggers: [
+              { kind: 'time', text: 'Every 20 minutes from 08:00 to 21:00.' },
+              { kind: 'time', text: 'Daily at 06:00, and once shortly after startup.' },
+              { kind: 'entity', text: 'Today\'s PV forecast entity (Solcast) is updated — state or attributes.' },
+              { kind: 'entity', text: 'select.&lt;hub&gt;_pv_battery_size changes.' }
+            ],
+            attributes: [
+              { name: 'pv_forecast_17_21_today', type: 'float (kWh)', example: '0.2' },
+              { name: 'pv_forecast_8_16_today', type: 'float (kWh)', example: '12.4' },
+              { name: 'pv_forecast_8_16_tomorrow', type: 'float (kWh)', example: '19.0' },
+              { name: 'battery_nightly_target (separate sensor)', type: 'float (%)', example: '95' }
+            ],
+            note: 'Port of Claus\'s Node-RED "Strøm beregninger". The state is "Data"; the forecasts are summed per hour from Solcast\'s "detailedHourly". The same run also sets the Battery nightly target sensor: (night consumption 17–06 from consumption_data − PV forecast 17–21 today) × 1.07, plus any shortfall if tomorrow\'s forecast is below night consumption, as % of the battery + 5, kept within 5–95 %. battery_data.py reads it.'
+          },
+          {
             file: 'battery_data.py', cls: 'PwMngtBatteryDataSensor', deviceKey: 'pv',
             triggers: [
               { kind: 'entity', text: 'Battery SoC changes (the source picked on the Solar PV Plant page).' },
@@ -946,14 +962,12 @@
               { name: 'soc_pv', type: 'float (%-points)', example: '30.0' },
               { name: 'soc_cells', type: 'list[float]', example: '[1.84, 1.62, 0.0, …]' },
               { name: 'soc_count', type: 'int', example: '42' },
-              { name: 'total_discharge_pct_cum', type: 'float (%-points)', example: '318.0' },
-              { name: 'grid_discharge_pct_cum', type: 'float (%-points)', example: '57.0' },
               { name: 'forced_charge', type: 'ENUM', example: 'off' },
               { name: 'avg_cheapest_hours', type: 'float (kr/kWh)', example: 'None (not set yet)' },
               { name: 'soc_previous', type: 'float (%)', example: '97.0', internal: true },
               { name: 'grid_charge_previous', type: 'float (kWh)', example: '1.8', internal: true }
             ],
-            note: 'Port of Claus\'s Node-RED "Min_SOC beregning". The state is the minimum SoC the battery may discharge to right now, following a charge curve from 09:00 towards the nightly target by the target end time, with separate rules for November–January. The ledger books every SoC rise as grid- or PV-charged (via the "Battery grid charged (day)" counter, which resets at midnight) and protects grid-bought energy until the target end time and at night when the price is too low. forced_charge is "on" while min_soc is above the current SoC. Calculation only — nothing is written to the inverter. Battery nightly target isn\'t calculated yet, so 5 % is used until it is. Runs at most once per 5 seconds.'
+            note: 'Port of Claus\'s Node-RED "Min_SOC beregning". The state is the minimum SoC the battery may discharge to right now, following a charge curve from 09:00 towards the nightly target by the target end time, with separate rules for November–January. The ledger books every SoC rise as grid- or PV-charged (via the "Battery grid charged (day)" counter, which resets at midnight) and protects grid-bought energy until the target end time and at night when the price is too low. forced_charge is "on" while min_soc is above the current SoC. Calculation only — nothing is written to the inverter. The nightly target comes from solar_data.py. Runs at most once per 5 seconds.'
           }
         ],
         properties: [
@@ -968,7 +982,17 @@
               {
                 entity: '<code>sensor.&lt;hub&gt;_pv_battery_nightly_target</code>',
                 type: 'float (%)',
-                example: '67'
+                example: '95'
+              },
+              {
+                entity: '<code>sensor.&lt;hub&gt;_pv_consumption_data</code> — attribute <code>nighttime_average</code>',
+                type: 'float (kWh)',
+                example: '8.34'
+              },
+              {
+                entity: '<code>select.&lt;hub&gt;_pv_battery_size</code>',
+                type: 'ENUM',
+                example: '8'
               },
               {
                 entity: '<code>sensor.&lt;hub&gt;_pv_battery_charge_status</code>',
