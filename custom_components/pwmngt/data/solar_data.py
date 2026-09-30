@@ -4,17 +4,13 @@ sensor), all from one calculation.
 
 Port of Claus's Node-RED function "Strøm beregninger" (subflow "Sol
 prognose i dag", instanced on tab "Ha data - opsætning"), from Claus's
-export dated 28-09-2026 -- Claus's version is the reference; Kasper's
-own older copy (which wrote 08-16 figures into the sensors named "11_16")
-is deliberately not followed (Kasper, 2026-09-29).
+export dated 30-09-2026 -- Claus's version is the reference.
 
     Node-RED sensor                     PwMngt
     sensor.batteri_target               sensor battery_nightly_target
-    sensor.solproduktion_11_16          solar_data: pv_forecast_11_16_today
+    sensor.solproduktion_8_16           solar_data: pv_forecast_8_16_today
     sensor.solproduktion_imorgen_8_16   solar_data: pv_forecast_8_16_tomorrow
     (internal)                          solar_data: pv_forecast_17_21_today
-    sensor.solproduktion_imorgen_11_16  not ported -- nothing active reads
-                                          it (only Claus's disabled tabs)
 
 Battery nightly target: the battery charge (in %) needed to cover the
 evening/night, i.e.
@@ -106,9 +102,9 @@ PwM_SOLAR_DATA_ATTRIBUTES: dict[str, tuple[str, int, int]] = {
     # 17-21 today. Not a Node-RED sensor -- the figure the target is
     # built from, shown for transparency.
     "pv_forecast_17_21_today": ("today", 17, 21),
-    # 11-16 today. Old: sensor.solproduktion_11_16 (Claus). Read by
+    # 08-16 today. Old: sensor.solproduktion_8_16 (Claus). Read by
     # Claus's "Beregning" (tab "Automatik Styring").
-    "pv_forecast_11_16_today": ("today", 11, 16),
+    "pv_forecast_8_16_today": ("today", 8, 16),
     # 08-16 tomorrow. Old: sensor.solproduktion_imorgen_8_16 (Claus).
     # Read by Claus's "Skal batteri lades".
     "pv_forecast_8_16_tomorrow": ("tomorrow", 8, 16),
@@ -140,7 +136,7 @@ PwM_BATTERY_NIGHTLY_TARGET_SENSORS: list[SensorEntityDescription] = [
 # Legacy entities replaced by solar_data's attributes, removed from the
 # entity registry on setup -- see async_remove_legacy_solar_entities().
 _LEGACY_UNIQUE_ID_SUFFIXES: list[str] = [
-    "pv_pv_forecast_daytime_today",     # now pv_forecast_11_16_today
+    "pv_pv_forecast_daytime_today",     # 11-16 today, not ported
     "pv_pv_forecast_daytime_tomorrow",  # not ported, see the module docstring
 ]
 

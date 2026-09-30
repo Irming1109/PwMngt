@@ -437,9 +437,9 @@ PwM_PV_SCAFFOLD_SENSORS: list[SensorEntityDescription] = [
     # three are now calculated by data/solar_data.py (v0.3.22):
     # battery_nightly_target stays a sensor (same unique_id, so its
     # entity_id is unchanged); the two forecasts are now solar_data
-    # handled by solar_data (pv_forecast_11_16_today is an attribute; the
-    # 11-16 tomorrow figure isn't ported) and the old entities are removed
-    # by async_remove_legacy_solar_entities().
+    # replaced by solar_data (Claus switched both 11-16 windows to 08-16;
+    # see data/solar_data.py) and the old entities are removed by
+    # async_remove_legacy_solar_entities().
     # "forced_charge" (old: input_boolean.tvangslad_batteri) used to be a
     # scaffold sensor here. It's now the "forced_charge" attribute of
     # data/battery_data.py's battery_data sensor (v0.3.21), read through

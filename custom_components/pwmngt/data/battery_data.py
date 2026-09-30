@@ -4,7 +4,7 @@ battery's content came from (grid or PV, and at what price).
 
 Port of Claus's Node-RED function "Min_SOC beregning" (tab "Batteri
 styring NY"), which writes sensor.pv_battery_status. Ported from Claus's
-export dated 28-09-2026. Only the calculation is ported: in Node-RED the
+export dated 30-09-2026. Only the calculation is ported: in Node-RED the
 state is then written to the inverter's own minimum-SoC number (via
 "Batteri status - onsket min_soc" in "Ha data - opsaetning") -- PwMngt
 does not do that; battery_data only computes and shows the value.
@@ -16,10 +16,6 @@ Deliberate differences from Node-RED (each marked "DIFF" below):
   that went down is treated as reset from 0.
 - No run while Battery SoC is unknown. Node-RED fell back to SoC 5, which
   would wipe the whole ledger ("SoC <= 5 means empty").
-- The two cumulative discharge counters really accumulate. In Node-RED
-  the sensor attributes were named "total_afladning_pct_cum;" and
-  "grid_afladning_pct_cum;" (with a stray semicolon), so they were read
-  back as 0 on every run.
 - forced_charge is "on"/"off" (lowercase, what is_forced_charging() and
   Home Assistant expect). Node-RED wrote "On"/"Off" but compared with
   "on"/"off", and read it back from the wrong sensor
@@ -90,11 +86,6 @@ PwM_BATTERY_DATA_ATTRIBUTES: list[str] = [
     "soc_cells",
     # len(soc_cells). Old: "soc_count".
     "soc_count",
-    # Cumulative discharge, in percentage points: everything, and the part
-    # taken from grid-charged content. Old: "total_afladning_pct_cum;" /
-    # "grid_afladning_pct_cum;" (see the module docstring's DIFF list).
-    "total_discharge_pct_cum",
-    "grid_discharge_pct_cum",
     # "on" while min_soc > SoC, i.e. the battery is being charged from the
     # grid on purpose. Read through pv_properties.is_forced_charging().
     # Old: "forced_charge" (and before that input_boolean.tvangslad_batteri).
@@ -222,8 +213,6 @@ class BatteryLedger:
     soc_grid: float = 0.0
     soc_pv: float = 0.0
     soc_cells: list[float] = field(default_factory=list)
-    grid_discharge_pct_cum: float = 0.0
-    total_discharge_pct_cum: float = 0.0
     avg_cheapest_hours: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
@@ -233,8 +222,6 @@ class BatteryLedger:
             "soc_grid": self.soc_grid,
             "soc_pv": self.soc_pv,
             "soc_cells": list(self.soc_cells),
-            "grid_discharge_pct_cum": self.grid_discharge_pct_cum,
-            "total_discharge_pct_cum": self.total_discharge_pct_cum,
             "avg_cheapest_hours": self.avg_cheapest_hours,
         }
 
@@ -246,8 +233,6 @@ class BatteryLedger:
             soc_grid=float(restored.get("soc_grid") or 0.0),
             soc_pv=float(restored.get("soc_pv") or 0.0),
             soc_cells=[float(v) for v in restored.get("soc_cells") or []],
-            grid_discharge_pct_cum=float(restored.get("grid_discharge_pct_cum") or 0.0),
-            total_discharge_pct_cum=float(restored.get("total_discharge_pct_cum") or 0.0),
             avg_cheapest_hours=restored.get("avg_cheapest_hours"),
         )
 
@@ -317,8 +302,6 @@ def calculate_battery_data(
     soc_previous = previous.soc_previous if has_previous else _MIN_SOC_FLOOR
     soc_grid = previous.soc_grid
     soc_pv = previous.soc_pv
-    grid_discharge_pct_cum = previous.grid_discharge_pct_cum
-    total_discharge_pct_cum = previous.total_discharge_pct_cum
     cells = _sort_cells(list(previous.soc_cells))
 
     # ---- Grid counter -------------------------------------------------
@@ -387,7 +370,6 @@ def calculate_battery_data(
     # ---- SoC went down --------------------------------------------------
     if has_previous and soc < soc_previous:
         difference = soc_previous - soc
-        total_discharge_pct_cum += difference
 
         if protect_grid_on_discharge:
             # Use the PV balance first, then grid.
@@ -399,20 +381,16 @@ def calculate_battery_data(
                 soc_pv = 0
             if soc_grid >= difference:
                 soc_grid -= difference
-                grid_discharge_pct_cum += difference
                 difference = 0
             else:
-                grid_discharge_pct_cum += soc_grid
                 difference -= soc_grid
                 soc_grid = 0
         else:
             # Normal order: grid first, then PV.
             if soc_grid >= difference:
                 soc_grid -= difference
-                grid_discharge_pct_cum += difference
                 difference = 0
             else:
-                grid_discharge_pct_cum += soc_grid
                 difference -= soc_grid
                 soc_grid = 0
             if soc_pv >= difference:
@@ -524,8 +502,6 @@ def calculate_battery_data(
         soc_grid=soc_grid,
         soc_pv=soc_pv,
         soc_cells=cells,
-        grid_discharge_pct_cum=grid_discharge_pct_cum,
-        total_discharge_pct_cum=total_discharge_pct_cum,
         avg_cheapest_hours=avg_cheapest_hours,
     )
     return min_soc_rounded, ledger, forced_charge
@@ -766,8 +742,6 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             "soc_pv": round(ledger.soc_pv, 2),
             "soc_cells": [round(v, 4) for v in ledger.soc_cells],
             "soc_count": len(ledger.soc_cells),
-            "total_discharge_pct_cum": round(ledger.total_discharge_pct_cum, 2),
-            "grid_discharge_pct_cum": round(ledger.grid_discharge_pct_cum, 2),
             "forced_charge": forced_charge,
             "avg_cheapest_hours": ledger.avg_cheapest_hours,
             "soc_previous": ledger.soc_previous,
