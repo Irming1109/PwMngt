@@ -70,6 +70,12 @@ Deliberate differences from Node-RED (each marked "DIFF" below):
   "no_deferred". sensor.forventet_produktion_i_morgen is
   ENTITY_KEY_PV_FORECAST_TOMORROW (confirmed the same entity, Claus
   2026-10-14).
+- battery_target (battery_nightly_target) is treated as "not ready yet"
+  (skip the run, see _read_target()) rather than Node-RED's own `|| 0`
+  fallback, which Claus hit in practice: right after a restart, a run
+  before solar_data had computed anything read target as 0 and
+  incorrectly locked in "no_charge_needed" (0% of any battery needs 0
+  charge time).
 Node-RED inputs not carried over because PwMngt doesn't have an
 abstracted equivalent yet, or because they're honestly unused:
 (none -- every input this function's result actually depends on now has
@@ -645,6 +651,14 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         if any(p is None for p in prices):
             return
 
+        battery_target = self._read_target()
+        if battery_target is None:
+            # battery_nightly_target hasn't computed a value yet -- see
+            # _read_target()'s own docstring. Leave the sensor as is and
+            # wait for the next trigger instead of locking in a wrong
+            # result from a 0 that only means "not ready".
+            return
+
         inputs = BatteryChargeInputs(
             prices_tomorrow=prices,  # type: ignore[arg-type]
             battery_max_charge_raw=self._read_float_pv(
@@ -656,7 +670,7 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             expected_solar_tomorrow_8_16=self._read_solar_forecast_tomorrow_8_16(),
             day_consumption=self._read_consumption_daytime_adjusted(),
             battery_size=self._read_float_pv(pv_properties.battery_size_entity_id, 0.0) or 0.0,
-            battery_target=self._read_target(),
+            battery_target=battery_target,
             price_difference_threshold=self._read_float_pv(
                 pv_properties.battery_price_difference_entity_id, _PRICE_DIFFERENCE_FALLBACK
             ),
@@ -682,10 +696,20 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             return default
         return state.state
 
-    def _read_target(self) -> float:
+    def _read_target(self) -> float | None:
+        """None while battery_nightly_target hasn't computed a value yet
+        (typically: solar_data's own coordinator hasn't run once since a
+        restart). DIFF (Claus, 2026-10-14): Node-RED's own fallback here
+        was `|| 0`, same issue as _read_consumption_daytime_adjusted()
+        could have, but Claus hit this one in practice -- right after a
+        restart, this ran before solar_data had computed anything, read
+        target as 0, and incorrectly locked in "no_charge_needed" (0% of
+        any battery needs 0 charge time) instead of waiting for a real
+        value. _run() below now skips the whole run while this is None,
+        same as it already does for missing tomorrow prices, rather than
+        computing a wrong result from a 0 that only means "not ready"."""
         entity_id = pv_properties.battery_nightly_target_entity_id(self.hass, self._entry)
-        value = read_float_state(self.hass.states.get(entity_id)) if entity_id else None
-        return value if value is not None else 0.0
+        return read_float_state(self.hass.states.get(entity_id)) if entity_id else None
 
     def _read_solar_forecast_tomorrow_8_16(self) -> float | None:
         entity_id = pv_properties.solar_data_entity_id(self.hass, self._entry)
