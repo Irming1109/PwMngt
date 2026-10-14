@@ -101,6 +101,19 @@
             "data_description": {
               "spot_electricity_price": "The entity that reports the current spot electricity price (kr/kWh), e.g. from the Strømligning integration. Only \"kr/kWh\"-unit sensors are listed."
             }
+          },
+          "main_fuse": {
+            "name": "Main fuse (optional)",
+            "data": {
+              "main_fuse_load_l1": "Main fuse load L1",
+              "main_fuse_load_l2": "Main fuse load L2",
+              "main_fuse_load_l3": "Main fuse load L3"
+            },
+            "data_description": {
+              "main_fuse_load_l1": "The entity that reports the current load (A) on phase L1 of the property's main fuse. Only \"A\"-unit sensors are listed. Optional -- leave empty (\"Not available\") if you don't have a phase-current meter; the value is then treated as 0.",
+              "main_fuse_load_l2": "The entity that reports the current load (A) on phase L2 of the property's main fuse. Only \"A\"-unit sensors are listed. Optional -- leave empty (\"Not available\") if you don't have a phase-current meter; the value is then treated as 0.",
+              "main_fuse_load_l3": "The entity that reports the current load (A) on phase L3 of the property's main fuse. Only \"A\"-unit sensors are listed. Optional -- leave empty (\"Not available\") if you don't have a phase-current meter; the value is then treated as 0."
+            }
           }
         },
         "data": {
@@ -122,7 +135,10 @@
           "pv_forecast_today": "PV forecast today",
           "pv_forecast_tomorrow": "PV forecast tomorrow",
           "spot_electricity_price": "Spot electricity price",
-          "property_consumption_total": "Total property consumption"
+          "property_consumption_total": "Total property consumption",
+          "main_fuse_load_l1": "Main fuse load L1",
+          "main_fuse_load_l2": "Main fuse load L2",
+          "main_fuse_load_l3": "Main fuse load L3"
         },
         "data_description": {
           "battery_soc": "The entity that reports your home battery's state of charge (%), e.g. your inverter's battery SoC sensor. Only \"%\"-unit sensors are listed.",
@@ -138,7 +154,10 @@
           "pv_forecast_today": "The entity that reports today's forecasted PV production for the whole plant (kWh), e.g. from a solar forecast integration. Only \"kWh\"-unit sensors are listed. Pre-filled automatically if Solcast PV Forecast is installed and unambiguous -- pick a different entity if you don't want that.",
           "pv_forecast_tomorrow": "The entity that reports tomorrow's forecasted PV production for the whole plant (kWh), e.g. from a solar forecast integration. Only \"kWh\"-unit sensors are listed. Pre-filled automatically if Solcast PV Forecast is installed and unambiguous -- pick a different entity if you don't want that.",
           "spot_electricity_price": "The entity that reports the current spot electricity price (kr/kWh), e.g. from the Strømligning integration. Only \"kr/kWh\"-unit sensors are listed.",
-          "property_consumption_total": "The entity that reports the whole property's cumulative energy consumption (kWh) as a raw, ever-increasing lifetime counter -- e.g. your inverter's own lifetime consumption sensor. Only \"kWh\"-unit sensors are listed. Pre-filled automatically from your inverter if it's a supported brand -- pick a different entity if you don't want that. Do not point this at a Daily Utility Meter helper -- PwMngt tracks its own local-midnight reset internally, so it needs the raw, never-resetting counter instead."
+          "property_consumption_total": "The entity that reports the whole property's cumulative energy consumption (kWh) as a raw, ever-increasing lifetime counter -- e.g. your inverter's own lifetime consumption sensor. Only \"kWh\"-unit sensors are listed. Pre-filled automatically from your inverter if it's a supported brand -- pick a different entity if you don't want that. Do not point this at a Daily Utility Meter helper -- PwMngt tracks its own local-midnight reset internally, so it needs the raw, never-resetting counter instead.",
+          "main_fuse_load_l1": "The entity that reports the current load (A) on phase L1 of the property's main fuse. Only \"A\"-unit sensors are listed. Optional -- leave empty (\"Not available\") if you don't have a phase-current meter; the value is then treated as 0.",
+          "main_fuse_load_l2": "The entity that reports the current load (A) on phase L2 of the property's main fuse. Only \"A\"-unit sensors are listed. Optional -- leave empty (\"Not available\") if you don't have a phase-current meter; the value is then treated as 0.",
+          "main_fuse_load_l3": "The entity that reports the current load (A) on phase L3 of the property's main fuse. Only \"A\"-unit sensors are listed. Optional -- leave empty (\"Not available\") if you don't have a phase-current meter; the value is then treated as 0."
         }
       },
       "ev_charging": {
@@ -186,6 +205,12 @@
   },
   "entity": {
     "select": {
+      "battery_mode": {
+        "state": {
+          "auto": "Auto",
+          "manual": "Manual"
+        }
+      },
       "battery_command": {
         "state": {
           "internal": "Internal",

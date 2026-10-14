@@ -36,6 +36,9 @@ from .const import (
     ENTITY_KEY_PV_FORECAST_TOMORROW,
     ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
     ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL,
+    ENTITY_KEY_MAIN_FUSE_LOAD_L1,
+    ENTITY_KEY_MAIN_FUSE_LOAD_L2,
+    ENTITY_KEY_MAIN_FUSE_LOAD_L3,
     DEPENDENCY_SOLCAST_SOLAR,
     DEPENDENCY_STROMLIGNING,
     CHARGER_TYPE_INTEGRATION_DOMAINS,
@@ -77,6 +80,12 @@ _SOLAR_PV_PLANT_FIELDS = [
     # ever-increasing counter with a state_class (so Home Assistant keeps
     # long-term statistics for it), not a Daily Utility Meter helper.
     (ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL, "kWh", True),
+    # Optional -- not every install has a phase-current meter on the main
+    # fuse. Left empty, data/battery_charge_level.py reads each as 0 (the
+    # same fallback Node-RED's own "parseFloat(...) || 0" already used).
+    (ENTITY_KEY_MAIN_FUSE_LOAD_L1, "A", False),
+    (ENTITY_KEY_MAIN_FUSE_LOAD_L2, "A", False),
+    (ENTITY_KEY_MAIN_FUSE_LOAD_L3, "A", False),
 ]
 
 # Unit of measurement for each field above, by entity_map key.
@@ -146,6 +155,15 @@ _SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
         False,
         [
             ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
+        ],
+    ),
+    (
+        "main_fuse",
+        True,  # collapsed by default -- optional, most installs skip it
+        [
+            ENTITY_KEY_MAIN_FUSE_LOAD_L1,
+            ENTITY_KEY_MAIN_FUSE_LOAD_L2,
+            ENTITY_KEY_MAIN_FUSE_LOAD_L3,
         ],
     ),
 ]

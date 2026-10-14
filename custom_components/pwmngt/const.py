@@ -122,6 +122,16 @@ ENTITY_KEY_PV_TOTAL_CONSUMPTION = "pv_total_consumption"
 ENTITY_KEY_GRID_POWER = "grid_power"
 ENTITY_KEY_PV_FORECAST_TODAY = "pv_forecast_today"
 ENTITY_KEY_PV_FORECAST_TOMORROW = "pv_forecast_tomorrow"
+# Current load (A) on each phase of the property's main fuse. Optional --
+# not every installation has a phase-current meter. Read by
+# data/battery_charge_level.py (Bestem ladeeffekt) to cap how many amps
+# the battery charger may add without tripping the main fuse; left empty
+# in Options ("Not available"), each reads as 0 (same fallback Node-RED's
+# own "parseFloat(...) || 0" already used for a missing sensor). Old:
+# sensor.hovedsikring_l1/l2/l3.
+ENTITY_KEY_MAIN_FUSE_LOAD_L1 = "main_fuse_load_l1"
+ENTITY_KEY_MAIN_FUSE_LOAD_L2 = "main_fuse_load_l2"
+ENTITY_KEY_MAIN_FUSE_LOAD_L3 = "main_fuse_load_l3"
 
 # battery_nightly_target and solar_data's PV-forecast attributes are not
 # entity_map fields -- PwMngt computes them internally (see

@@ -25,6 +25,13 @@ def battery_data_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | Non
     return _pv_entity_id(hass, entry, "sensor", "battery_data")
 
 
+def solar_data_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+    """Entity id of data/solar_data.py's solar_data sensor (its
+    "pv_forecast_8_16_tomorrow" etc. attributes -- Old:
+    sensor.solproduktion_imorgen_8_16)."""
+    return _pv_entity_id(hass, entry, "sensor", "solar_data")
+
+
 def is_forced_charging(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Whether battery_data's "forced_charge" attribute (see
     data/battery_data.py) currently reads "on" -- i.e. the battery's
@@ -74,10 +81,36 @@ def battery_command_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | 
     return _pv_entity_id(hass, entry, "select", "battery_command")
 
 
+def battery_mode_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+    """Entity id of select.<pv>_battery_mode (see PwM_PV_CONFIG_SELECTS in
+    select.py) -- Old: select.pv_battery_mode ("Auto"/"Manuel"). Not
+    read by any Node-RED function node itself, but declared there for
+    future use; Claus asked (2026-10-14) that PwMngt actually wire it
+    up: while it's "manual", the whole charge/no-charge automation
+    (data/battery_charge_decision.py and data/battery_charge_level.py)
+    must not run at all."""
+    return _pv_entity_id(hass, entry, "select", "battery_mode")
+
+
+def is_battery_mode_manual(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """True while select.<pv>_battery_mode is "manual". Fails safe to
+    False (i.e. automation runs) if the entity isn't registered or has
+    no state yet -- same reasoning as is_forced_charging() above."""
+    entity_id = battery_mode_entity_id(hass, entry)
+    state = hass.states.get(entity_id) if entity_id else None
+    return state is not None and state.state == "manual"
+
+
 def battery_charge_status_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
     """Entity id of the PV device's Battery charge status sensor (see
     PwM_PV_STATUS_SENSORS in sensor.py)."""
     return _pv_entity_id(hass, entry, "sensor", "battery_charge_status")
+
+
+def battery_max_charge_effect_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+    """Entity id of select.<pv>_battery_max_charge_effect (see
+    PwM_PV_CONFIG_SELECTS in select.py)."""
+    return _pv_entity_id(hass, entry, "select", "battery_max_charge_effect")
 
 
 def battery_price_difference_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:

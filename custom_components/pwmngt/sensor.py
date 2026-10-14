@@ -54,6 +54,11 @@ from .data.battery_data import (
     PwMngtBatteryDataSensor,
     async_remove_legacy_battery_entities,
 )
+from .data.battery_charge_decision import (
+    PwM_BATTERY_CHARGE_DECISION_SENSORS,
+    PwMngtBatteryChargeDecisionSensor,
+)
+from .data.battery_charge_level import PwMngtBatteryChargeLevelController
 from .base import use_description_key_as_translation_key
 from .helpers.state_helper import read_float_state
 
@@ -135,6 +140,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         entity = PwMngtBatteryDataSensor(description, entry)
         LOGGER.info("Added PV battery-data sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
+
+    for description in PwM_BATTERY_CHARGE_DECISION_SENSORS:
+        entity = PwMngtBatteryChargeDecisionSensor(description, entry)
+        LOGGER.info("Added PV battery-charge-decision sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    # Not an entity -- only writes to battery_command (select.py) and
+    # signals battery_charge_decision.py. See data/battery_charge_level.py.
+    charge_level = PwMngtBatteryChargeLevelController(hass, entry)
+    charge_level.async_start()
+    entry.async_on_unload(charge_level.async_stop)
 
     for charger in CHARGERS:
         for description in PwM_CHARGER_SENSORS:
@@ -457,34 +473,10 @@ PwM_PV_SCAFFOLD_SENSORS: list[SensorEntityDescription] = [
 # ---------------------------------------------------------------------------
 
 PwM_PV_STATUS_SENSORS: list[tuple[SensorEntityDescription, str, dict]] = [
-    # Old key="pv_battery_charge" (sensor.pv_battery_charge), from Node-RED.
-    # Old name="Battery charge"
-    # Whether the battery should be charged from the grid, written by
-    # Node-RED's "Skal batteri lades" (not ported yet -- nothing sets this
-    # in PwMngt so far). data/battery_data.py reads the state
-    # ("yes_today" matters) and the avg_cheapest_hours attribute.
-    (
-        SensorEntityDescription(
-            key="battery_charge_status",
-            name="Battery charge status",
-            icon="mdi:battery-charging-outline",
-            device_class=SensorDeviceClass.ENUM,
-            options=[
-                "not_calculated",   # Old: "Ikke beregnet"
-                "yes_today",        # Old: "Ja (i dag)"
-                "yes_tomorrow",     # Old: "Ja (i morgen)"
-                "no_charge_needed", # Old: "Nej (intet ladebehov)"
-                "no_surplus",       # Old: "Nej (overskud)"
-                "no_price",         # Old: "Nej (pris)"
-                "no_deferred",      # Old: "Nej (udskudt)"
-            ],
-            entity_category=EntityCategory.DIAGNOSTIC,
-        ),
-        "not_calculated",
-        # Old attribute "gns_billigste_timer": average price of the
-        # cheapest hours picked for grid charging.
-        {"avg_cheapest_hours": None},
-    ),
+    # "battery_charge_status" (sensor.pv_battery_charge in Node-RED) used
+    # to be a scaffold here. It's now computed by
+    # data/battery_charge_decision.py (Node-RED's "Skal batteri lades"),
+    # v0.3.24.
 ]
 
 

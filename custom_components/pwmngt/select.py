@@ -19,13 +19,23 @@ import logging
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .base import PwMngtSelectEntityDescription, use_description_key_as_translation_key
+from .const import DOMAIN
 from .devices import CHARGERS, charger_device_info, hub_device_info, pv_device_info
 
 LOGGER = logging.getLogger(__name__)
+
+
+def signal_set_battery_command(entry_id: str) -> str:
+    """Dispatcher signal data/battery_charge_level.py sends to set
+    battery_command programmatically (Node-RED: "Bestem ladeeffekt" and
+    the "SOC >= target" gate both write select.pv_batteri_styring
+    directly). Payload: the option to select."""
+    return f"{DOMAIN}_{entry_id}_set_battery_command"
 
 # Shown once, under the main "PwM" hub device's "Configuration" tab --
 # not tied to a specific charger.
@@ -133,6 +143,20 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["Full", "Reduced (electric heating)"],
         default_option="Full",
     ),
+    # Old key="stromafregning" (input_select.stromafregning)
+    # Old name="Strømafregning"
+    # Fixed-price vs. variable (spot) billing. Read by
+    # data/battery_charge_decision.py (Skal batteri lades) -- on a fixed
+    # price there's no price spread to exploit, so it never recommends a
+    # grid charge.
+    PwMngtSelectEntityDescription(
+        key="billing_method",
+        name="Billing method",
+        icon="mdi:cash-sync",
+        entity_category=EntityCategory.CONFIG,
+        options=["Variable", "Fixed price"],
+        default_option="Variable",
+    ),
     # Old key="tarif_sikring" (input_select.tarif_sikring)
     # Old name="Tarifsikring størrelse (Ampere)"
     PwMngtSelectEntityDescription(
@@ -181,6 +205,35 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         entity_category=EntityCategory.CONFIG,
         options=["0", "3", "4", "5", "6", "7", "8", "9", "10"],
         default_option="5",
+    ),
+    # Old key="PV_battery_max_charge_effect" (select.pv_battery_max_charge_effect)
+    # Old name="PV batteri max ladeeffekt"
+    # The battery's max charge power (W). Read by data/battery_charge_decision.py
+    # (Skal batteri lades) and data/battery_charge_level.py (Bestem ladeeffekt)
+    # -- a fixed config value, not a mirror of anything the inverter itself
+    # reports, so it lives here rather than in the entity_map.
+    PwMngtSelectEntityDescription(
+        key="battery_max_charge_effect",
+        name="Battery max charge effect (W)",
+        icon="mdi:lightning-bolt",
+        entity_category=EntityCategory.CONFIG,
+        options=["2800", "6000", "15000"],
+        default_option="6000",
+    ),
+    # Old key="pv_battery_mode" (select.pv_battery_mode), from Node-RED.
+    # Old name="PV battery mode"
+    # Declared in Node-RED but never actually read by any of its function
+    # nodes -- wired up for real here (Claus, 2026-10-14): while this is
+    # "manual", the whole charge/no-charge automation (data/battery_
+    # charge_decision.py and data/battery_charge_level.py) doesn't run at
+    # all; battery_command is then only ever whatever is set by hand.
+    PwMngtSelectEntityDescription(
+        key="battery_mode",
+        name="Battery mode",
+        icon="mdi:toggle-switch-outline",
+        entity_category=EntityCategory.CONFIG,
+        options=["auto", "manual"],
+        default_option="auto",
     ),
     # Old key="pv_batteri_pris_difference"
     # Old name="pv batteri pris difference"
@@ -416,6 +469,7 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
             self._attr_unique_id = f"{entry.entry_id}_{charger['id']}_{description.key}"
             self._attr_device_info = charger_device_info(entry, charger)
         self._attr_current_option = description.default_option
+        self._entry_id = entry.entry_id
 
     async def async_added_to_hass(self) -> None:
         """Restore the last chosen option -- see the class docstring for
@@ -424,6 +478,25 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
         last_state = await self.async_get_last_state()
         if last_state is not None and last_state.state in self.entity_description.options:
             self._attr_current_option = last_state.state
+
+        if self.entity_description.key == "battery_command":
+            # data/battery_charge_level.py ("Bestem ladeeffekt" and the
+            # "SOC >= target" gate) sets this one programmatically.
+            self.async_on_remove(
+                async_dispatcher_connect(
+                    self.hass,
+                    signal_set_battery_command(self._entry_id),
+                    self._handle_set_option,
+                )
+            )
+
+    @callback
+    def _handle_set_option(self, option: str) -> None:
+        if option not in self.entity_description.options:
+            LOGGER.warning("%s: ignoring unknown option '%s'", self.entity_id, option)
+            return
+        self._attr_current_option = option
+        self.async_write_ha_state()
 
     async def async_select_option(self, option: str) -> None:
         """Store the chosen option locally. Functionality is not implemented yet."""

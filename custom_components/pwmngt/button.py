@@ -1,7 +1,8 @@
-"""Button entities for PwMngt chargers.
+"""Button entities for PwMngt.
 
-Scaffolding only: pressing a button logs that it was pressed. No action is
-actually sent anywhere yet -- that comes in a later step.
+The charger buttons below are scaffolding only: pressing one logs that it
+was pressed, no action is actually sent anywhere yet. postpone_battery_charge
+(the PV device's only button so far) is live -- see its own description.
 """
 
 import logging
@@ -9,11 +10,29 @@ import logging
 from homeassistant.components.button import ButtonEntity, ButtonEntityDescription
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 
 from .base import use_description_key_as_translation_key
-from .devices import CHARGERS, charger_device_info
+from .data.battery_charge_decision import signal_postpone_battery_charge
+from .devices import CHARGERS, charger_device_info, pv_device_info
 
 LOGGER = logging.getLogger(__name__)
+
+# Shown once, under the PV device.
+PwM_PV_BUTTONS: list[ButtonEntityDescription] = [
+    # Old key="pv_battery_udskyd" (button.pv_battery_udskyd), from Node-RED.
+    # Old name="Udskyd ladning"
+    # Toggles tonight's grid charge on/off: flips battery_charge_status
+    # (data/battery_charge_decision.py) between "no_deferred" and
+    # "not_calculated", same as Node-RED's own "Udskudt ?" toggle --
+    # see that module's docstring for the exact rule and the midnight
+    # reset.
+    ButtonEntityDescription(
+        key="postpone_battery_charge",
+        name="Postpone battery charge",
+        icon="mdi:pause-circle-outline",
+    ),
+]
 
 PwM_CHARGER_BUTTONS: list[ButtonEntityDescription] = [
     # Old key="ladeboks_1_lad_nat_5" (ladeboks_2_... equivalent for Charger2)
@@ -59,8 +78,11 @@ PwM_CHARGER_BUTTONS: list[ButtonEntityDescription] = [
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
-    """Set up button entities for each configured charger."""
+    """Set up button entities for the PV device and each configured charger."""
     entities = []
+
+    for description in PwM_PV_BUTTONS:
+        entities.append(PwMngtPvButton(description, entry))
 
     for charger in CHARGERS:
         for description in PwM_CHARGER_BUTTONS:
@@ -68,6 +90,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     use_description_key_as_translation_key(entities)
     async_add_entities(entities)
+
+
+class PwMngtPvButton(ButtonEntity):
+    """A PV-device button entity (see PwM_PV_BUTTONS)."""
+
+    _attr_has_entity_name = True
+
+    def __init__(self, description: ButtonEntityDescription, entry: ConfigEntry) -> None:
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
+        self._attr_device_info = pv_device_info(entry)
+        self._entry = entry
+
+    async def async_press(self) -> None:
+        if self.entity_description.key == "postpone_battery_charge":
+            async_dispatcher_send(
+                self.hass, signal_postpone_battery_charge(self._entry.entry_id)
+            )
 
 
 class PwMngtButton(ButtonEntity):

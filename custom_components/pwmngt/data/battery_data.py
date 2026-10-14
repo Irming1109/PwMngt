@@ -4,30 +4,60 @@ battery's content came from (grid or PV, and at what price).
 
 Port of Claus's Node-RED function "Min_SOC beregning" (tab "Batteri
 styring NY"), which writes sensor.pv_battery_status. Ported from Claus's
-export dated 30-09-2026. Only the calculation is ported: in Node-RED the
-state is then written to the inverter's own minimum-SoC number (via
-"Batteri status - onsket min_soc" in "Ha data - opsaetning") -- PwMngt
-does not do that; battery_data only computes and shows the value.
+corrected export (the one superseding the 30-09-2026 export, which
+contained an extra "backup" copy of this function and an unrelated
+relay-switching subflow that are not part of this automation and were
+not ported). Only the calculation is ported: in Node-RED the state is
+then written to the inverter's own minimum-SoC number (via "Batteri
+status - onsket min_soc" in "Ha data - opsaetning") -- PwMngt does not do
+that; battery_data only computes and shows the value.
 
-Deliberate differences from Node-RED (each marked "DIFF" below):
-- The grid counter (ENTITY_KEY_BATTERY_GRID_CHARGED_DAY) resets at local
-  midnight. Node-RED required "counter >= previous" before booking any SoC
-  rise, so the first rise after a reset was silently lost. Here a counter
-  that went down is treated as reset from 0.
-- No run while Battery SoC is unknown. Node-RED fell back to SoC 5, which
-  would wipe the whole ledger ("SoC <= 5 means empty").
+This is meant to be a literal, 100%-identical port, including the
+following Node-RED quirks that are reproduced on purpose rather than
+"fixed":
+- If the "grid charged today" counter is lower than last run's value --
+  which happens every day at local midnight when that counter resets --
+  Node-RED does not treat it as "reset from 0". It simply refuses to
+  book that run's SoC rise as grid OR PV: the rise is silently dropped
+  from the soc_grid/soc_pv/soc_cells ledger (soc_previous still moves
+  forward, so the lost percentage points can never be recovered). This
+  is a known rough edge in Claus's flow, kept here deliberately because
+  an exact port was asked for -- not something to quietly improve.
+- Both "sensor.batteri_soc" and the grid-charged-today sensor must have a
+  real value or the whole run is skipped (no sensor update at all, same
+  as returning null in Node-RED) -- there's no fallback to "SoC 5" or
+  "grid charged 0" the way other, less important inputs get a fallback.
+- Inputs Node-RED reads but never uses in the result (consumption
+  averages, today's/tomorrow's PV forecast, battery size, the
+  "overskud"/"batteri_ledigt" helper values) are not read here either --
+  they don't affect min_soc, soc_grid/pv or the cell ledger in Node-RED.
 - forced_charge is "on"/"off" (lowercase, what is_forced_charging() and
-  Home Assistant expect). Node-RED wrote "On"/"Off" but compared with
-  "on"/"off", and read it back from the wrong sensor
-  (sensor.pv_battery_charge instead of sensor.pv_battery_status), so the
-  "stop forced charge once SoC reaches min_soc" line never ran. It's left
-  out: forced_charge is recomputed as min_soc > SoC on every run anyway,
-  which already gives the same result. There is no latch -- same as
-  Node-RED in practice.
-- Inputs Node-RED read but never used for the result (consumption
-  averages, today's/tomorrow's PV forecast, battery size) are not read.
+  Home Assistant expect) rather than Node-RED's "On"/"Off" -- a spelling
+  choice local to this entity, not a behavioural difference. Node-RED's
+  one latch that reads this value back ("stop forcing once SoC reaches
+  min_soc") is dead code there: by the time it runs, tvangslad is
+  already 0 whenever min_soc <= SoC, so it's left out here too.
 - The per-percent-point cells are one list attribute ("soc_cells"),
   not 100 separate attributes soc_1..soc_100.
+
+New in this export (not present in the previously-ported version):
+- A per-cell price floor. Grid cells bought at a price more than
+  NAT_PRIS_TILLAEG (0.30 kr/kWh) cheaper than *right now*'s price are
+  protected from discharge at night (21:00-05:59); PV cells and grid
+  cells within that margin are free to use. This replaces the old
+  all-or-nothing "protect every grid cell at night" rule.
+- A "restart plan": if the battery command blocks charging
+  ("block_charging") or blocks the battery outright ("block_battery")
+  during 06:00-16:59, that moment (today's date, time of day, SoC) is
+  remembered. While that plan is still "active" (same calendar day,
+  recorded after 09:00), the charge curve (wanted_charge_now) restarts
+  from that point instead of from 09:00/SoC 5 -- so resuming after a
+  daytime block doesn't demand catching up to where the curve "should"
+  already be.
+- The night-time (21:00-05:59) and target-end-time grid protections are
+  now capped (at the current SoC, respectively the target) rather than
+  being able to push min_soc arbitrarily high, and the target-end-time
+  protection no longer applies before 06:00 or during 17:00-20:59.
 
 Triggers (same as Node-RED, see PwMngtBatteryDataSensor): Battery SoC
 changes, Battery nightly target changes (only 00:01-16:59), target end
@@ -97,6 +127,11 @@ PwM_BATTERY_DATA_ATTRIBUTES: list[str] = [
     # "grid_charge_previous".
     "soc_previous",
     "grid_charge_previous",
+    # Running totals of percentage points discharged: from the grid share,
+    # and overall. Never reset except when the battery empties out (SoC
+    # <= 5). Old: "grid_afladning_pct_cum" / "total_afladning_pct_cum".
+    "grid_afladning_pct_cum",
+    "total_afladning_pct_cum",
 ]
 
 PwM_BATTERY_DATA_SENSORS: list[SensorEntityDescription] = [
@@ -125,14 +160,14 @@ _LEGACY_UNIQUE_ID_SUFFIXES: list[str] = [
 _DEFAULT_TARGET = 5.0
 _DEFAULT_TARGET_END_TIME = "16:45"
 _DEFAULT_PRICE = 1.5
-_DEFAULT_PRICE_DIFFERENCE = 0.0
 
 # Charger state (sensor.py, PwM_CHARGER_SENSORS "state") that stops the
 # house battery from discharging. Old: "Aktiv - manuel".
 _CHARGER_STATE_ACTIVE_MANUAL = "Active - manual"
-# Battery command (select.py, "battery_command") that locks the battery
-# at its current SoC. Old: "Bloker ladning".
+# Battery commands (select.py, "battery_command") that pause charging.
+# Old: "Bloker ladning" / "Bloker batteri".
 _COMMAND_BLOCK_CHARGING = "block_charging"
+_COMMAND_BLOCK_BATTERY = "block_battery"
 # Battery charge status (sensor.py, "battery_charge_status") meaning a grid
 # charge is planned later today. Old: "Ja (i dag)".
 _CHARGE_STATUS_YES_TODAY = "yes_today"
@@ -141,8 +176,13 @@ _CHARGE_STATUS_YES_TODAY = "yes_today"
 _MIN_SOC_FLOOR = 5
 _MIN_SOC_CEILING = 90
 
-# Node-RED's charge curve from 09:00 to the target end time: 32 points,
-# the share of (target - 5) the battery should have reached.
+# A grid cell may only be discharged if the current price is at least this
+# much (kr/kWh) above the cell's own purchase price. Old: NAT_PRIS_TILLAEG.
+_NIGHT_PRICE_MARGIN = 0.30
+
+# Node-RED's charge curve from 09:00 (or a later "restart" point, see
+# _restart_plan()) to the target end time: 32 points, the share of
+# (target - start SoC) the battery should have reached.
 _CHARGE_CURVE: tuple[float, ...] = (
     0.05, 0.05, 0.05, 0.05,
     0.06, 0.07, 0.08, 0.09,
@@ -192,13 +232,14 @@ class BatteryInputs:
     target: float
     target_end_time: str  # "HH:MM"
     electricity_price: float
-    price_difference: float
     battery_command: str
     charge_status: str
     # From Battery charge status; None when it has no value (Node-RED: 999).
     avg_cheapest_hours: float | None
-    # Today's grid-charged energy counter (kWh); None when unknown.
-    grid_charged_day: float | None
+    # Today's grid-charged energy counter. Guaranteed not None by the time
+    # this reaches calculate_battery_data() -- PwMngtBatteryDataSensor._run()
+    # skips the whole run otherwise, same as Node-RED's top-of-function guard.
+    grid_charged_day: float
     charger_states: list[str] = field(default_factory=list)
 
 
@@ -214,6 +255,13 @@ class BatteryLedger:
     soc_pv: float = 0.0
     soc_cells: list[float] = field(default_factory=list)
     avg_cheapest_hours: float | None = None
+    grid_afladning_pct_cum: float = 0.0
+    total_afladning_pct_cum: float = 0.0
+    # The "restart plan" (Node-RED: context 'plan_genstart'). None = no
+    # plan recorded yet. plan_date is a "YYYY-MM-DD" local-date string.
+    plan_date: str | None = None
+    plan_start_minutes: float | None = None
+    plan_start_soc: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -223,6 +271,11 @@ class BatteryLedger:
             "soc_pv": self.soc_pv,
             "soc_cells": list(self.soc_cells),
             "avg_cheapest_hours": self.avg_cheapest_hours,
+            "grid_afladning_pct_cum": self.grid_afladning_pct_cum,
+            "total_afladning_pct_cum": self.total_afladning_pct_cum,
+            "plan_date": self.plan_date,
+            "plan_start_minutes": self.plan_start_minutes,
+            "plan_start_soc": self.plan_start_soc,
         }
 
     @classmethod
@@ -234,6 +287,11 @@ class BatteryLedger:
             soc_pv=float(restored.get("soc_pv") or 0.0),
             soc_cells=[float(v) for v in restored.get("soc_cells") or []],
             avg_cheapest_hours=restored.get("avg_cheapest_hours"),
+            grid_afladning_pct_cum=float(restored.get("grid_afladning_pct_cum") or 0.0),
+            total_afladning_pct_cum=float(restored.get("total_afladning_pct_cum") or 0.0),
+            plan_date=restored.get("plan_date"),
+            plan_start_minutes=restored.get("plan_start_minutes"),
+            plan_start_soc=restored.get("plan_start_soc"),
         )
 
 
@@ -261,25 +319,103 @@ def _parse_hh_mm(value: str, fallback: str = _DEFAULT_TARGET_END_TIME) -> int:
     return hours * 60 + minutes
 
 
-def wanted_charge_now(now_minutes: int, target: float, end_minutes: int) -> float:
+def wanted_charge_now(
+    now_minutes: int,
+    target: float,
+    end_minutes: int,
+    start_minutes: int = _CHARGE_CURVE_START_MINUTES,
+    start_soc: float = _MIN_SOC_FLOOR,
+) -> float:
     """The SoC the battery should have reached by now, following
-    _CHARGE_CURVE from 09:00 to the target end time. Node-RED:
+    _CHARGE_CURVE from start_minutes/start_soc to the target end time.
+    start_minutes/start_soc default to 09:00/SoC 5, but a "restart plan"
+    (see _restart_plan()) can move them later in the day. Node-RED:
     calculateCharge()."""
-    if now_minutes < _CHARGE_CURVE_START_MINUTES:
-        return 5.0
+    if now_minutes < start_minutes:
+        return start_soc
     if now_minutes >= end_minutes:
         return target
+    if start_soc >= target:
+        return target
 
-    progress = (now_minutes - _CHARGE_CURVE_START_MINUTES) / (
-        end_minutes - _CHARGE_CURVE_START_MINUTES
-    )
+    progress = (now_minutes - start_minutes) / (end_minutes - start_minutes)
     scaled_index = progress * (len(_CHARGE_CURVE) - 1)
     index_low = math.floor(scaled_index)
     index_high = math.ceil(scaled_index)
     low = _CHARGE_CURVE[index_low]
     high = _CHARGE_CURVE[index_high]
     multiplier = low + (high - low) * (scaled_index - index_low)
-    return (target - 5) * multiplier + 5
+
+    if start_minutes > _CHARGE_CURVE_START_MINUTES:
+        # Restarting later than 09:00: re-normalize so the curve still
+        # runs from 0 to 1 over [start_minutes, end_minutes], instead of
+        # starting partway up the original 09:00 curve.
+        multiplier = (multiplier - _CHARGE_CURVE[0]) / (1 - _CHARGE_CURVE[0])
+
+    return (target - start_soc) * multiplier + start_soc
+
+
+def _discharge_cells(
+    cells: list[float],
+    points_removed: int,
+    price_mode: bool,
+    target_mode: bool,
+    price_floor: float,
+) -> tuple[list[float], int, int]:
+    """Remove up to `points_removed` cells one at a time from `cells`
+    (most expensive grid first, PV last -- see _sort_cells), choosing
+    which cell to remove each time depending on price_mode/target_mode.
+    Returns (remaining cells, cells removed that were grid, cells removed
+    that were PV). Node-RED: the removal loop inside "Min_SOC beregning".
+
+    price_mode: cells priced above price_floor are protected -- use the
+    cheapest *unprotected* grid cell first, then PV, and only once
+    nothing else is left, a protected cell.
+    target_mode: protect all grid cells until the target end time -- use
+    PV first, otherwise the most expensive grid cell.
+    neither: no protection -- most expensive grid cell first.
+    """
+    removed_grid = 0
+    removed_pv = 0
+    for _ in range(points_removed):
+        if not cells:
+            break
+        if price_mode:
+            protected_count = sum(1 for v in cells if v != 0 and v > price_floor)
+            grid_count = sum(1 for v in cells if v != 0)
+            if grid_count > protected_count:
+                idx = protected_count
+            elif cells[-1] == 0:
+                idx = len(cells) - 1
+            else:
+                idx = 0
+        elif target_mode:
+            idx = len(cells) - 1 if cells[-1] == 0 else 0
+        else:
+            idx = 0
+        cell = cells.pop(idx)
+        if cell == 0:
+            removed_pv += 1
+        else:
+            removed_grid += 1
+    return cells, removed_grid, removed_pv
+
+
+def _restart_plan(
+    previous: BatteryLedger,
+    today: str,
+    blocked: bool,
+    now_minutes: int,
+    soc: float,
+) -> tuple[str | None, float | None, float | None]:
+    """The "restart plan" (Node-RED: context 'plan_genstart'): whenever
+    the battery command blocks charging/the battery during 06:00-16:59,
+    remember today's date and the current time/SoC, overwriting whatever
+    was remembered before (even from earlier today). Returns the plan to
+    carry forward (possibly unchanged)."""
+    if blocked and 6 * 60 <= now_minutes <= 16 * 60 + 59:
+        return today, float(now_minutes), soc
+    return previous.plan_date, previous.plan_start_minutes, previous.plan_start_soc
 
 
 def calculate_battery_data(
@@ -297,62 +433,53 @@ def calculate_battery_data(
     soc = inputs.battery_soc
     target = inputs.target
     price = inputs.electricity_price
+    now_minutes = hour * 60 + minute
 
     has_previous = previous.soc_previous is not None
     soc_previous = previous.soc_previous if has_previous else _MIN_SOC_FLOOR
     soc_grid = previous.soc_grid
     soc_pv = previous.soc_pv
     cells = _sort_cells(list(previous.soc_cells))
+    grid_afladning_pct_cum = previous.grid_afladning_pct_cum
+    total_afladning_pct_cum = previous.total_afladning_pct_cum
 
-    # ---- Grid counter -------------------------------------------------
-    # DIFF: a counter lower than last time has been reset (local
-    # midnight), so it's compared from 0. An unknown counter keeps the
-    # previous value and never counts as "went up".
+    # ---- Grid counter (literal: no reset-handling, see module docstring) --
     grid_now = inputs.grid_charged_day
-    grid_prev = previous.grid_charge_previous
-    if grid_now is None:
-        grid_went_up = False
-        grid_charge_to_store = grid_prev
-    elif grid_prev is None:
-        grid_went_up = False
-        grid_charge_to_store = grid_now
-    elif grid_now < grid_prev:
-        grid_went_up = grid_now > 0
-        grid_charge_to_store = grid_now
-    else:
-        grid_went_up = grid_now > grid_prev
-        grid_charge_to_store = grid_now
+    grid_prev = previous.grid_charge_previous if previous.grid_charge_previous is not None else 0.0
 
-    # ---- Time helpers ---------------------------------------------------
+    # ---- Time helpers -----------------------------------------------------
     end_minutes = _parse_hh_mm(inputs.target_end_time)
-    now_minutes = hour * 60 + minute
     before_target_end = now_minutes < end_minutes
+    is_evening_free_window = 17 <= hour < 21  # Node-RED: er_17_21
 
-    # ---- Protect grid-bought energy when discharging right now? ---------
-    # Yes if there are grid cells and either (a) it's before the target end
-    # time, or (b) it's night (21-05) and the price isn't high enough to
-    # make using them worth it. Based on the cells as loaded, before this
-    # run's rise/fall.
+    # Night price-protection window (21:00-05:59). Node-RED also has a
+    # 17:00-20:59 branch guarded by FRI_17_21_UANSET_PRIS, but that
+    # constant is hardcoded true there -- meaning 17-21 is always free --
+    # so that branch can never fire and is left out here.
+    price_period = hour >= 21 or hour <= 5
+    price_floor = price - _NIGHT_PRICE_MARGIN
+
+    vinter = month in (11, 12, 1)  # November, December, January
+    # Protect grid-bought energy until the target end time, but only from
+    # 06:00 and never during the free 17:00-20:59 window.
+    target_protection_active = before_target_end and hour >= 6 and not is_evening_free_window
+
+    # ---- Which discharge rule applies this run, based on the cells as
+    # loaded (before this run's rise/fall -- rise and fall are mutually
+    # exclusive, so this is also "as they are right now" either way). ----
     grid_cells_at_start = [v for v in cells if v != 0]
-    cheapest_grid_at_start = min(grid_cells_at_start) if grid_cells_at_start else None
-    night_with_cheap_grid = (
-        (hour >= 21 or hour <= 5)
-        and cheapest_grid_at_start is not None
-        and price < cheapest_grid_at_start + inputs.price_difference
-    )
-    protect_grid_on_discharge = bool(grid_cells_at_start) and (
-        before_target_end or night_with_cheap_grid
-    )
+    target_mode = target_protection_active and bool(grid_cells_at_start)
+    price_mode = price_period and any(v > price_floor for v in grid_cells_at_start)
 
-    # ---- SoC went up: from grid or PV? ----------------------------------
-    # DIFF: Node-RED also required "counter >= previous" here (see
-    # "Grid counter" above); a reset counter no longer blocks the booking.
-    soc_rose = has_previous and soc > soc_previous
+    # ---- SoC went up: from grid or PV? (literal Node-RED semantics: a
+    # grid counter that reads lower than last run blocks booking the rise
+    # at all, see module docstring) -----------------------------------
+    soc_rose = has_previous and soc > soc_previous and grid_now >= grid_prev
     rise_is_grid = False
     if soc_rose:
         if hour >= 23 or hour <= 4:
             rise_is_grid = True
-        elif grid_went_up:
+        elif grid_now > grid_prev:
             rise_is_grid = True
 
     if soc_rose:
@@ -367,53 +494,67 @@ def calculate_battery_data(
             cells.append(price if rise_is_grid else 0.0)
         cells = _sort_cells(cells)
 
-    # ---- SoC went down --------------------------------------------------
+    # ---- SoC went down -----------------------------------------------
     if has_previous and soc < soc_previous:
         difference = soc_previous - soc
+        total_afladning_pct_cum += difference
 
-        if protect_grid_on_discharge:
-            # Use the PV balance first, then grid.
-            if soc_pv >= difference:
-                soc_pv -= difference
-                difference = 0
-            else:
-                difference -= soc_pv
-                soc_pv = 0
-            if soc_grid >= difference:
-                soc_grid -= difference
-                difference = 0
-            else:
-                difference -= soc_grid
-                soc_grid = 0
-        else:
-            # Normal order: grid first, then PV.
-            if soc_grid >= difference:
-                soc_grid -= difference
-                difference = 0
-            else:
-                difference -= soc_grid
-                soc_grid = 0
-            if soc_pv >= difference:
-                soc_pv -= difference
-                difference = 0
-            else:
-                difference -= soc_pv
-                soc_pv = 0
+        cells, removed_grid, removed_pv = _discharge_cells(
+            cells, math.ceil(difference), price_mode, target_mode, price_floor
+        )
 
-        points_removed = soc_previous - soc
-        for _ in range(math.ceil(points_removed)):
-            if not cells:
-                break
-            if protect_grid_on_discharge and cells[-1] == 0:
-                cells.pop()  # a PV cell (last), to protect grid
-            else:
-                cells.pop(0)  # the most expensive grid cell (first)
+        # The sums follow what was actually removed from the cell list,
+        # so they can't drift out of sync with it.
+        g = min(soc_grid, removed_grid)
+        soc_grid -= g
+        grid_afladning_pct_cum += g
+        soc_pv -= min(soc_pv, removed_pv)
 
-    # Battery empty: start the ledger over.
+        # Any remainder that couldn't be found in the cell list (e.g.
+        # missing cell data): fall back to the old sum-only logic.
+        rest = difference - removed_grid - removed_pv
+        if rest > 0:
+            pv_first = price_mode or target_mode
+
+            def take_pv() -> None:
+                nonlocal soc_pv, rest
+                taken = min(soc_pv, rest)
+                soc_pv -= taken
+                rest -= taken
+
+            def take_grid() -> None:
+                nonlocal soc_grid, grid_afladning_pct_cum, rest
+                taken = min(soc_grid, rest)
+                soc_grid -= taken
+                grid_afladning_pct_cum += taken
+                rest -= taken
+
+            if pv_first:
+                take_pv()
+                take_grid()
+            else:
+                take_grid()
+                take_pv()
+
+    # Battery empty: start the ledger over (running totals untouched).
     if soc <= _MIN_SOC_FLOOR:
         soc_grid = 0.0
         soc_pv = 0.0
         cells = []
+
+    # ---- Restart plan (see _restart_plan()) ---------------------------
+    blocked = inputs.battery_command in (_COMMAND_BLOCK_CHARGING, _COMMAND_BLOCK_BATTERY)
+    today = inputs.now.strftime("%Y-%m-%d")
+    plan_date, plan_start_minutes, plan_start_soc = _restart_plan(
+        previous, today, blocked, now_minutes, soc
+    )
+    plan_active = (
+        plan_date == today
+        and plan_start_minutes is not None
+        and plan_start_minutes > _CHARGE_CURVE_START_MINUTES
+    )
+    curve_start_minutes = int(plan_start_minutes) if plan_active else _CHARGE_CURVE_START_MINUTES
+    curve_start_soc = plan_start_soc if plan_active else _MIN_SOC_FLOOR
 
     # ---- Minimum SoC ----------------------------------------------------
     manual_charger_active = _CHARGER_STATE_ACTIVE_MANUAL in inputs.charger_states
@@ -421,9 +562,9 @@ def calculate_battery_data(
     grid_charge_planned_today = inputs.charge_status == _CHARGE_STATUS_YES_TODAY
 
     min_soc: float = _MIN_SOC_FLOOR
-    if month not in (11, 12, 1):
+    if not vinter:
         # February - October.
-        wanted = wanted_charge_now(now_minutes, target, end_minutes)
+        wanted = wanted_charge_now(now_minutes, target, end_minutes, curve_start_minutes, curve_start_soc)
 
         # 06-08: use the battery in the morning.
         if 6 <= hour <= 8:
@@ -464,7 +605,10 @@ def calculate_battery_data(
         min_soc = soc
         if hour >= 17:
             min_soc = _MIN_SOC_FLOOR
-        if hour <= 6 and target <= 85:
+        # The night (00-06) is always released, regardless of target --
+        # grid-bought power is protected by the price-protection block
+        # below instead.
+        if hour <= 6:
             min_soc = _MIN_SOC_FLOOR
         min_soc = min(min_soc, _MIN_SOC_CEILING)
         min_soc = max(min_soc, _MIN_SOC_FLOOR)
@@ -473,21 +617,31 @@ def calculate_battery_data(
             min_soc = soc
 
     # ---- Protect grid-bought energy until the target end time -----------
-    # Can only raise min_soc. Uses the cells after this run's rise/fall.
-    if before_target_end:
+    # Can only raise min_soc, and never above the target. Uses the cells
+    # after this run's rise/fall.
+    if target_protection_active:
         grid_cells = [v for v in cells if v != 0]
         if grid_cells:
-            min_soc = max(min_soc, _MIN_SOC_FLOOR + len(grid_cells))
+            protected_floor = min(_MIN_SOC_FLOOR + len(grid_cells), target)
+            min_soc = max(min_soc, protected_floor)
 
-    # ---- Evening/night price protection (21-05) -------------------------
-    # Grid cells may only be used when the price is high enough above the
-    # cheapest remaining grid cell. Can only raise min_soc.
-    if hour >= 21 or hour <= 5:
-        grid_cells = [v for v in cells if v != 0]
-        if grid_cells and price < min(grid_cells) + inputs.price_difference:
-            min_soc = max(min_soc, _MIN_SOC_FLOOR + len(grid_cells))
+    # ---- Night price protection (21:00-05:59) ----------------------------
+    # Only the grid cells priced above price_floor are protected. Can only
+    # raise min_soc, and never above the current SoC (so this can never
+    # by itself demand buying more power).
+    if price_period:
+        protected_cells = [v for v in cells if v != 0 and v > price_floor]
+        if protected_cells:
+            protected_floor = min(_MIN_SOC_FLOOR + len(protected_cells), soc)
+            min_soc = max(min_soc, protected_floor)
 
-    forced_charge = "on" if min_soc > soc else "off"
+    # In winter, min_soc may never be raised above the current SoC --
+    # these two protections can only move it back down to SoC, never
+    # trigger a forced charge.
+    if vinter:
+        min_soc = max(_MIN_SOC_FLOOR, min(min_soc, soc))
+
+    forced_charge = "on" if (not vinter and min_soc > soc) else "off"
     min_soc_rounded = _js_round(min_soc)
 
     avg_cheapest_hours = (
@@ -498,11 +652,16 @@ def calculate_battery_data(
 
     ledger = BatteryLedger(
         soc_previous=soc,
-        grid_charge_previous=grid_charge_to_store,
+        grid_charge_previous=grid_now,
         soc_grid=soc_grid,
         soc_pv=soc_pv,
         soc_cells=cells,
         avg_cheapest_hours=avg_cheapest_hours,
+        grid_afladning_pct_cum=grid_afladning_pct_cum,
+        total_afladning_pct_cum=total_afladning_pct_cum,
+        plan_date=plan_date,
+        plan_start_minutes=plan_start_minutes,
+        plan_start_soc=plan_start_soc,
     )
     return min_soc_rounded, ledger, forced_charge
 
@@ -567,8 +726,8 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         if not self._grid_charged_entity_id:
             LOGGER.warning(
                 "PwMngt: no 'Battery grid charged (day)' entity configured "
-                "(Options -> Solar PV Plant) -- '%s' only books SoC rises "
-                "between 23:00 and 04:59 as grid-charged",
+                "(Options -> Solar PV Plant) -- '%s' will stay unavailable, "
+                "same as Node-RED's own guard on this input",
                 self.entity_description.key,
             )
 
@@ -697,8 +856,18 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
 
         soc = read_float_state(self.hass.states.get(self._soc_entity_id))
         if soc is None:
-            # DIFF: Node-RED fell back to 5 here, which would empty the
-            # whole ledger. Skip the run instead.
+            # Node-RED: return null if sensor.batteri_soc is
+            # unavailable/unknown/undefined. No fallback -- skip the run.
+            return
+
+        grid_charged_day = (
+            read_float_state(self.hass.states.get(self._grid_charged_entity_id))
+            if self._grid_charged_entity_id
+            else None
+        )
+        if grid_charged_day is None:
+            # Node-RED: return null if sensor.batteri_ladet_fra_grid_pr_dag
+            # is unavailable/unknown/undefined. No fallback -- skip the run.
             return
 
         inputs = BatteryInputs(
@@ -711,9 +880,6 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
                 pv_properties.battery_target_end_time_entity_id, _DEFAULT_TARGET_END_TIME
             ),
             electricity_price=self._read_float(self._price_entity_id, _DEFAULT_PRICE),
-            price_difference=self._read_float_pv(
-                pv_properties.battery_price_difference_entity_id, _DEFAULT_PRICE_DIFFERENCE
-            ),
             battery_command=self._read_state_pv(
                 pv_properties.battery_command_entity_id, ""
             ),
@@ -721,11 +887,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
                 pv_properties.battery_charge_status_entity_id, ""
             ),
             avg_cheapest_hours=self._read_avg_cheapest_hours(),
-            grid_charged_day=(
-                read_float_state(self.hass.states.get(self._grid_charged_entity_id))
-                if self._grid_charged_entity_id
-                else None
-            ),
+            grid_charged_day=grid_charged_day,
             charger_states=[
                 state.state
                 for entity_id in self._charger_state_entity_ids()
@@ -746,6 +908,8 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             "avg_cheapest_hours": ledger.avg_cheapest_hours,
             "soc_previous": ledger.soc_previous,
             "grid_charge_previous": ledger.grid_charge_previous,
+            "grid_afladning_pct_cum": round(ledger.grid_afladning_pct_cum, 2),
+            "total_afladning_pct_cum": round(ledger.total_afladning_pct_cum, 2),
         }
         self._attr_available = True
         self.async_write_ha_state()
