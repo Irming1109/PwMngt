@@ -58,11 +58,15 @@ LOGGER = logging.getLogger(__name__)
 #   -> attribute "balance_15_min_corrected_with_chargers"
 # Old key="balance_30_min" (sensor.balance_30_min) -> attribute "balance_30_min"
 #
-# "_corrected" is currently just "balance_15_min" (PV Surplus correction,
-# old: mining correction, not implemented yet). "_corrected_with_chargers"
-# is genuinely computed from PwM Charger1/2's Power sensors, but reads
-# the same until those sensors have live values (still scaffolding --
-# see PwM_CHARGER_SENSORS in sensor.py).
+# "_corrected" currently reads the same as "balance_15_min" (the
+# mining/pool-heat-pump self-consumption correction from Node-RED isn't
+# ported yet -- planned for later). "_corrected_with_chargers" chains off
+# of "_corrected" (not the raw balance_15_min), specifically so it picks
+# up that correction automatically once it lands, rather than needing a
+# matching update here. It's genuinely computed from PwM Charger1/2's
+# Power sensors, but reads the same as "_corrected" until those sensors
+# have live values (still scaffolding -- see PwM_CHARGER_SENSORS in
+# sensor.py).
 # ---------------------------------------------------------------------------
 PwM_BALANCE_DATA_ATTRIBUTES: list[str] = [
     "balance_30_sec",
@@ -151,12 +155,22 @@ def calculate_balance(
         key: round(-(sum(status_samples[-window:]) / window))
         for key, window in _BALANCE_WINDOW_SAMPLES.items()
     }
-    values["balance_15_min_corrected"] = values["balance_15_min"]
 
+    # "Corrected" is meant to add back self-consumption (mining, pool heat
+    # pump, ...) that shouldn't count against the grid balance -- not
+    # implemented yet, so corrected_sum is just the raw 15-min sum for
+    # now and balance_15_min_corrected reads the same as balance_15_min.
+    # Built from its own sum (rather than reusing balance_15_min's
+    # already-rounded value) so that balance_15_min_corrected_with_chargers
+    # below chains off of it, and automatically picks up that correction
+    # once it's added here, instead of needing its own update.
     corrected_window_samples = _BALANCE_WINDOW_SAMPLES["balance_15_min"]
-    combined = sum(status_samples[-corrected_window_samples:]) - sum(
-        charger_samples[-corrected_window_samples:]
+    corrected_sum = sum(status_samples[-corrected_window_samples:])
+    values["balance_15_min_corrected"] = round(
+        -(corrected_sum / corrected_window_samples)
     )
+
+    combined = corrected_sum - sum(charger_samples[-corrected_window_samples:])
     values["balance_15_min_corrected_with_chargers"] = round(
         -(combined / corrected_window_samples)
     )

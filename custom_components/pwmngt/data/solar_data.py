@@ -11,6 +11,13 @@ export dated 30-09-2026 -- Claus's version is the reference.
     sensor.solproduktion_8_16           solar_data: pv_forecast_8_16_today
     sensor.solproduktion_imorgen_8_16   solar_data: pv_forecast_8_16_tomorrow
     (internal)                          solar_data: pv_forecast_17_21_today
+    sensor.udsving_60min                solar_data: pv_big_shifts_last_60min
+
+pv_big_shifts_last_60min: a separate Node-RED flow ("Antal store skift i
+PV produktion den seneste time") ported into this same solar_data
+sensor rather than a sensor of its own -- see data/pv_shift_data.py for
+the actual shift-detection logic and PwMngtSolarDataCoordinator's
+_sample_pv_shift() below for its 10-second sampling.
 
 Battery nightly target: the battery charge (in %) needed to cover the
 evening/night, i.e.
@@ -57,7 +64,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
@@ -88,10 +95,16 @@ from ..devices import pv_device_info
 from ..helpers.state_helper import read_float_state
 from ..properties import pv_properties
 from . import DATA_SENSOR_STATE
+from .pv_shift_data import PvShiftState, step_pv_shift_detection
 
 LOGGER = logging.getLogger(__name__)
 
 KEY_BATTERY_NIGHTLY_TARGET = "battery_nightly_target"
+
+# Old key="udsving_60min" (sensor.udsving_60min) -- see data/pv_shift_data.py.
+# Lives as a solar_data attribute instead of its own sensor, same reasoning
+# as PwM_SOLAR_DATA_ATTRIBUTES below.
+KEY_PV_BIG_SHIFTS_LAST_60MIN = "pv_big_shifts_last_60min"
 
 # ---------------------------------------------------------------------------
 # solar_data attributes: forecast PV energy (kWh) for a part of the day,
@@ -153,6 +166,7 @@ _PERIODIC_MINUTES = [0, 20, 40]
 _LAST_PERIODIC_HOUR = 21               # plus 21:00, see the module docstring
 _DAILY_HOUR = 6                        # Node-RED cron "00 06 * * *"
 _STARTUP_DELAY_SECONDS = 10
+_PV_SHIFT_SAMPLE_INTERVAL = timedelta(seconds=10)
 
 
 @callback
@@ -281,6 +295,8 @@ class PwMngtSolarDataCoordinator(DataUpdateCoordinator[dict[str, float | None]])
         self._unsubscribers: list = []
         self._battery_size_unsub = None
         self.data = {}
+        self._pv_total_entity_id: str | None = None
+        self._pv_shift_state = PvShiftState()
 
     async def _async_update_data(self) -> dict[str, float | None]:
         """Only used by a manual refresh (e.g. homeassistant.update_entity):
@@ -328,6 +344,11 @@ class PwMngtSolarDataCoordinator(DataUpdateCoordinator[dict[str, float | None]])
                     EVENT_HOMEASSISTANT_STARTED, self._handle_startup
                 )
             )
+        self._unsubscribers.append(
+            event.async_track_time_interval(
+                self.hass, self._sample_pv_shift, _PV_SHIFT_SAMPLE_INTERVAL
+            )
+        )
 
     @callback
     def async_stop(self) -> None:
@@ -351,6 +372,7 @@ class PwMngtSolarDataCoordinator(DataUpdateCoordinator[dict[str, float | None]])
                 self.hass, [battery_size_entity_id], self._handle_trigger
             )
         self._run()
+        self._sample_pv_shift()
 
     @callback
     def _handle_trigger(self, _event_or_time=None) -> None:
@@ -384,6 +406,32 @@ class PwMngtSolarDataCoordinator(DataUpdateCoordinator[dict[str, float | None]])
             today_hourly=today_hourly,
             tomorrow_hourly=tomorrow_hourly,
             tomorrow_total=tomorrow_total,
+        )
+
+    @callback
+    def _sample_pv_shift(self, _now=None) -> None:
+        """10-second sample tick for data/pv_shift_data.py -- resolves
+        PV total's entity_id lazily (it's a PwMngt-computed sensor, not
+        in entity_map, so it may not be registered yet on the very first
+        tick), feeds its current value through step_pv_shift_detection(),
+        and merges the resulting count into solar_data's attributes.
+        """
+        entity_id = self._pv_total_entity_id or pv_properties.pv_total_entity_id(
+            self.hass, self._entry
+        )
+        if entity_id is None:
+            return
+        self._pv_total_entity_id = entity_id
+
+        production = read_float_state(self.hass.states.get(entity_id))
+        if production is None:
+            return
+
+        self._pv_shift_state, big_shifts = step_pv_shift_detection(
+            self._pv_shift_state, production, dt_util.utcnow()
+        )
+        self.async_set_updated_data(
+            {**(self.data or {}), KEY_PV_BIG_SHIFTS_LAST_60MIN: big_shifts}
         )
 
     def _read_night_consumption(self) -> float | None:
@@ -434,7 +482,11 @@ class PwMngtSolarDataSensor(_PwMngtSolarEntity):
     @property
     def extra_state_attributes(self) -> dict[str, float | None]:
         data = self.coordinator.data or {}
-        return {key: data.get(key) for key in PwM_SOLAR_DATA_ATTRIBUTES}
+        attributes = {key: data.get(key) for key in PwM_SOLAR_DATA_ATTRIBUTES}
+        attributes[KEY_PV_BIG_SHIFTS_LAST_60MIN] = data.get(
+            KEY_PV_BIG_SHIFTS_LAST_60MIN
+        )
+        return attributes
 
 
 class PwMngtBatteryNightlyTargetSensor(_PwMngtSolarEntity):

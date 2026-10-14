@@ -32,6 +32,13 @@ def solar_data_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
     return _pv_entity_id(hass, entry, "sensor", "solar_data")
 
 
+def pv_total_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+    """Entity id of sensor.<pv>_pv_total (see PwM_PV_SUM_SENSORS in
+    sensor.py) -- the live sum of PV1/PV2/PV3 power. Read by
+    data/pv_shift_data.py."""
+    return _pv_entity_id(hass, entry, "sensor", "pv_total")
+
+
 def is_forced_charging(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Whether battery_data's "forced_charge" attribute (see
     data/battery_data.py) currently reads "on" -- i.e. the battery's
