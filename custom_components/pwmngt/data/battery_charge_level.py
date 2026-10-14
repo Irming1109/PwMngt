@@ -21,10 +21,10 @@ flow export, not guessed):
 - Hourly, every hour on the hour, all day (inject "Time", crontab
   "0 0-23 * * *") -> a fixed 30 s delay -> read battery_charge_status
   ("Status") -> only if it's "yes_today" ("Ja (i dag)") -> another fixed
-  30 s delay -> run. (The companion "not_calculated" branch there, which
-  instead re-runs "Skal batteri lades" itself within 14:00-23:30, is the
-  one piece of that graph deliberately left unported -- see
-  data/battery_charge_decision.py's module docstring.)
+  30 s delay -> run. (The companion "not_calculated"/"yes_today" branch
+  there instead re-runs "Skal batteri lades" itself within 14:00-23:30 --
+  that's a separate hourly chain on "Skal batteri lades"' own tab, ported
+  in data/battery_charge_decision.py's own hourly nudge, not this one.)
 - "Hovedsikring overvågning": any of the three main-fuse-load sensors
   (ENTITY_KEY_MAIN_FUSE_LOAD_L1/L2/L3) reaching >= 20 A, while
   battery_command is already one of the charge_now_* options AND

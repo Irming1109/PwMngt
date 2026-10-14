@@ -14,14 +14,21 @@ see data/battery_charge_level.py's own docstring for the matching gate
 on the actuation side. _handle_midnight() and the postpone button are
 NOT gated by it -- see _handle_midnight()'s own docstring.
 
-One piece of data/battery_charge_level.py's own hourly trigger chain
-loops back here: when its "Status" read comes back "not_calculated"
-instead of "yes_today", Node-RED's companion branch (switch
-5c8b46b117d60fef -> time-range-switch 539e00bafbeb80df, 14:00-23:30) is
-meant to re-run "Skal batteri lades" itself -- deliberately left
-unported (not wired anywhere in this module either), so a stale
-"not_calculated" during that window just waits for the normal
-recompute triggers below instead of also getting an hourly nudge.
+Hourly nudge (Claus, 2026-10-14: "min node red forsøgte at beregne hver
+hele klokketime" -- traced from the flow export, not guessed): on the
+*same* tab as "Skal batteri lades" itself, Node-RED has its own inject
+"Time" (cron "0 0-23 * * *", every hour on the hour) -> a fixed 30 s
+delay -> read battery_charge_status ("Status") -> switch (only if it's
+"not_calculated" or "yes_today") -> time-range-switch 539e00bafbeb80df
+(14:00-23:30) -> a further fixed 5 s delay -> straight back into "Skal
+batteri lades". So a stuck "not_calculated" (or an already-decided
+"yes_today" worth re-validating as the evening's prices/surplus data
+firms up) gets re-tried every hour through the afternoon/evening,
+instead of only on the evening-window triggers below or at midnight.
+This is a separate chain from data/battery_charge_level.py's own hourly
+trigger (different tab, different purpose -- that one re-runs "Bestem
+ladeeffekt", not "Skal batteri lades"), even though both happen to use
+the same Node-RED cron pattern and a fixed 30 s first delay.
 
 Deliberate differences from Node-RED (each marked "DIFF" below):
 - The "Udskyd ladning" (postpone) button (button.py's
@@ -173,6 +180,14 @@ _DAILY_TRIGGER_HOUR = 23  # Node-RED: inject "Kl 23", cron "00 23 * * *".
 # docstring.
 _FORECAST_TOMORROW_THRESHOLD = 1.0
 _SKIP_RECOMPUTE_STATUSES = {"not_calculated", "no_price", "no_deferred"}
+
+# Hourly nudge (see module docstring). Node-RED: switch comparing against
+# "Ikke beregnet"/"Ja (i dag)", then time-range-switch 539e00bafbeb80df.
+_HOURLY_RECHECK_STATUSES = {_STATUS_NOT_CALCULATED, "yes_today"}
+_HOURLY_RECHECK_WINDOW_START = (14, 0)
+_HOURLY_RECHECK_WINDOW_END = (23, 30)
+_HOURLY_RECHECK_FIRST_DELAY_SECONDS = 30
+_HOURLY_RECHECK_SECOND_DELAY_SECONDS = 5
 
 
 def signal_postpone_battery_charge(entry_id: str) -> str:
@@ -354,6 +369,7 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         self._entry = entry
         entity_map = entry.options.get(CONF_ENTITY_MAP, {})
         self._forecast_tomorrow_entity_id = entity_map.get(ENTITY_KEY_PV_FORECAST_TOMORROW) or None
+        self._pending_hourly_recheck: Any = None
 
     @property
     def extra_restore_state_data(self) -> PwMngtBatteryChargeDecisionStoredData:
@@ -386,6 +402,13 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         self.async_on_remove(
             event.async_track_time_change(
                 self.hass, self._handle_midnight, hour=0, minute=0, second=0
+            )
+        )
+        # Hourly nudge -- see module docstring. Node-RED: inject "Time",
+        # cron "0 0-23 * * *".
+        self.async_on_remove(
+            event.async_track_time_change(
+                self.hass, self._handle_hourly_recheck, minute=0, second=0
             )
         )
 
@@ -525,6 +548,49 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             key: None for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
         }
         self.async_write_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        if self._pending_hourly_recheck is not None:
+            self._pending_hourly_recheck()
+            self._pending_hourly_recheck = None
+        await super().async_will_remove_from_hass()
+
+    @callback
+    def _handle_hourly_recheck(self, _now=None) -> None:
+        """Hourly nudge -- see module docstring. Node-RED's own fixed
+        30 s delay happens before the status read, not before this
+        trigger itself."""
+        self._pending_hourly_recheck = event.async_call_later(
+            self.hass,
+            _HOURLY_RECHECK_FIRST_DELAY_SECONDS,
+            self._handle_hourly_recheck_after_first_delay,
+        )
+
+    @callback
+    def _handle_hourly_recheck_after_first_delay(self, _now=None) -> None:
+        self._pending_hourly_recheck = None
+        if self._attr_native_value not in _HOURLY_RECHECK_STATUSES:
+            return
+        if not self._in_hourly_recheck_window():
+            return
+        self._pending_hourly_recheck = event.async_call_later(
+            self.hass,
+            _HOURLY_RECHECK_SECOND_DELAY_SECONDS,
+            self._handle_hourly_recheck_run,
+        )
+
+    @callback
+    def _handle_hourly_recheck_run(self, _now=None) -> None:
+        self._pending_hourly_recheck = None
+        self._run()
+
+    def _in_hourly_recheck_window(self) -> bool:
+        now = dt_util.now()
+        return (
+            _HOURLY_RECHECK_WINDOW_START
+            <= (now.hour, now.minute)
+            <= _HOURLY_RECHECK_WINDOW_END
+        )
 
     def _in_evening_window(self) -> bool:
         now = dt_util.now()
