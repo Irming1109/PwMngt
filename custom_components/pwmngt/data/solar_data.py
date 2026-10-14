@@ -22,13 +22,22 @@ _sample_pv_shift() below for its 10-second sampling.
 Battery nightly target: the battery charge (in %) needed to cover the
 evening/night, i.e.
     (night consumption - PV forecast 17-21 today) x 1.07
-    + (night consumption - tomorrow's forecast), only if tomorrow's
-      forecast is below night consumption
 converted to % of the battery, + 5, kept within 5-95. "Night consumption"
 is consumption_data's nighttime_average (Node-RED:
 sensor.spidstimer_nat_17_06_snit). It stays a sensor of its own (not an
 attribute): it's a key control value other parts react to (see
 data/battery_data.py) and worth graphing.
+
+Claus's own change (2026-10-14): Node-RED's formula had a second term,
+"+ (night consumption - tomorrow's forecast), only if tomorrow's
+forecast is below night consumption" -- topping up tonight's target to
+also cover a poor-solar day tomorrow. Dropped: "vi skal ikke gemme
+strøm til dagen efter" -- the target now only looks at tonight's own
+17-06 window, confirmed against Claus's actual Node-RED source (the
+function reads "sensor.spidstimer_nat_17_06_snit" for night
+consumption, but compared it against *tomorrow's whole-day* forecast
+total for that second term -- not a 17-06 figure at all, which is what
+made it balloon on a day with a poor PV forecast for tomorrow).
 
 The hourly figures come from the forecast entities picked on the Solar PV
 Plant page (ENTITY_KEY_PV_FORECAST_TODAY/_TOMORROW) -- specifically their
@@ -232,7 +241,6 @@ class SolarInputs:
     battery_size_kwh: float | None   # None = no battery / unknown
     today_hourly: list[dict[str, Any]]
     tomorrow_hourly: list[dict[str, Any]]
-    tomorrow_total: float            # tomorrow's forecast (kWh), the entity's state
 
 
 def calculate_solar_data(inputs: SolarInputs) -> dict[str, float | None]:
@@ -258,8 +266,9 @@ def calculate_solar_data(inputs: SolarInputs) -> dict[str, float | None]:
     target_kwh = (night - pv_17_21_today) * _TARGET_MARGIN
     if target_kwh <= 0:
         target_kwh = 0.0
-    if inputs.tomorrow_total <= night:
-        target_kwh += night - inputs.tomorrow_total
+    # Node-RED's own second term ("+ night - tomorrow's forecast, only if
+    # tomorrow's forecast is below night consumption") is dropped -- see
+    # the module docstring. Only tonight's own 17-06 window counts now.
 
     target: float | None = None
     if inputs.battery_size_kwh:
@@ -392,8 +401,16 @@ class PwMngtSolarDataCoordinator(DataUpdateCoordinator[dict[str, float | None]])
         tomorrow = self.hass.states.get(self._tomorrow_entity_id) if self._tomorrow_entity_id else None
         today_hourly = today.attributes.get("detailedHourly") if today else None
         tomorrow_hourly = tomorrow.attributes.get("detailedHourly") if tomorrow else None
-        tomorrow_total = read_float_state(tomorrow)
-        if not isinstance(today_hourly, list) or not isinstance(tomorrow_hourly, list) or tomorrow_total is None:
+        # tomorrow's own total forecast (read_float_state(tomorrow)) isn't
+        # needed for the target calculation anymore -- see the module
+        # docstring -- but its presence still gates readiness below, same
+        # as before: no total yet usually means Solcast hasn't published
+        # tomorrow's forecast at all.
+        if (
+            not isinstance(today_hourly, list)
+            or not isinstance(tomorrow_hourly, list)
+            or read_float_state(tomorrow) is None
+        ):
             LOGGER.debug(
                 "PwMngt: solar data skipped -- no hourly forecast "
                 "(\"detailedHourly\") on the PV forecast entities"
@@ -405,7 +422,6 @@ class PwMngtSolarDataCoordinator(DataUpdateCoordinator[dict[str, float | None]])
             battery_size_kwh=self._read_battery_size(),
             today_hourly=today_hourly,
             tomorrow_hourly=tomorrow_hourly,
-            tomorrow_total=tomorrow_total,
         )
 
     @callback
