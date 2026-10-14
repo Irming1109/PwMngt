@@ -164,8 +164,8 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         name="Tariff fuse size (Ampere)",
         icon="mdi:fuse",
         entity_category=EntityCategory.CONFIG,
-        options=["25", "35", "62"],
-        default_option="35",
+        options=["25", "35", "50", "63"],
+        default_option="25",
     ),
 ]
 
@@ -182,8 +182,7 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         name="Battery size (kWh)",
         icon="mdi:home-battery",
         entity_category=EntityCategory.CONFIG,
-        options=["None", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10",
-                 "11", "12", "13", "14", "15", "16", "17", "18", "19", "20"],
+        options=["None"] + [str(size) for size in range(1, 97)],
         default_option="8",
     ),
     # Old key="history_period_days" (input_select.historik_periode)
@@ -203,7 +202,7 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         name="Solar inverter max AC output (kW)",
         icon="mdi:solar-power",
         entity_category=EntityCategory.CONFIG,
-        options=["0", "3", "4", "5", "6", "7", "8", "9", "10"],
+        options=["0", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"],
         default_option="5",
     ),
     # Old key="PV_battery_max_charge_effect" (select.pv_battery_max_charge_effect)
