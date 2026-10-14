@@ -17,6 +17,13 @@ name: Create GitHub Release
 # Uses the repo's automatic GITHUB_TOKEN; no secrets to configure. Requires
 # "Workflow permissions" under Settings -> Actions -> General to be set to
 # "Read and write permissions" (one-time repo setting, not per-release).
+#
+# A release published straight from github.com's "Releases -> New release"
+# form (pick/create the tag there, then "Publish release") creates the tag
+# AND the release in one step, which still triggers this same tag-push
+# event -- so this run then finds the release already exists and skips
+# instead of failing (v0.3.25/v0.3.26: fixed 2026-10-14, were red X's in
+# Actions even though the release itself published fine).
 
 on:
   push:
@@ -41,6 +48,12 @@ jobs:
         run: |
           set -e
           TAG="${GITHUB_REF#refs/tags/}"
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists (likely published straight from github.com) -- nothing to do."
+            exit 0
+          fi
+
           # actions/checkout@v4 fetches the tag correctly, then re-fetches by
           # commit sha and overwrites refs/tags/$TAG to point straight at the
           # commit -- silently discarding the annotation. Re-fetch the tag by
