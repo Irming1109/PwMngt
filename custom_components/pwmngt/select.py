@@ -277,11 +277,14 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
     # Old key="PV_batteri_styring" (select.pv_batteri_styring), from Node-RED.
     # Old name="PV_batteri_kommando"
     # The command currently given to the battery. In Node-RED many flows
-    # write it (and the user can set it by hand); in PwMngt nothing sets it
-    # yet -- only data/battery_data.py reads it (it reacts to
-    # "block_charging"). Options are translation keys; the display text
-    # (English/Danish) lives in strings.json / translations/*.json under
-    # entity.select.battery_command.state.
+    # write it (and the user can set it by hand). In PwMngt, written by
+    # data/battery_charge_level.py ("charge_now_*"/"internal", tonight's
+    # grid charge) and data/battery_sell_decision.py ("block_charging"/
+    # "internal", daytime selling) -- and read by data/battery_data.py
+    # (its "block_charging"/"block_battery" restart-plan check). Options
+    # are translation keys; the display text (English/Danish) lives in
+    # strings.json / translations/*.json under entity.select.battery_
+    # command.state.
     PwMngtSelectEntityDescription(
         key="battery_command",
         name="Battery command",

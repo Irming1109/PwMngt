@@ -205,9 +205,20 @@ def _js_round(value: float, decimals: int = 0) -> float:
     return float(Decimal(value).quantize(quantum, rounding=ROUND_HALF_UP))
 
 
-def sum_pv_forecast(detailed_hourly: list[dict[str, Any]], start_hour: int, end_hour: int) -> float:
+def sum_pv_forecast(
+    detailed_hourly: list[dict[str, Any]],
+    start_hour: int,
+    end_hour: int,
+    key: str = "pv_estimate",
+) -> float:
     """Forecast PV energy (kWh) from start_hour up to (not including)
     end_hour, from Solcast's "detailedHourly" list. Node-RED: beregn_pv().
+
+    `key` defaults to "pv_estimate" (the median estimate) -- the only
+    value this function's original callers ever needed. Data/battery_
+    sell_decision.py also calls this with key="pv_estimate10" (Solcast's
+    P10/"safe" estimate), for its own sumPeriode() port -- same per-hour
+    summing, just a different field on each entry.
 
     DIFF: an entry's hour is taken from its "period_start" (local time), not
     from its position in the list -- see the module docstring. An entry
@@ -226,7 +237,7 @@ def sum_pv_forecast(detailed_hourly: list[dict[str, Any]], start_hour: int, end_
             )
             if parsed is not None:
                 hour = dt_util.as_local(parsed).hour
-        estimate = entry.get("pv_estimate")
+        estimate = entry.get(key)
         if start_hour <= hour < end_hour and estimate is not None:
             try:
                 total += float(estimate)

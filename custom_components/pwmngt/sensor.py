@@ -59,6 +59,7 @@ from .data.battery_charge_decision import (
     PwMngtBatteryChargeDecisionSensor,
 )
 from .data.battery_charge_level import PwMngtBatteryChargeLevelController
+from .data.battery_sell_decision import PwMngtBatterySellDecisionController
 from .base import use_description_key_as_translation_key
 from .helpers.state_helper import read_float_state
 
@@ -151,6 +152,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     charge_level = PwMngtBatteryChargeLevelController(hass, entry)
     charge_level.async_start()
     entry.async_on_unload(charge_level.async_stop)
+
+    # Not an entity -- only writes to battery_command (select.py). See
+    # data/battery_sell_decision.py.
+    sell_decision = PwMngtBatterySellDecisionController(hass, entry)
+    sell_decision.async_start()
+    entry.async_on_unload(sell_decision.async_stop)
 
     for charger in CHARGERS:
         for description in PwM_CHARGER_SENSORS:

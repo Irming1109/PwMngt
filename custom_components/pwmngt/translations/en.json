@@ -114,6 +114,15 @@
               "main_fuse_load_l2": "The entity that reports the current load (A) on phase L2 of the property's main fuse. Only \"A\"-unit sensors are listed. Optional -- leave empty (\"Not available\") if you don't have a phase-current meter; the value is then treated as 0.",
               "main_fuse_load_l3": "The entity that reports the current load (A) on phase L3 of the property's main fuse. Only \"A\"-unit sensors are listed. Optional -- leave empty (\"Not available\") if you don't have a phase-current meter; the value is then treated as 0."
             }
+          },
+          "sell_override": {
+            "name": "Sell override (optional)",
+            "data": {
+              "sell_force_override": "Force sell override"
+            },
+            "data_description": {
+              "sell_force_override": "An input_boolean, switch, or binary_sensor your own automations can turn on to force the battery into selling mode right now, regardless of what PwMngt's own price/forecast calculation would otherwise decide. One-way only -- it can only force selling, never prevent it. Optional -- leave empty (\"Not available\") if you don't have an automation like this; the sell decision then runs purely on its own calculation."
+            }
           }
         },
         "data": {
@@ -122,6 +131,7 @@
           "grid_consumption": "Grid & consumption",
           "solar_forecast": "Solar forecast",
           "stromligning": "Strømligning",
+          "sell_force_override": "Force sell override",
           "battery_soc": "Battery SoC",
           "battery_pv_charged": "Battery PV charged",
           "battery_pv_discharged": "Battery PV discharged",
@@ -157,7 +167,8 @@
           "property_consumption_total": "The entity that reports the whole property's cumulative energy consumption (kWh) as a raw, ever-increasing lifetime counter -- e.g. your inverter's own lifetime consumption sensor. Only \"kWh\"-unit sensors are listed. Pre-filled automatically from your inverter if it's a supported brand -- pick a different entity if you don't want that. Do not point this at a Daily Utility Meter helper -- PwMngt tracks its own local-midnight reset internally, so it needs the raw, never-resetting counter instead.",
           "main_fuse_load_l1": "The entity that reports the current load (A) on phase L1 of the property's main fuse. Only \"A\"-unit sensors are listed. Optional -- leave empty (\"Not available\") if you don't have a phase-current meter; the value is then treated as 0.",
           "main_fuse_load_l2": "The entity that reports the current load (A) on phase L2 of the property's main fuse. Only \"A\"-unit sensors are listed. Optional -- leave empty (\"Not available\") if you don't have a phase-current meter; the value is then treated as 0.",
-          "main_fuse_load_l3": "The entity that reports the current load (A) on phase L3 of the property's main fuse. Only \"A\"-unit sensors are listed. Optional -- leave empty (\"Not available\") if you don't have a phase-current meter; the value is then treated as 0."
+          "main_fuse_load_l3": "The entity that reports the current load (A) on phase L3 of the property's main fuse. Only \"A\"-unit sensors are listed. Optional -- leave empty (\"Not available\") if you don't have a phase-current meter; the value is then treated as 0.",
+          "sell_force_override": "An input_boolean, switch, or binary_sensor your own automations can turn on to force the battery into selling mode right now, regardless of what PwMngt's own price/forecast calculation would otherwise decide. One-way only -- it can only force selling, never prevent it. Optional -- leave empty (\"Not available\") if you don't have an automation like this; the sell decision then runs purely on its own calculation."
         }
       },
       "ev_charging": {

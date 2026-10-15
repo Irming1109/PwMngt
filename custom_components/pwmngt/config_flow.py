@@ -39,6 +39,7 @@ from .const import (
     ENTITY_KEY_MAIN_FUSE_LOAD_L1,
     ENTITY_KEY_MAIN_FUSE_LOAD_L2,
     ENTITY_KEY_MAIN_FUSE_LOAD_L3,
+    ENTITY_KEY_SELL_FORCE_OVERRIDE,
     DEPENDENCY_SOLCAST_SOLAR,
     DEPENDENCY_STROMLIGNING,
     CHARGER_TYPE_INTEGRATION_DOMAINS,
@@ -86,6 +87,12 @@ _SOLAR_PV_PLANT_FIELDS = [
     (ENTITY_KEY_MAIN_FUSE_LOAD_L1, "A", False),
     (ENTITY_KEY_MAIN_FUSE_LOAD_L2, "A", False),
     (ENTITY_KEY_MAIN_FUSE_LOAD_L3, "A", False),
+    # Optional, no unit -- a boolean entity (input_boolean/switch/binary_
+    # sensor), not a sensor with a unit of measurement. "" here is never
+    # looked up through _FIELD_UNIT_BY_KEY/_entity_picker -- the group
+    # loop below special-cases this one key to use _boolean_entity_picker
+    # instead. See const.py's own docstring for what this field is for.
+    (ENTITY_KEY_SELL_FORCE_OVERRIDE, "", False),
 ]
 
 # Unit of measurement for each field above, by entity_map key.
@@ -164,6 +171,13 @@ _SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
             ENTITY_KEY_MAIN_FUSE_LOAD_L1,
             ENTITY_KEY_MAIN_FUSE_LOAD_L2,
             ENTITY_KEY_MAIN_FUSE_LOAD_L3,
+        ],
+    ),
+    (
+        "sell_override",
+        True,  # collapsed by default -- most installs leave this unset
+        [
+            ENTITY_KEY_SELL_FORCE_OVERRIDE,
         ],
     ),
 ]
@@ -284,6 +298,19 @@ def _entity_ids_by_device_class(hass, device_class: str) -> list[str]:
             continue
         entity_ids.append(state.entity_id)
     return sorted(entity_ids)
+
+
+def _boolean_entity_picker(hass) -> selector.EntitySelector:
+    """Entity picker for ENTITY_KEY_SELL_FORCE_OVERRIDE -- a boolean-ish
+    entity (input_boolean, switch, or binary_sensor) has no unit of
+    measurement, so this can't use _entity_picker's unit filter the way
+    every other Solar PV Plant field does. Not excluding PwMngt's own
+    entities the way _entity_ids_by_unit/_by_device_class do -- PwMngt
+    doesn't expose any boolean entity of its own that could be picked
+    here by mistake."""
+    return selector.EntitySelector(
+        selector.EntitySelectorConfig(domain=["input_boolean", "switch", "binary_sensor"])
+    )
 
 
 def _energy_entity_picker(hass) -> selector.EntitySelector:
@@ -832,8 +859,10 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             group_schema_dict: dict[Any, Any] = {}
             group_suggested: dict[str, str] = {}
             for key in field_keys:
-                group_schema_dict[vol.Optional(key)] = _entity_picker(
-                    self.hass, _FIELD_UNIT_BY_KEY[key]
+                group_schema_dict[vol.Optional(key)] = (
+                    _boolean_entity_picker(self.hass)
+                    if key == ENTITY_KEY_SELL_FORCE_OVERRIDE
+                    else _entity_picker(self.hass, _FIELD_UNIT_BY_KEY[key])
                 )
                 if values.get(key):
                     group_suggested[key] = values[key]

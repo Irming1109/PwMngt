@@ -133,6 +133,22 @@ ENTITY_KEY_MAIN_FUSE_LOAD_L1 = "main_fuse_load_l1"
 ENTITY_KEY_MAIN_FUSE_LOAD_L2 = "main_fuse_load_l2"
 ENTITY_KEY_MAIN_FUSE_LOAD_L3 = "main_fuse_load_l3"
 
+# Optional "force sell" override -- a boolean entity (input_boolean,
+# switch, or a boolean-ish binary_sensor) the user can point at any
+# external automation of their own that wants to force the battery into
+# selling mode (data/battery_sell_decision.py writes "block_charging" to
+# battery_command) regardless of what that module's own price/forecast
+# calculation would otherwise decide. One-way only -- it can only force
+# selling, never force the opposite (data/battery_sell_decision.py simply
+# never un-blocks while this reads "on"; it doesn't suppress an actual
+# block). Left empty ("Not available"), it has no effect at all -- the
+# module runs purely on its own calculation, as for an install with no
+# such external automation. Not named after any specific external use
+# case (e.g. Claus's own tenant-priority automation on Lundekrog, kept
+# entirely in his own Node-RED) -- this is a generic hook, not a
+# Lundekrog-specific feature.
+ENTITY_KEY_SELL_FORCE_OVERRIDE = "sell_force_override"
+
 # battery_nightly_target and solar_data's PV-forecast attributes are not
 # entity_map fields -- PwMngt computes them internally (see
 # data/solar_data.py).
