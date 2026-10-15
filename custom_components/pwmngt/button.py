@@ -29,7 +29,7 @@ PwM_PV_BUTTONS: list[ButtonEntityDescription] = [
     # reset.
     ButtonEntityDescription(
         key="postpone_battery_charge",
-        name="Postpone battery charge",
+        name="Postpone battery charge until tomorrow",
         icon="mdi:pause-circle-outline",
     ),
 ]

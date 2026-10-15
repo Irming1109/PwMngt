@@ -59,6 +59,27 @@ New in this export (not present in the previously-ported version):
   being able to push min_soc arbitrarily high, and the target-end-time
   protection no longer applies before 06:00 or during 17:00-20:59.
 
+Deliberate difference from Node-RED (DIFF, Claus 2026-10-15): forced_charge
+also reads "on" while battery_command is actively one of the charge_now_*
+options (select.py, Old: "Lad nu - 25/50/75/100% effekt"), on top of the
+original min_soc > soc check. Node-RED's own "Min_SOC beregning" never
+checked this, so forced_charge stayed "Off" during an active charge_now_*
+command whenever this calculation's own min_soc ladder had no reason to
+raise min_soc above soc -- most commonly while battery_charge_status is
+already "yes_today" (the grid charge is being driven by a separate
+"charge_now_*" select write instead, see data/battery_charge_level.py, so
+this calculation's own grid_charge_planned_today branch deliberately holds
+min_soc at the current SoC). Confirmed against a live mismatch between
+PwMngt and Node-RED during the 15-10-2026 parallel-validation window:
+data/balance_data.py's is_forced_charging() gate reads this same
+forced_charge value to decide whether to cancel the battery's power out of
+the grid-balance reading -- under-reporting forced_charge there made
+balance_data.py wrongly net the battery's charging draw out of the
+balance, showing a false surplus while actually buying from the grid to
+charge. The same fix was also given to Claus for his own Node-RED "Min_SOC
+beregning"/Balance functions, as separate, independent code outside this
+repo.
+
 Triggers (same as Node-RED, see PwMngtBatteryDataSensor): Battery SoC
 changes, Battery nightly target changes (only 00:01-16:59), target end
 time / battery command / either charger's state changes, every 15 min
@@ -168,6 +189,15 @@ _CHARGER_STATE_ACTIVE_MANUAL = "Active - manual"
 # Old: "Bloker ladning" / "Bloker batteri".
 _COMMAND_BLOCK_CHARGING = "block_charging"
 _COMMAND_BLOCK_BATTERY = "block_battery"
+# Battery commands (select.py, "battery_command") that mean "actively
+# charging from the grid right now" -- same set as
+# data/battery_charge_level.py's own _ACTIVE_CHARGE_COMMANDS (duplicated
+# rather than imported, to avoid a cross-module coupling between the two
+# "Min_SOC"/"Bestem ladeeffekt" ports). Old: "Lad nu - 25/50/75/100%
+# effekt". Used below to fix forced_charge (DIFF, Claus 2026-10-15).
+_ACTIVE_CHARGE_COMMANDS = frozenset(
+    {"charge_now_25", "charge_now_50", "charge_now_75", "charge_now_100"}
+)
 # Battery charge status (sensor.py, "battery_charge_status") meaning a grid
 # charge is planned later today. Old: "Ja (i dag)".
 _CHARGE_STATUS_YES_TODAY = "yes_today"
@@ -641,7 +671,14 @@ def calculate_battery_data(
     if vinter:
         min_soc = max(_MIN_SOC_FLOOR, min(min_soc, soc))
 
-    forced_charge = "on" if (not vinter and min_soc > soc) else "off"
+    # DIFF (Claus, 2026-10-15) -- see module docstring: an active
+    # charge_now_* command counts as forced grid charging too, even when
+    # min_soc > soc isn't itself true (most commonly while
+    # grid_charge_planned_today already held min_soc at soc above).
+    forced_charge = "on" if (
+        inputs.battery_command in _ACTIVE_CHARGE_COMMANDS
+        or (not vinter and min_soc > soc)
+    ) else "off"
     min_soc_rounded = _js_round(min_soc)
 
     avg_cheapest_hours = (
