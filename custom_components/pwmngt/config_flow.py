@@ -40,6 +40,21 @@ from .const import (
     ENTITY_KEY_MAIN_FUSE_LOAD_L2,
     ENTITY_KEY_MAIN_FUSE_LOAD_L3,
     ENTITY_KEY_SELL_FORCE_OVERRIDE,
+    ENTITY_KEY_PRICE_VARIABLE,
+    ENTITY_KEY_PRICE_WITHOUT_PV,
+    ENTITY_KEY_HOUSEHOLD_CONSUMPTION_HOURLY,
+    ENTITY_KEY_GRID_IMPORT_HOURLY,
+    ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY,
+    ENTITY_KEY_BATTERY_DISCHARGE_HOURLY,
+    ENTITY_KEY_SEED_PURCHASE_PRICE_REAL,
+    ENTITY_KEY_SEED_PURCHASE_PRICE_VARIABLE,
+    ENTITY_KEY_SEED_PURCHASE_PRICE_REAL_WITHOUT_PV,
+    ENTITY_KEY_SEED_PURCHASE_PRICE_VARIABLE_WITHOUT_PV,
+    ENTITY_KEY_SEED_PRICE_AGREEMENT_SAVINGS,
+    ENTITY_KEY_SEED_OWN_PRODUCTION_SAVINGS,
+    ENTITY_KEY_SEED_BATTERY_GRID_CHARGE_SUM,
+    ENTITY_KEY_SEED_BATTERY_GRID_DISCHARGE_SUM,
+    ENTITY_KEY_SEED_BATTERY_CHARGING_SAVINGS,
     DEPENDENCY_SOLCAST_SOLAR,
     DEPENDENCY_STROMLIGNING,
     CHARGER_TYPE_INTEGRATION_DOMAINS,
@@ -93,6 +108,26 @@ _SOLAR_PV_PLANT_FIELDS = [
     # loop below special-cases this one key to use _boolean_entity_picker
     # instead. See const.py's own docstring for what this field is for.
     (ENTITY_KEY_SELL_FORCE_OVERRIDE, "", False),
+    # Savings tracking (data/savings_data.py) -- entirely optional, see
+    # const.py's own docstring above these keys. ENTITY_KEY_SPOT_
+    # ELECTRICITY_PRICE above doubles as the "reel" price here too.
+    (ENTITY_KEY_PRICE_VARIABLE, "kr/kWh", False),
+    (ENTITY_KEY_PRICE_WITHOUT_PV, "kr/kWh", False),
+    (ENTITY_KEY_HOUSEHOLD_CONSUMPTION_HOURLY, "kWh", False),
+    (ENTITY_KEY_GRID_IMPORT_HOURLY, "kWh", False),
+    (ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY, "kWh", False),
+    (ENTITY_KEY_BATTERY_DISCHARGE_HOURLY, "kWh", False),
+    # One-time seed fields (DKK) -- see const.py's own docstring above
+    # these keys for what they're for and when they're read.
+    (ENTITY_KEY_SEED_PURCHASE_PRICE_REAL, "DKK", False),
+    (ENTITY_KEY_SEED_PURCHASE_PRICE_VARIABLE, "DKK", False),
+    (ENTITY_KEY_SEED_PURCHASE_PRICE_REAL_WITHOUT_PV, "DKK", False),
+    (ENTITY_KEY_SEED_PURCHASE_PRICE_VARIABLE_WITHOUT_PV, "DKK", False),
+    (ENTITY_KEY_SEED_PRICE_AGREEMENT_SAVINGS, "DKK", False),
+    (ENTITY_KEY_SEED_OWN_PRODUCTION_SAVINGS, "DKK", False),
+    (ENTITY_KEY_SEED_BATTERY_GRID_CHARGE_SUM, "DKK", False),
+    (ENTITY_KEY_SEED_BATTERY_GRID_DISCHARGE_SUM, "DKK", False),
+    (ENTITY_KEY_SEED_BATTERY_CHARGING_SAVINGS, "DKK", False),
 ]
 
 # Unit of measurement for each field above, by entity_map key.
@@ -178,6 +213,35 @@ _SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
         True,  # collapsed by default -- most installs leave this unset
         [
             ENTITY_KEY_SELL_FORCE_OVERRIDE,
+        ],
+    ),
+    (
+        "savings_data",
+        True,  # collapsed by default -- entirely optional feature
+        [
+            ENTITY_KEY_PRICE_VARIABLE,
+            ENTITY_KEY_PRICE_WITHOUT_PV,
+            ENTITY_KEY_HOUSEHOLD_CONSUMPTION_HOURLY,
+            ENTITY_KEY_GRID_IMPORT_HOURLY,
+            ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY,
+            ENTITY_KEY_BATTERY_DISCHARGE_HOURLY,
+        ],
+    ),
+    (
+        "savings_seed",
+        True,  # collapsed by default -- one-time migration aid, most
+        # installs (anything not migrating from Claus's own Node-RED) will
+        # never touch this
+        [
+            ENTITY_KEY_SEED_PURCHASE_PRICE_REAL,
+            ENTITY_KEY_SEED_PURCHASE_PRICE_VARIABLE,
+            ENTITY_KEY_SEED_PURCHASE_PRICE_REAL_WITHOUT_PV,
+            ENTITY_KEY_SEED_PURCHASE_PRICE_VARIABLE_WITHOUT_PV,
+            ENTITY_KEY_SEED_PRICE_AGREEMENT_SAVINGS,
+            ENTITY_KEY_SEED_OWN_PRODUCTION_SAVINGS,
+            ENTITY_KEY_SEED_BATTERY_GRID_CHARGE_SUM,
+            ENTITY_KEY_SEED_BATTERY_GRID_DISCHARGE_SUM,
+            ENTITY_KEY_SEED_BATTERY_CHARGING_SAVINGS,
         ],
     ),
 ]

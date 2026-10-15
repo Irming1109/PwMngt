@@ -60,6 +60,12 @@ from .data.battery_charge_decision import (
 )
 from .data.battery_charge_level import PwMngtBatteryChargeLevelController
 from .data.battery_sell_decision import PwMngtBatterySellDecisionController
+from .data.savings_data import (
+    PwM_SAVINGS_DATA_SENSORS,
+    PwM_SAVINGS_HEADLINE_SENSORS,
+    PwMngtSavingsDataSensor,
+    PwMngtSavingsHeadlineSensor,
+)
 from .base import use_description_key_as_translation_key
 from .helpers.state_helper import read_float_state
 
@@ -145,6 +151,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     for description in PwM_BATTERY_CHARGE_DECISION_SENSORS:
         entity = PwMngtBatteryChargeDecisionSensor(description, entry)
         LOGGER.info("Added PV battery-charge-decision sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    for description in PwM_SAVINGS_DATA_SENSORS:
+        entity = PwMngtSavingsDataSensor(description, entry)
+        LOGGER.info("Added savings-data sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    for value_index, description in enumerate(PwM_SAVINGS_HEADLINE_SENSORS):
+        entity = PwMngtSavingsHeadlineSensor(description, entry, value_index)
+        LOGGER.info("Added savings headline sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
     # Not an entity -- only writes to battery_command (select.py) and

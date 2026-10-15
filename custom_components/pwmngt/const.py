@@ -161,6 +161,53 @@ ENTITY_KEY_SELL_FORCE_OVERRIDE = "sell_force_override"
 # though the sensor itself lives on the Hub device.
 ENTITY_KEY_SPOT_ELECTRICITY_PRICE = "spot_electricity_price"
 
+# ---------------------------------------------------------------------------
+# Savings tracking -- entity_map fields read by data/savings_data.py, port
+# of Claus's Node-RED functions "Beregn indkøbspris med og uden PV" and
+# "Beregn balance på ladning af batteri fra grid". Entirely optional: not
+# every install has Claus's own variable/without-PV price sensors or the
+# hourly utility_meter helpers this depends on. ENTITY_KEY_SPOT_ELECTRICITY_
+# PRICE above doubles as the "reel" price here too (Claus, 2026-10-15:
+# "det er det samme reelt set") -- no separate field for it.
+# ---------------------------------------------------------------------------
+
+# Two more electricity prices (kr/kWh), alongside ENTITY_KEY_SPOT_ELECTRICITY_
+# PRICE's "reel" price -- Claus's own sensors, not derivable from anything
+# else PwMngt has. Old: sensor.el_kobspris_variabel / sensor.el_kobspris_udenpv.
+ENTITY_KEY_PRICE_VARIABLE = "price_variable"
+ENTITY_KEY_PRICE_WITHOUT_PV = "price_without_pv"
+
+# Four hourly energy counters (kWh) -- each a Home Assistant Utility Meter
+# (or equivalent) that resets every hour, read through its own "last_period"
+# attribute (last full hour's total), not its live .state. Old:
+# sensor.strom_forbrug_husstand_pr_time / sensor.strom_indkob /
+# sensor.batteri_ladet_fra_grid_time / sensor.forbrug_fra_batteri_time.
+ENTITY_KEY_HOUSEHOLD_CONSUMPTION_HOURLY = "household_consumption_hourly"
+ENTITY_KEY_GRID_IMPORT_HOURLY = "grid_import_hourly"
+ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY = "battery_grid_charge_hourly"
+ENTITY_KEY_BATTERY_DISCHARGE_HOURLY = "battery_discharge_hourly"
+
+# One-time seed fields (DKK) -- each optionally points at the matching
+# sensor Claus's own Node-RED already maintains, so PwMngt's own running
+# totals start from his real historical figures instead of 0 when it takes
+# over, rather than silently resetting years of tracked savings. Each is
+# read exactly once (PwMngtSavingsDataSensor's very first run, when there's
+# no restored PwMngt state yet) -- after that, PwMngt's own bookkeeping is
+# authoritative and these are never read again, so it's safe to leave them
+# mapped (or even decommission the Node-RED sensors) indefinitely. Left
+# unmapped, PwMngt simply starts that running total at 0 -- the normal,
+# fully-supported state for a fresh install with no Node-RED history to
+# carry over (Claus, 2026-10-15).
+ENTITY_KEY_SEED_PURCHASE_PRICE_REAL = "seed_purchase_price_real"
+ENTITY_KEY_SEED_PURCHASE_PRICE_VARIABLE = "seed_purchase_price_variable"
+ENTITY_KEY_SEED_PURCHASE_PRICE_REAL_WITHOUT_PV = "seed_purchase_price_real_without_pv"
+ENTITY_KEY_SEED_PURCHASE_PRICE_VARIABLE_WITHOUT_PV = "seed_purchase_price_variable_without_pv"
+ENTITY_KEY_SEED_PRICE_AGREEMENT_SAVINGS = "seed_price_agreement_savings"
+ENTITY_KEY_SEED_OWN_PRODUCTION_SAVINGS = "seed_own_production_savings"
+ENTITY_KEY_SEED_BATTERY_GRID_CHARGE_SUM = "seed_battery_grid_charge_sum"
+ENTITY_KEY_SEED_BATTERY_GRID_DISCHARGE_SUM = "seed_battery_grid_discharge_sum"
+ENTITY_KEY_SEED_BATTERY_CHARGING_SAVINGS = "seed_battery_charging_savings"
+
 # Consumption tracking -- entity_map field(s) read by
 # data/consumption_data.py straight from Recorder (hourly long-term
 # statistics) to build its rolling averages. Each is a raw,

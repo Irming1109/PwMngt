@@ -123,6 +123,50 @@
             "data_description": {
               "sell_force_override": "An input_boolean, switch, or binary_sensor your own automations can turn on to force the battery into selling mode right now, regardless of what PwMngt's own price/forecast calculation would otherwise decide. One-way only -- it can only force selling, never prevent it. Optional -- leave empty (\"Not available\") if you don't have an automation like this; the sell decision then runs purely on its own calculation."
             }
+          },
+          "savings_data": {
+            "name": "Savings tracking (optional)",
+            "data": {
+              "price_variable": "Variable purchase price",
+              "price_without_pv": "Purchase price without PV",
+              "household_consumption_hourly": "Household consumption (hourly)",
+              "grid_import_hourly": "Grid import (hourly)",
+              "battery_grid_charge_hourly": "Battery charged from grid (hourly)",
+              "battery_discharge_hourly": "Battery discharge to house (hourly)"
+            },
+            "data_description": {
+              "price_variable": "Your own sensor reporting the variable (spot-based) electricity price (kr/kWh), separate from your actual price agreement (Spot electricity price above). Optional -- leave empty (\"Not available\") if you don't track this; the purchase-price and savings sensors below then stay unavailable.",
+              "price_without_pv": "Your own sensor reporting what the electricity price (kr/kWh) would be without PV/battery optimization. Optional -- same as above.",
+              "household_consumption_hourly": "An hourly Utility Meter (or equivalent) sensor reporting your household's total consumption, read through its \"last_period\" attribute (previous full hour's total), not its live state. Optional -- leave empty if you don't have one.",
+              "grid_import_hourly": "An hourly Utility Meter (or equivalent) sensor reporting electricity imported from the grid, read through its \"last_period\" attribute. Optional -- leave empty if you don't have one.",
+              "battery_grid_charge_hourly": "An hourly Utility Meter (or equivalent) sensor reporting energy charged into the battery from the grid specifically, read through its \"last_period\" attribute. Optional -- leave empty if you don't have one.",
+              "battery_discharge_hourly": "An hourly Utility Meter (or equivalent) sensor reporting energy the battery discharged to the house, read through its \"last_period\" attribute. Optional -- leave empty if you don't have one."
+            }
+          },
+          "savings_seed": {
+            "name": "Node-RED historical savings data (optional, one-time)",
+            "data": {
+              "seed_purchase_price_real": "Seed: purchase price (real)",
+              "seed_purchase_price_variable": "Seed: purchase price (variable)",
+              "seed_purchase_price_real_without_pv": "Seed: purchase price without PV (real)",
+              "seed_purchase_price_variable_without_pv": "Seed: purchase price without PV (variable)",
+              "seed_price_agreement_savings": "Seed: price agreement savings",
+              "seed_own_production_savings": "Seed: own production savings",
+              "seed_battery_grid_charge_sum": "Seed: battery charged from grid (sum)",
+              "seed_battery_grid_discharge_sum": "Seed: battery discharged from grid (sum)",
+              "seed_battery_charging_savings": "Seed: battery charging savings"
+            },
+            "data_description": {
+              "seed_purchase_price_real": "If you're migrating from an existing Node-RED setup tracking this same running total (kr), point this at that old sensor so PwMngt's own total starts from its current value instead of 0. Read only once, on PwMngt's very first savings calculation -- never touched again afterwards. Leave empty (\"Not available\") on a fresh install with no history to carry over.",
+              "seed_purchase_price_variable": "Same idea as above, for the \"purchase price (variable)\" running total.",
+              "seed_purchase_price_real_without_pv": "Same idea as above, for the \"purchase price without PV (real)\" running total.",
+              "seed_purchase_price_variable_without_pv": "Same idea as above, for the \"purchase price without PV (variable)\" running total.",
+              "seed_price_agreement_savings": "Same idea as above, for the \"price agreement savings\" running total.",
+              "seed_own_production_savings": "Same idea as above, for the \"Own production savings\" sensor.",
+              "seed_battery_grid_charge_sum": "Same idea as above, for the \"battery charged from grid\" running total.",
+              "seed_battery_grid_discharge_sum": "Same idea as above, for the \"battery discharged from grid\" running total.",
+              "seed_battery_charging_savings": "Same idea as above, for the \"Battery charging savings\" sensor."
+            }
           }
         },
         "data": {
@@ -148,7 +192,22 @@
           "property_consumption_total": "Total property consumption",
           "main_fuse_load_l1": "Main fuse load L1",
           "main_fuse_load_l2": "Main fuse load L2",
-          "main_fuse_load_l3": "Main fuse load L3"
+          "main_fuse_load_l3": "Main fuse load L3",
+          "price_variable": "Variable purchase price",
+          "price_without_pv": "Purchase price without PV",
+          "household_consumption_hourly": "Household consumption (hourly)",
+          "grid_import_hourly": "Grid import (hourly)",
+          "battery_grid_charge_hourly": "Battery charged from grid (hourly)",
+          "battery_discharge_hourly": "Battery discharge to house (hourly)",
+          "seed_purchase_price_real": "Seed: purchase price (real)",
+          "seed_purchase_price_variable": "Seed: purchase price (variable)",
+          "seed_purchase_price_real_without_pv": "Seed: purchase price without PV (real)",
+          "seed_purchase_price_variable_without_pv": "Seed: purchase price without PV (variable)",
+          "seed_price_agreement_savings": "Seed: price agreement savings",
+          "seed_own_production_savings": "Seed: own production savings",
+          "seed_battery_grid_charge_sum": "Seed: battery charged from grid (sum)",
+          "seed_battery_grid_discharge_sum": "Seed: battery discharged from grid (sum)",
+          "seed_battery_charging_savings": "Seed: battery charging savings"
         },
         "data_description": {
           "battery_soc": "The entity that reports your home battery's state of charge (%), e.g. your inverter's battery SoC sensor. Only \"%\"-unit sensors are listed.",
@@ -168,7 +227,22 @@
           "main_fuse_load_l1": "The entity that reports the current load (A) on phase L1 of the property's main fuse. Only \"A\"-unit sensors are listed. Optional -- leave empty (\"Not available\") if you don't have a phase-current meter; the value is then treated as 0.",
           "main_fuse_load_l2": "The entity that reports the current load (A) on phase L2 of the property's main fuse. Only \"A\"-unit sensors are listed. Optional -- leave empty (\"Not available\") if you don't have a phase-current meter; the value is then treated as 0.",
           "main_fuse_load_l3": "The entity that reports the current load (A) on phase L3 of the property's main fuse. Only \"A\"-unit sensors are listed. Optional -- leave empty (\"Not available\") if you don't have a phase-current meter; the value is then treated as 0.",
-          "sell_force_override": "An input_boolean, switch, or binary_sensor your own automations can turn on to force the battery into selling mode right now, regardless of what PwMngt's own price/forecast calculation would otherwise decide. One-way only -- it can only force selling, never prevent it. Optional -- leave empty (\"Not available\") if you don't have an automation like this; the sell decision then runs purely on its own calculation."
+          "sell_force_override": "An input_boolean, switch, or binary_sensor your own automations can turn on to force the battery into selling mode right now, regardless of what PwMngt's own price/forecast calculation would otherwise decide. One-way only -- it can only force selling, never prevent it. Optional -- leave empty (\"Not available\") if you don't have an automation like this; the sell decision then runs purely on its own calculation.",
+          "price_variable": "Your own sensor reporting the variable (spot-based) electricity price (kr/kWh), separate from your actual price agreement (Spot electricity price above). Optional -- leave empty (\"Not available\") if you don't track this; the purchase-price and savings sensors below then stay unavailable.",
+          "price_without_pv": "Your own sensor reporting what the electricity price (kr/kWh) would be without PV/battery optimization. Optional -- same as above.",
+          "household_consumption_hourly": "An hourly Utility Meter (or equivalent) sensor reporting your household's total consumption, read through its \"last_period\" attribute (previous full hour's total), not its live state. Optional -- leave empty if you don't have one.",
+          "grid_import_hourly": "An hourly Utility Meter (or equivalent) sensor reporting electricity imported from the grid, read through its \"last_period\" attribute. Optional -- leave empty if you don't have one.",
+          "battery_grid_charge_hourly": "An hourly Utility Meter (or equivalent) sensor reporting energy charged into the battery from the grid specifically, read through its \"last_period\" attribute. Optional -- leave empty if you don't have one.",
+          "battery_discharge_hourly": "An hourly Utility Meter (or equivalent) sensor reporting energy the battery discharged to the house, read through its \"last_period\" attribute. Optional -- leave empty if you don't have one.",
+          "seed_purchase_price_real": "If you're migrating from an existing Node-RED setup tracking this same running total (kr), point this at that old sensor so PwMngt's own total starts from its current value instead of 0. Read only once, on PwMngt's very first savings calculation -- never touched again afterwards. Leave empty (\"Not available\") on a fresh install with no history to carry over.",
+          "seed_purchase_price_variable": "Same idea as above, for the \"purchase price (variable)\" running total.",
+          "seed_purchase_price_real_without_pv": "Same idea as above, for the \"purchase price without PV (real)\" running total.",
+          "seed_purchase_price_variable_without_pv": "Same idea as above, for the \"purchase price without PV (variable)\" running total.",
+          "seed_price_agreement_savings": "Same idea as above, for the \"price agreement savings\" running total.",
+          "seed_own_production_savings": "Same idea as above, for the \"Own production savings\" sensor.",
+          "seed_battery_grid_charge_sum": "Same idea as above, for the \"battery charged from grid\" running total.",
+          "seed_battery_grid_discharge_sum": "Same idea as above, for the \"battery discharged from grid\" running total.",
+          "seed_battery_charging_savings": "Same idea as above, for the \"Battery charging savings\" sensor."
         }
       },
       "ev_charging": {
