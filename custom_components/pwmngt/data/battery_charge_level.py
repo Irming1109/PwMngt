@@ -399,6 +399,11 @@ class PwMngtBatteryChargeLevelController:
             # select.battery_mode (select.py) is "manual" -- see module
             # docstring. battery_command is left exactly as it is.
             return
+        battery_target = self._read_target()
+        if battery_target is None:
+            # Not ready yet -- see _read_target()'s own docstring. Leave
+            # battery_command as it is and wait for the next trigger.
+            return
         inputs = BatteryChargeLevelInputs(
             charge_wish=self._read_charge_status(),
             tariff_fuse_size_raw=self._read_tariff_fuse_size(),
@@ -407,7 +412,7 @@ class PwMngtBatteryChargeLevelController:
             fuse_load_l3=self._read_fuse_load(2),
             battery_max_charge_raw=self._read_battery_max_charge(),
             battery_soc=self._read_soc(),
-            battery_target=self._read_target(),
+            battery_target=battery_target,
             hour_is_cheap=self._read_hour_is_cheap(),
         )
         result = calculate_battery_charge_level(inputs)
@@ -418,8 +423,13 @@ class PwMngtBatteryChargeLevelController:
     def _maybe_target_reached(self) -> None:
         if pv_properties.is_battery_mode_manual(self.hass, self._entry):
             return
+        battery_target = self._read_target()
+        if battery_target is None:
+            # Not ready yet -- see _read_target()'s own docstring. Don't
+            # treat an unready value as "target reached".
+            return
         if not battery_target_reached(
-            self._read_soc(), self._read_target(), self._read_charge_status()
+            self._read_soc(), battery_target, self._read_charge_status()
         ):
             return
         async_dispatcher_send(
@@ -477,7 +487,19 @@ class PwMngtBatteryChargeLevelController:
     def _read_soc(self) -> float | None:
         return read_float_state(self.hass.states.get(self._soc_entity_id)) if self._soc_entity_id else None
 
-    def _read_target(self) -> float:
+    def _read_target(self) -> float | None:
+        """None while battery_nightly_target hasn't computed a value yet
+        (typically: solar_data's own coordinator hasn't run once since a
+        restart). DIFF (Claus, 2026-10-15): same restart-bug class already
+        fixed in battery_charge_decision.py's own _read_target() (0.3.30)
+        -- Node-RED's own fallback here was `|| 0`, but a 0 reads as "SoC
+        already >= target", so right after a restart the very next SoC
+        update could make _maybe_target_reached() fire immediately,
+        telling battery_charge_decision.py the charge target was reached
+        before it had even been computed -- wrongly resetting a correctly
+        -restored "yes_today" straight back to "not_calculated". Both
+        _run_charge_level() and _maybe_target_reached() below now skip
+        the run entirely while this is None, instead of computing from a
+        0 that only means "not ready"."""
         entity_id = pv_properties.battery_nightly_target_entity_id(self.hass, self._entry)
-        value = read_float_state(self.hass.states.get(entity_id)) if entity_id else None
-        return value if value is not None else 0.0
+        return read_float_state(self.hass.states.get(entity_id)) if entity_id else None
