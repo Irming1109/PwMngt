@@ -554,6 +554,15 @@ class PwMngtBatterySellDecisionController:
         hour = dt_util.now().hour
         today = dt_util.now().strftime("%Y-%m-%d")
 
+        # Deliberately NOT routed through hub_properties.electricity_price()
+        # (Claus, 2026-10-15's electricity-price-surcharge addition):
+        # every hour here comes from this same entity's own hourly-price
+        # attribute, and the only uses below are now_price - afternoon_price
+        # (a difference between two of this dict's own entries) and
+        # inputs.spotprice_ex_vat > _PRICE_FLOOR (a separate, unrelated
+        # ex-VAT entity) -- a flat kr/kWh surcharge added equally to every
+        # hour would cancel out of the difference and never reaches the
+        # floor check at all, so adding it here would be a no-op at best.
         price_state = (
             self.hass.states.get(self._price_entity_id) if self._price_entity_id else None
         )

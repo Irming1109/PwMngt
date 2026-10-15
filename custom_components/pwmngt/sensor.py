@@ -19,6 +19,7 @@ from homeassistant.util import dt as dt_util
 from .const import (
     DOMAIN,
     CONF_ENTITY_MAP,
+    CONF_ELECTRICITY_PRICE_SURCHARGE,
     ENTITY_KEY_BATTERY_SOC,
     ENTITY_KEY_BATTERY_PV_CHARGED,
     ENTITY_KEY_BATTERY_PV_DISCHARGED,
@@ -658,11 +659,16 @@ PwM_PV_INTEGRAL_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 
 PwM_HUB_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
     # Old key="el_kobspris_variabel"
-    # Computed natively by the Stromligning integration.
+    # Computed natively by the Stromligning integration. Renamed from
+    # "Spot electricity price" (Claus, 2026-10-15): it mirrors the
+    # VAT/tariff-inclusive total price, not the raw spot price -- the old
+    # name was misleading both here and in the setup wizard. Key/entity_id
+    # (spot_electricity_price) deliberately left unchanged -- only the
+    # display name, to avoid breaking existing installs' stored entity_map.
     (
         SensorEntityDescription(
             key="spot_electricity_price",
-            name="Spot electricity price",
+            name="Electricity price (incl. VAT)",
             icon="mdi:cash",
             state_class=SensorStateClass.MEASUREMENT,
             native_unit_of_measurement="kr/kWh",
@@ -706,10 +712,19 @@ class _PwMngtMirrorSensor(SensorEntity):
     _MIRROR_SKIP_ATTRIBUTES). A subclass sets self._source_entity_id in
     __init__ (None if there's nothing to mirror yet) before this class's
     async_added_to_hass runs.
+
+    self._value_offset (default 0.0) is added to the mirrored numeric
+    value only -- the mirrored attributes stay untouched. Added for
+    PwMngtHubMirrorSensor's spot_electricity_price mirror specifically
+    (Claus, 2026-10-15: his configured electricity-price surcharge has to
+    show up here too, or the sensor display and PwMngt's own money
+    calculations would disagree) -- every other mirror simply never sets
+    it, so it stays a true 1:1 copy for them.
     """
 
     _attr_has_entity_name = True
     _attr_should_poll = False
+    _value_offset: float = 0.0
 
     async def async_added_to_hass(self) -> None:
         """Start mirroring the source entity's state, if one is configured."""
@@ -739,7 +754,7 @@ class _PwMngtMirrorSensor(SensorEntity):
             self._attr_extra_state_attributes = {}
         else:
             try:
-                self._attr_native_value = float(source_state.state)
+                self._attr_native_value = float(source_state.state) + self._value_offset
             except ValueError:
                 self._attr_native_value = source_state.state
             self._attr_available = True
@@ -804,6 +819,14 @@ class PwMngtHubMirrorSensor(_PwMngtMirrorSensor):
 
         entity_map = entry.options.get(CONF_ENTITY_MAP, {})
         self._source_entity_id = entity_map.get(entity_map_key) or None
+        if entity_map_key == ENTITY_KEY_SPOT_ELECTRICITY_PRICE:
+            # Claus, 2026-10-15: show the price PwMngt actually calculates
+            # money with (see hub_properties.electricity_price()), not
+            # just the raw Strømligning value -- else this sensor and
+            # PwMngt's own savings/battery numbers would quietly disagree.
+            self._value_offset = (
+                entry.options.get(CONF_ELECTRICITY_PRICE_SURCHARGE, 0.0) or 0.0
+            )
         if self._source_entity_id is None:
             # Not picked yet (e.g. an entry created before this field
             # existed, or the user hasn't set it) -- nothing to mirror

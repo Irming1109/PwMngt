@@ -580,7 +580,7 @@ class PwMElectricityCard extends PwMngtBaseCard {
       // (see PwM_HUB_MIRROR_SENSORS in sensor.py). Not editable.
       {
         device: "hub", key: "spot_electricity_price",
-        label: "Spot electricity price",
+        label: "Electricity price (incl. VAT)",
         icon: "mdi:cash",
         type: "sensor",
       },

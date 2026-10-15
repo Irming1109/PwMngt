@@ -112,11 +112,10 @@ from ..const import (
     DOMAIN,
     ENTITY_KEY_BATTERY_GRID_CHARGED_DAY,
     ENTITY_KEY_BATTERY_SOC,
-    ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
 )
 from ..devices import CHARGERS, pv_device_info
 from ..helpers.state_helper import read_float_state
-from ..properties import pv_properties
+from ..properties import hub_properties, pv_properties
 
 LOGGER = logging.getLogger(__name__)
 
@@ -746,7 +745,6 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         self._entry = entry
         entity_map = entry.options.get(CONF_ENTITY_MAP, {})
         self._soc_entity_id = entity_map.get(ENTITY_KEY_BATTERY_SOC) or None
-        self._price_entity_id = entity_map.get(ENTITY_KEY_SPOT_ELECTRICITY_PRICE) or None
         self._grid_charged_entity_id = (
             entity_map.get(ENTITY_KEY_BATTERY_GRID_CHARGED_DAY) or None
         )
@@ -916,7 +914,14 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             target_end_time=self._read_state_pv(
                 pv_properties.battery_target_end_time_entity_id, _DEFAULT_TARGET_END_TIME
             ),
-            electricity_price=self._read_float(self._price_entity_id, _DEFAULT_PRICE),
+            # Via hub_properties.electricity_price(), not a direct entity
+            # read (Claus, 2026-10-15): adds his configured surcharge on
+            # top of the raw Strømligning value -- this feeds price_floor
+            # below, so an un-added surcharge would make the night
+            # price-protection window compare against a systematically
+            # too-low price.
+            electricity_price=hub_properties.electricity_price(self.hass, self._entry)
+            or _DEFAULT_PRICE,
             battery_command=self._read_state_pv(
                 pv_properties.battery_command_entity_id, ""
             ),

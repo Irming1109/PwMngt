@@ -21,6 +21,7 @@ from .const import (
     CONF_DEFAULT_NAME,
     CONF_SEGMENTS,
     CONF_ENTITY_MAP,
+    CONF_ELECTRICITY_PRICE_SURCHARGE,
     ENTITY_KEY_BATTERY_SOC,
     ENTITY_KEY_BATTERY_PV_CHARGED,
     ENTITY_KEY_BATTERY_PV_DISCHARGED,
@@ -197,6 +198,12 @@ _SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
         False,
         [
             ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
+            # Not an entity_map field -- a plain number, not an entity to
+            # pick (see CONF_ELECTRICITY_PRICE_SURCHARGE's own docstring
+            # in const.py). Special-cased below in the group_schema_dict
+            # loop and in the submit-handling, same treatment as
+            # ENTITY_KEY_SELL_FORCE_OVERRIDE's boolean picker.
+            CONF_ELECTRICITY_PRICE_SURCHARGE,
         ],
     ),
     (
@@ -277,7 +284,7 @@ _AUTO_DETECT_SOURCES: dict[str, tuple[str, str]] = {
 _AUTO_DETECT_LABELS: dict[str, str] = {
     ENTITY_KEY_PV_FORECAST_TODAY: "PV forecast today",
     ENTITY_KEY_PV_FORECAST_TOMORROW: "PV forecast tomorrow",
-    ENTITY_KEY_SPOT_ELECTRICITY_PRICE: "Spot electricity price",
+    ENTITY_KEY_SPOT_ELECTRICITY_PRICE: "Electricity price (incl. VAT)",
     ENTITY_KEY_BATTERY_SOC: "Battery SoC",
     ENTITY_KEY_BATTERY_PV_CHARGED: "Battery PV charged",
     ENTITY_KEY_BATTERY_PV_DISCHARGED: "Battery PV discharged",
@@ -640,6 +647,10 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                     CONF_ENTITY_MAP,
                     dict(self.config_entry.options.get(CONF_ENTITY_MAP, {})),
                 ),
+                CONF_ELECTRICITY_PRICE_SURCHARGE: self._data.get(
+                    CONF_ELECTRICITY_PRICE_SURCHARGE,
+                    self.config_entry.options.get(CONF_ELECTRICITY_PRICE_SURCHARGE, 0.0),
+                ),
             },
         )
 
@@ -840,6 +851,17 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         """
         errors: dict[str, str] = {}
         values = dict(self.config_entry.options.get(CONF_ENTITY_MAP, {}))
+        # Not an entity_map value -- stuffed into `values` only so the
+        # group-suggested-value loop below shows it back like any other
+        # field in its section (see CONF_ELECTRICITY_PRICE_SURCHARGE's own
+        # docstring in const.py). Left out of `values` entirely when it's
+        # exactly 0 (the "not set" default) -- same as every other field
+        # here, which only gets a suggested_value when it has one to show.
+        _current_surcharge = self.config_entry.options.get(
+            CONF_ELECTRICITY_PRICE_SURCHARGE, 0.0
+        )
+        if _current_surcharge:
+            values[CONF_ELECTRICITY_PRICE_SURCHARGE] = _current_surcharge
 
         # Pre-fill fields the user hasn't picked yet (see
         # _AUTO_DETECT_SOURCES) -- never overrides an existing pick. Also
@@ -893,6 +915,14 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                 for key, _unit, _required in _SOLAR_PV_PLANT_FIELDS:
                     entity_map[key] = flat_input.get(key) or None
                 self._data[CONF_ENTITY_MAP] = entity_map
+                # Not an entity_map field -- see CONF_ELECTRICITY_PRICE_
+                # SURCHARGE's own docstring in const.py. A cleared/blank
+                # field comes back as None from NumberSelector, same as
+                # every entity_map field above; "or 0.0" turns that back
+                # into the "no surcharge" default rather than storing None.
+                self._data[CONF_ELECTRICITY_PRICE_SURCHARGE] = (
+                    flat_input.get(CONF_ELECTRICITY_PRICE_SURCHARGE) or 0.0
+                )
                 self._save_progress()
                 return await self._advance()
 
@@ -923,11 +953,22 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             group_schema_dict: dict[Any, Any] = {}
             group_suggested: dict[str, str] = {}
             for key in field_keys:
-                group_schema_dict[vol.Optional(key)] = (
-                    _boolean_entity_picker(self.hass)
-                    if key == ENTITY_KEY_SELL_FORCE_OVERRIDE
-                    else _entity_picker(self.hass, _FIELD_UNIT_BY_KEY[key])
-                )
+                if key == ENTITY_KEY_SELL_FORCE_OVERRIDE:
+                    group_schema_dict[vol.Optional(key)] = _boolean_entity_picker(self.hass)
+                elif key == CONF_ELECTRICITY_PRICE_SURCHARGE:
+                    # A plain number, not an entity to pick -- see that
+                    # constant's own docstring in const.py.
+                    group_schema_dict[vol.Optional(key)] = selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            mode=selector.NumberSelectorMode.BOX,
+                            step=0.01,
+                            unit_of_measurement="kr/kWh",
+                        )
+                    )
+                else:
+                    group_schema_dict[vol.Optional(key)] = _entity_picker(
+                        self.hass, _FIELD_UNIT_BY_KEY[key]
+                    )
                 if values.get(key):
                     group_suggested[key] = values[key]
             if group_suggested:
@@ -1335,6 +1376,9 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         data = {
             CONF_SEGMENTS: self._data.get(CONF_SEGMENTS, []),
             CONF_ENTITY_MAP: self._data.get(CONF_ENTITY_MAP, {}),
+            CONF_ELECTRICITY_PRICE_SURCHARGE: self._data.get(
+                CONF_ELECTRICITY_PRICE_SURCHARGE, 0.0
+            ),
         }
         return self.async_create_entry(
             title=title,

@@ -103,6 +103,17 @@ INVERTER_TYPE_INTEGRATION_DOMAINS: dict[str, str] = {
 
 CONF_ENTITY_MAP = "entity_map"
 
+# Flat option (Claus, 2026-10-15) -- NOT an entity_map field: a plain
+# number the user types in directly, not an entity to pick/mirror. Added
+# on top of ENTITY_KEY_SPOT_ELECTRICITY_PRICE's value everywhere PwMngt
+# calculates money from it (see properties/hub_properties.py's
+# electricity_price()) -- Claus's own supplier charges a flat 0.05 kr/kWh
+# + VAT (0.06 kr/kWh total) on top of what his configured Strømligning
+# price sensor reports, which that sensor has no way to know about.
+# kr/kWh, incl. VAT/moms. Defaults to 0.0 (no surcharge) when unset, so
+# nothing changes for an install that doesn't need this.
+CONF_ELECTRICITY_PRICE_SURCHARGE = "electricity_price_surcharge"
+
 # Solar PV Plant segment (mandatory -- always configured).
 ENTITY_KEY_BATTERY_SOC = "battery_soc"
 ENTITY_KEY_BATTERY_PV_CHARGED = "battery_pv_charged"

@@ -17,9 +17,12 @@ Entirely optional: every entity_map field this reads (ENTITY_KEY_PRICE_
 VARIABLE/_WITHOUT_PV, the four hourly ENTITY_KEY_*_HOURLY counters) is
 Claus's own sensor setup, not derivable from anything else PwMngt has.
 Left unmapped, the affected running totals simply never update (see
-_run()). ENTITY_KEY_SPOT_ELECTRICITY_PRICE (already used elsewhere) is
-reused here as the "real" price -- Claus, 2026-10-15: "det er det samme
-reelt set" -- no separate field for it.
+_run()). The "real" price is ENTITY_KEY_SPOT_ELECTRICITY_PRICE (already
+used elsewhere) -- Claus, 2026-10-15: "det er det samme reelt set" -- no
+separate field for it -- read via hub_properties.electricity_price(),
+which adds Claus's configured kr/kWh surcharge on top (added the same
+day, see that function's own docstring): his supplier's markup isn't
+something the configured price sensor itself knows about.
 
 Seeding from Node-RED (ENTITY_KEY_SEED_*, const.py): on this module's very
 first run ever (no restored PwMngt state yet), each of the 9 running
@@ -101,11 +104,10 @@ from ..const import (
     ENTITY_KEY_SEED_PURCHASE_PRICE_REAL_WITHOUT_PV,
     ENTITY_KEY_SEED_PURCHASE_PRICE_VARIABLE,
     ENTITY_KEY_SEED_PURCHASE_PRICE_VARIABLE_WITHOUT_PV,
-    ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
 )
 from ..devices import hub_device_info
 from ..helpers.state_helper import read_float_state
-from ..properties import pv_properties
+from ..properties import hub_properties, pv_properties
 
 LOGGER = logging.getLogger(__name__)
 
@@ -159,9 +161,12 @@ PwM_SAVINGS_HEADLINE_SENSORS: list[SensorEntityDescription] = [
 ]
 
 # entity_map key -> which PriceSnapshot field it fills, for the +60 s shift
-# step. ENTITY_KEY_SPOT_ELECTRICITY_PRICE doubles as "real" here too.
+# step. "real" isn't here -- it doesn't come from a plain entity_map
+# lookup any more, see _read_price_snapshot()'s use of
+# hub_properties.electricity_price() (Claus, 2026-10-15: his own supplier
+# surcharge has to be added on top of ENTITY_KEY_SPOT_ELECTRICITY_PRICE's
+# raw value wherever money is calculated from it).
 _PRICE_SOURCE_KEYS = {
-    "real": ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
     "variable": ENTITY_KEY_PRICE_VARIABLE,
     "without_pv": ENTITY_KEY_PRICE_WITHOUT_PV,
 }
@@ -456,6 +461,8 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         self._pending_accumulate: Any = None
 
         entity_map = entry.options.get(CONF_ENTITY_MAP, {})
+        # "real" is read via hub_properties.electricity_price() instead
+        # (see _PRICE_SOURCE_KEYS' comment) -- not in this dict.
         self._price_entity_ids = {
             field_name: entity_map.get(key) or None
             for field_name, key in _PRICE_SOURCE_KEYS.items()
@@ -601,7 +608,8 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
     # -- reads ---------------------------------------------------------------
 
     def _read_price_snapshot(self) -> PriceSnapshot | None:
-        real = self._read_price(self._price_entity_ids["real"])
+        real = hub_properties.electricity_price(self.hass, self._entry)
+        real = round(real, 2) if real is not None else None
         variable = self._read_price(self._price_entity_ids["variable"])
         without_pv = self._read_price(self._price_entity_ids["without_pv"])
         if real is None and variable is None and without_pv is None:
