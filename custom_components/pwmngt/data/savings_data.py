@@ -167,6 +167,7 @@ from ..const import (
 from ..devices import hub_device_info
 from ..helpers.state_helper import read_float_state
 from ..properties import hub_properties, pv_properties
+from . import DATA_SENSOR_STATE
 
 LOGGER = logging.getLogger(__name__)
 
@@ -648,7 +649,7 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_{description.key}"
         self._attr_device_info = hub_device_info(entry)
-        self._attr_native_value = None
+        self._attr_native_value = DATA_SENSOR_STATE
         self._attr_extra_state_attributes = {
             key: None for key in PwM_SAVINGS_DATA_ATTRIBUTES
         }
@@ -912,12 +913,15 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
     def _write_state(self) -> None:
         purchase = self._ledger.purchase
         battery = self._ledger.battery
-        # No price_agreement_savings any more to use as the headline value
-        # (dropped, see module docstring) -- purchase_price_real (total
-        # actually spent) is the most meaningful single number left for
-        # this bundle sensor's own native_value; the full picture is in
-        # its attributes, same as data/balance_data.py's own pattern.
-        self._attr_native_value = purchase.purchase_price_real
+        # Attribute-only "_data" sensor (Claus, 2026-10-16): no single
+        # number here is more "the" state than another -- purchase_price_
+        # real was being shown as native_value before, but that's just
+        # one of several running totals, picked somewhat arbitrarily, not
+        # a natural single value the way balance_data's 30-second balance
+        # is. Matches consumption_data.py/solar_data.py's own pattern
+        # instead: state is the constant DATA_SENSOR_STATE marker, the
+        # real values all live in the attributes below.
+        self._attr_native_value = DATA_SENSOR_STATE
         self._attr_extra_state_attributes = {
             "purchase_price_real": purchase.purchase_price_real,
             "purchase_price_real_without_pv": purchase.purchase_price_real_without_pv,
