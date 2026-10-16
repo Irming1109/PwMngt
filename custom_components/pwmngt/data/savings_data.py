@@ -195,8 +195,16 @@ PwM_SAVINGS_DATA_SENSORS: list[SensorEntityDescription] = [
         key="savings_data",
         name="Savings data",
         icon="mdi:cash-sync",
-        device_class=SensorDeviceClass.MONETARY,
-        native_unit_of_measurement="DKK",
+        # No device_class/native_unit_of_measurement (Claus, 2026-10-17,
+        # fixing a bug from the very same day): a device_class forces HA
+        # to require a NUMERIC state -- that's exactly why setting this
+        # sensor's state to DATA_SENSOR_STATE ("Data", a plain string)
+        # crashed entity setup ("has device class 'monetary' ... thus
+        # indicating it has a numeric value; however, it has the non-
+        # numeric value: 'Data'"). consumption_data.py/solar_data.py's
+        # own attribute-only "_data" sensors, which this was modelled on,
+        # have no device_class/unit either -- that's *why* "Data" works
+        # for them, not a detail that happened to not matter.
     ),
 ]
 
