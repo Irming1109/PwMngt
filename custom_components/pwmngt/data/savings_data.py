@@ -72,21 +72,37 @@ ever wires up an actual fixed-price-agreement sensor; own_production_
 savings and battery_charging_savings never depended on this at all, so
 dropping it doesn't touch either.
 
-Seeding from Node-RED (ENTITY_KEY_SEED_*, const.py): on this module's very
-first run ever (no restored PwMngt state yet), each of the 9 running
-totals optionally starts from the current value of Claus's matching
-Node-RED sensor instead of 0, so years of his own tracked savings aren't
-silently lost when PwMngt takes over. Read exactly once; after that first
-run, PwMngt's own RestoreEntity-persisted state is authoritative and these
-seed fields are never consulted again. See _seed_value()/_run_first_ever().
+Seeding from Node-RED (ENTITY_KEY_SEED_*, const.py): each of the 4 seeded
+running totals (purchase_price_real, purchase_price_real_without_pv,
+battery_grid_charge_sum, battery_grid_discharge_sum) optionally starts
+from the current value of Claus's matching Node-RED sensor instead of 0,
+so years of his own tracked savings aren't silently lost when PwMngt
+takes over. own_production_savings/battery_charging_savings have no seed
+field of their own -- they're derived from the 4 above instead (see next
+paragraph).
 
-Why all 9 running totals (not just the two headline ones) have to be
-seeded together: own_production_savings and battery_charging_savings are
-both a running *high-water mark* of (bigger sum - smaller sum) --
-lifetime totals, not deltas. Seeding only the headline number while its
-underlying sums restart at 0 would freeze it at the seeded value for
-months, until the fresh sums grew large enough on their own to overtake
-it (Claus, 2026-10-15 design discussion).
+Reworked (Claus, 2026-10-16, yet again the same day): _seed_ledger() used
+to run only on this module's very first run ever (no restored PwMngt
+state yet) -- the idea being that once PwMngt's own RestoreEntity-
+persisted state exists, it's authoritative and the seed fields should
+never be consulted again. In practice this backfired: the entity's first
+run is whenever it's first *added*, which can happen before Claus has
+even filled in the seed entity_map fields in the wizard -- that first,
+seed-less run permanently "used up" the one-time seed opportunity, so
+filling the seed fields in afterwards and re-running the wizard had no
+effect at all, silently. Fixed by instead running _seed_ledger() on
+*every* async_added_to_hass, with each field only ever pulled UP, never
+down (see _seed_ledger()'s own docstring) -- so it's safe to re-run as
+often as the wizard is, and a late or corrected seed sensor still takes
+effect instead of being permanently locked out.
+
+Why all 4 base sums (not just the two headline ones) have to be seeded
+together: own_production_savings and battery_charging_savings are both a
+running *high-water mark* of (bigger sum - smaller sum) -- lifetime
+totals, not deltas. Seeding only the headline number while its underlying
+sums restart at 0 would freeze it at the seeded value for months, until
+the fresh sums grew large enough on their own to overtake it (Claus,
+2026-10-15 design discussion).
 
 Deliberate difference from Node-RED (DIFF, Claus 2026-10-15): "Beregn
 indkøbspris med og uden PV" tracks its own previous
@@ -445,7 +461,30 @@ def calculate_battery_grid_balance(
     battery_size: float,
 ) -> BatteryGridBalanceState:
     """One run of Node-RED's "Beregn balance på ladning af batteri fra
-    grid". Pure -- testable on its own."""
+    grid". Pure -- testable on its own.
+
+    TODO (Claus, 2026-10-16): battery_discharge (ENTITY_KEY_BATTERY_
+    DISCHARGE_HOURLY, "Battery discharge to house") is, as a matter of
+    fact about the underlying sensor, ALL discharge from the battery --
+    there is no way to tell from it alone whether a given kWh went to
+    the house or was sold to the grid. Right now that's harmless, since
+    Claus has no grid-export logic yet, so 100% of discharge really does
+    go to the house. It stops being harmless the day he builds battery-
+    to-grid selling (when the price is good): this function would keep
+    valuing the whole discharge at last_hour_real_price (the PURCHASE
+    price, i.e. "what we avoided buying"), which is wrong for any kWh
+    that was actually sold -- that portion only earned the sale price,
+    not the (usually much higher, tax-inclusive) purchase price, and
+    crediting it as a purchase-avoidance savings would overstate
+    battery_charging_savings.
+
+    Fix, once that feature exists: it's the export logic itself that
+    knows how many kWh it commanded sold this hour (the raw counter
+    can't be fixed to tell the two apart) -- have it report that figure
+    separately, subtract it from battery_discharge here before running
+    today's buy-price valuation on the remainder, and value the
+    subtracted (exported) kWh on its own, at the real sale price, into
+    its own sum -- NOT battery_charging_savings."""
     kwh_per_percent_point = battery_size / 100 if battery_size else 0.0
 
     grid_discharge_pct_this_hour = 0.0
@@ -648,8 +687,7 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         restored = await self.async_get_last_extra_data()
         if restored is not None:
             self._ledger = PwMngtSavingsStoredData.from_dict(restored.as_dict()).ledger
-        else:
-            self._seed_ledger()
+        self._seed_ledger()
 
         self.async_on_remove(
             event.async_track_time_change(
@@ -669,13 +707,29 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         await super().async_will_remove_from_hass()
 
     def _seed_ledger(self) -> None:
-        """First run ever (no restored state) -- see module docstring."""
+        """High-water-mark seed, re-applied on every async_added_to_hass
+        (not just the first run ever -- Claus, 2026-10-16, see module
+        docstring's "Reworked yet again" paragraph). Each of the 4 seed
+        fields only ever pulls its ledger field UP, never down: if the
+        seed sensor's current value is lower than what the ledger
+        already holds (the normal case once PwMngt has been tracking for
+        a while, or after options were reloaded for an unrelated reason),
+        it's silently ignored. If it's higher -- a genuine first-time
+        seed, or Claus fixing a wrongly-pointed historical sensor and
+        re-running the wizard -- it's taken. Either way, running this on
+        every reload instead of gating it on "no restored state yet"
+        means pointing the wizard's seed fields at a historical sensor
+        always has an effect, instead of silently doing nothing once the
+        entity has ever been restored once before (the bug this fixed)."""
         for field_path, entity_id in self._seed_entity_ids.items():
             value = self._seed_value(entity_id)
             if value is None:
                 continue
             owner_name, attr_name = field_path.split(".", 1)
             owner = getattr(self._ledger, owner_name)
+            current = getattr(owner, attr_name)
+            if current is not None and value <= current:
+                continue
             setattr(owner, attr_name, value)
             LOGGER.info(
                 "PwMngt: seeded savings_data's '%s' from '%s' (%.2f DKK)",
@@ -685,20 +739,27 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
             )
 
         # own_production_savings/battery_charging_savings have no seed
-        # field of their own any more (Claus, 2026-10-16) -- derive both
-        # from whatever the four sums above just seeded (or their 0.0
-        # defaults, on a fresh install with nothing mapped), same formula
+        # field of their own (Claus, 2026-10-16) -- derive both from
+        # whatever the four sums above now hold, same formula
         # calculate_purchase_prices()/calculate_battery_grid_balance() use
-        # every hour. Never negative -- matches those functions' own
-        # high-water-mark floor of 0.
+        # every hour. Same high-water-mark rule as above: only raised,
+        # never lowered, including against their own already-stored
+        # value -- this runs on every reload now, not just once, so it
+        # must not undo an hourly high-water mark set since the last
+        # reload just because this run's raw diff happens to be smaller.
         purchase = self._ledger.purchase
-        purchase.own_production_savings = max(
+        derived_production_savings = max(
             0.0, purchase.purchase_price_real_without_pv - purchase.purchase_price_real
         )
+        if derived_production_savings > purchase.own_production_savings:
+            purchase.own_production_savings = round(derived_production_savings, 2)
+
         battery = self._ledger.battery
-        battery.battery_charging_savings = max(
+        derived_charging_savings = max(
             0.0, battery.battery_grid_discharge_sum - battery.battery_grid_charge_sum
         )
+        if derived_charging_savings > battery.battery_charging_savings:
+            battery.battery_charging_savings = round(derived_charging_savings, 2)
 
     def _seed_value(self, entity_id: str | None) -> float | None:
         if not entity_id:
