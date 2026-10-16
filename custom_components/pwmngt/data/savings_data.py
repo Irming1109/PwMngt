@@ -146,7 +146,7 @@ from homeassistant.components.sensor import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, State, callback
-from homeassistant.helpers import event
+from homeassistant.helpers import entity_registry as er, event
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 from homeassistant.util import dt as dt_util
@@ -927,6 +927,13 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
             "purchase_price_real_without_pv": purchase.purchase_price_real_without_pv,
             "battery_grid_charge_sum": battery.battery_grid_charge_sum,
             "battery_grid_discharge_sum": battery.battery_grid_discharge_sum,
+            # Added (Claus, 2026-10-16) so PwMngtSavingsHeadlineSensor can
+            # read the live value straight off this sibling entity's own
+            # state at startup, instead of relying only on the one-shot
+            # dispatcher signal below, which it's too late to catch (see
+            # that class's own async_added_to_hass()).
+            "own_production_savings": purchase.own_production_savings,
+            "battery_charging_savings": battery.battery_charging_savings,
         }
         self.async_write_ha_state()
 
@@ -947,6 +954,17 @@ def _read_float_attribute(state: State, attribute: str) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _savings_data_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+    """Entity id of the "Savings data" sensor (PwM_SAVINGS_DATA_SENSORS'
+    one entry, key "savings_data") for this config entry -- same entity-
+    registry-by-unique_id lookup as hub_properties._hub_entity_id, kept
+    local here since it's only ever needed by PwMngtSavingsHeadlineSensor
+    below."""
+    return er.async_get(hass).async_get_entity_id(
+        "sensor", DOMAIN, f"{entry.entry_id}_savings_data"
+    )
 
 
 class PwMngtSavingsHeadlineSensor(RestoreEntity, SensorEntity):
@@ -983,6 +1001,24 @@ class PwMngtSavingsHeadlineSensor(RestoreEntity, SensorEntity):
             if value is not None:
                 self._attr_native_value = value
 
+        # Claus, 2026-10-16: don't rely solely on the dispatcher signal
+        # for this entity's value right after a restart. PwMngtSavings
+        # DataSensor (sibling entity, same config entry) is added to hass
+        # before these headline sensors (see sensor.py's async_setup_
+        # entry), so its own async_added_to_hass() -- which re-seeds the
+        # ledger and sends the one-shot startup dispatch -- has already
+        # run and fired *before* async_dispatcher_connect() below even
+        # subscribes, every single restart, so that one dispatch is
+        # always missed. Read the live value straight off the sibling's
+        # own state instead: it's already there by now, since entities
+        # added in the same async_add_entities() call have their
+        # async_added_to_hass() awaited one at a time, in order. Only
+        # overrides the possibly-stale restored value above if the
+        # sibling and its attribute are actually there.
+        live_value = self._read_live_value()
+        if live_value is not None:
+            self._attr_native_value = live_value
+
         self.async_on_remove(
             async_dispatcher_connect(
                 self.hass,
@@ -991,6 +1027,14 @@ class PwMngtSavingsHeadlineSensor(RestoreEntity, SensorEntity):
             )
         )
         self.async_write_ha_state()
+
+    def _read_live_value(self) -> float | None:
+        entity_id = _savings_data_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None:
+            return None
+        attribute = ("own_production_savings", "battery_charging_savings")[self._value_index]
+        return _read_float_attribute(state, attribute)
 
     @callback
     def _handle_update(self, own_production_savings: float, battery_charging_savings: float) -> None:
