@@ -13,9 +13,9 @@ mining rig) and stay in Claus's own Node-RED, same call as
 prioriter_lejere and the sell-override boolean before it (Claus,
 2026-10-15).
 
-Entirely optional: every entity_map field this reads (ENTITY_KEY_PRICE_
-VARIABLE/_WITHOUT_PV, the four hourly ENTITY_KEY_*_HOURLY counters) is
-Claus's own sensor setup, not derivable from anything else PwMngt has.
+Entirely optional: every entity_map field this reads (ENTITY_KEY_
+ELECTRICITY_TAX_FULL_RATE, the four hourly ENTITY_KEY_*_HOURLY counters)
+is Claus's own sensor setup, not derivable from anything else PwMngt has.
 Left unmapped, the affected running totals simply never update (see
 _run()). The "real" price is ENTITY_KEY_SPOT_ELECTRICITY_PRICE (already
 used elsewhere) -- Claus, 2026-10-15: "det er det samme reelt set" -- no
@@ -23,6 +23,54 @@ separate field for it -- read via hub_properties.electricity_price(),
 which adds Claus's configured kr/kWh surcharge on top (added the same
 day, see that function's own docstring): his supplier's markup isn't
 something the configured price sensor itself knows about.
+
+Reworked (Claus, 2026-10-16): "uden PV" no longer means "read a different
+price sensor". The underlying commodity/spot price is the SAME with or
+without PV -- the market price doesn't know or care how much solar you
+have. The only real difference is electricity TAX (elafgift): without
+PV, every kWh of household_consumption would have been bought from the
+grid, so the household would cross Denmark's tax threshold faster than
+it actually does (PV covers part of consumption, so actual grid_import is
+lower). So purchase_price_real_without_pv is now: household_consumption
+priced at the same real/surcharge-inclusive rate as purchase_price_real,
+PLUS the electricity tax that hypothetical all-grid consumption would
+have incurred, split across the full/reduced tax tiers using a running
+monthly-or-quarterly (per select.<hub>_billing_period) cumulative of
+household_consumption -- see hub_properties.billing_period_threshold_kwh()/
+electricity_tax_reduced_enabled() and _tax_period_id()/
+calculate_purchase_prices() below. The full tax rate comes from Claus's
+own sensor (ENTITY_KEY_ELECTRICITY_TAX_FULL_RATE, Strømligning); the
+reduced rate is hardcoded (_REDUCED_ELECTRICITY_TAX_RATE) -- Claus says
+it's always exactly that figure, not something to configure per install.
+No tax tier is currently in effect in Denmark (everyone pays the reduced
+rate regardless of volume as of 2026), but Claus expects the full-rate
+tier to return 2028-01-01, hence building this now rather than when it
+actually starts mattering.
+
+Reworked again (Claus, 2026-10-16, same day): the four ENTITY_KEY_*_
+HOURLY fields no longer point at a Home Assistant Utility Meter helper
+read through its "last_period" attribute -- they now point straight at
+the underlying raw, ever-increasing lifetime counter, and this module
+derives each hour's own delta itself (see read_counter_delta()/
+_read_counter()). Point: a Utility Meter helper is one more thing Claus
+has to rebuild by hand whenever he swaps hardware (e.g. a new PV
+inverter) that changes which entity the lifetime counter lives on.
+Reading the raw counter directly needs its own reset/entity-swap
+handling in return, which read_counter_delta() provides -- mirroring
+data/consumption_data.py's own accumulate() helper (same-entity meter
+reset) and its source_signature rebuild-on-swap logic (entity_map
+repoint), the two places that pattern was already solved in this
+codebase.
+
+Dropped (Claus, 2026-10-15, same day): the "variable" purchase price and
+price_agreement_savings (what a fixed-price agreement would have cost vs.
+the variable price). Claus's own el_kobspris_variabel sensor turned out
+to just be the same number as the real/surcharge-inclusive price above,
+not a genuinely separate fixed-price-agreement figure -- so the
+comparison it fed had nothing real to compare against. Revisit if Claus
+ever wires up an actual fixed-price-agreement sensor; own_production_
+savings and battery_charging_savings never depended on this at all, so
+dropping it doesn't touch either.
 
 Seeding from Node-RED (ENTITY_KEY_SEED_*, const.py): on this module's very
 first run ever (no restored PwMngt state yet), each of the 9 running
@@ -85,25 +133,20 @@ from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers import event
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
+from homeassistant.util import dt as dt_util
 
 from ..const import (
     CONF_ENTITY_MAP,
     DOMAIN,
     ENTITY_KEY_BATTERY_DISCHARGE_HOURLY,
     ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY,
+    ENTITY_KEY_ELECTRICITY_TAX_FULL_RATE,
     ENTITY_KEY_GRID_IMPORT_HOURLY,
     ENTITY_KEY_HOUSEHOLD_CONSUMPTION_HOURLY,
-    ENTITY_KEY_PRICE_VARIABLE,
-    ENTITY_KEY_PRICE_WITHOUT_PV,
-    ENTITY_KEY_SEED_BATTERY_CHARGING_SAVINGS,
     ENTITY_KEY_SEED_BATTERY_GRID_CHARGE_SUM,
     ENTITY_KEY_SEED_BATTERY_GRID_DISCHARGE_SUM,
-    ENTITY_KEY_SEED_OWN_PRODUCTION_SAVINGS,
-    ENTITY_KEY_SEED_PRICE_AGREEMENT_SAVINGS,
     ENTITY_KEY_SEED_PURCHASE_PRICE_REAL,
     ENTITY_KEY_SEED_PURCHASE_PRICE_REAL_WITHOUT_PV,
-    ENTITY_KEY_SEED_PURCHASE_PRICE_VARIABLE,
-    ENTITY_KEY_SEED_PURCHASE_PRICE_VARIABLE_WITHOUT_PV,
 )
 from ..devices import hub_device_info
 from ..helpers.state_helper import read_float_state
@@ -116,12 +159,16 @@ LOGGER = logging.getLogger(__name__)
 # makes this run under-count what was spent.
 _PRICE_FALLBACK = 2.3
 
+# The reduced electricity-tax rate (kr/kWh, incl. VAT) that applies above
+# the full-rate threshold -- hardcoded, not user-configurable: Claus says
+# it's always exactly this figure (2026-10-16), unlike the full rate
+# (ENTITY_KEY_ELECTRICITY_TAX_FULL_RATE), which does change and has no
+# fixed value to hardcode.
+_REDUCED_ELECTRICITY_TAX_RATE = 0.01
+
 PwM_SAVINGS_DATA_ATTRIBUTES: list[str] = [
     "purchase_price_real",
-    "purchase_price_variable",
     "purchase_price_real_without_pv",
-    "purchase_price_variable_without_pv",
-    "price_agreement_savings",
     "battery_grid_charge_sum",
     "battery_grid_discharge_sum",
 ]
@@ -160,30 +207,26 @@ PwM_SAVINGS_HEADLINE_SENSORS: list[SensorEntityDescription] = [
     ),
 ]
 
-# entity_map key -> which PriceSnapshot field it fills, for the +60 s shift
-# step. "real" isn't here -- it doesn't come from a plain entity_map
-# lookup any more, see _read_price_snapshot()'s use of
-# hub_properties.electricity_price() (Claus, 2026-10-15: his own supplier
-# surcharge has to be added on top of ENTITY_KEY_SPOT_ELECTRICITY_PRICE's
-# raw value wherever money is calculated from it).
-_PRICE_SOURCE_KEYS = {
-    "variable": ENTITY_KEY_PRICE_VARIABLE,
-    "without_pv": ENTITY_KEY_PRICE_WITHOUT_PV,
-}
+# The electricity price itself never comes from a plain entity_map lookup
+# any more -- see _read_real_price()'s use of hub_properties.
+# electricity_price() (Claus, 2026-10-15: his own supplier surcharge has
+# to be added on top of ENTITY_KEY_SPOT_ELECTRICITY_PRICE's raw value
+# wherever money is calculated from it). It's also now the only price:
+# "without_pv" no longer has its own price sensor (see module docstring,
+# 2026-10-16) -- only the electricity-tax full rate still comes from an
+# entity_map field.
+_TAX_FULL_RATE_KEY = ENTITY_KEY_ELECTRICITY_TAX_FULL_RATE
 
 # entity_map key -> dotted ledger field, for the one-time seed (see module
 # docstring). Checked in __init__/_run_first_ever() against SavingsLedger's
-# actual attribute names.
+# actual attribute names. own_production_savings/battery_charging_savings
+# have no entry here any more (Claus, 2026-10-16) -- _seed_ledger() derives
+# both from the four sums below instead of seeding them separately.
 _SEED_SOURCE_KEYS: dict[str, str] = {
     ENTITY_KEY_SEED_PURCHASE_PRICE_REAL: "purchase.purchase_price_real",
-    ENTITY_KEY_SEED_PURCHASE_PRICE_VARIABLE: "purchase.purchase_price_variable",
     ENTITY_KEY_SEED_PURCHASE_PRICE_REAL_WITHOUT_PV: "purchase.purchase_price_real_without_pv",
-    ENTITY_KEY_SEED_PURCHASE_PRICE_VARIABLE_WITHOUT_PV: "purchase.purchase_price_variable_without_pv",
-    ENTITY_KEY_SEED_PRICE_AGREEMENT_SAVINGS: "purchase.price_agreement_savings",
-    ENTITY_KEY_SEED_OWN_PRODUCTION_SAVINGS: "purchase.own_production_savings",
     ENTITY_KEY_SEED_BATTERY_GRID_CHARGE_SUM: "battery.battery_grid_charge_sum",
     ENTITY_KEY_SEED_BATTERY_GRID_DISCHARGE_SUM: "battery.battery_grid_discharge_sum",
-    ENTITY_KEY_SEED_BATTERY_CHARGING_SAVINGS: "battery.battery_charging_savings",
 }
 
 _HOURLY_TRIGGER_HOURS = list(range(24))
@@ -204,22 +247,18 @@ def signal_savings_update(entry_id: str) -> str:
 
 
 @dataclass
-class PriceSnapshot:
-    real: float
-    variable: float
-    without_pv: float
-
-
-@dataclass
 class PurchasePriceState:
     purchase_price_real: float = 0.0
-    purchase_price_variable: float = 0.0
     purchase_price_real_without_pv: float = 0.0
-    purchase_price_variable_without_pv: float = 0.0
     own_production_savings: float = 0.0
-    price_agreement_savings: float = 0.0
-    grid_discharge_pct_prev: float | None = None
-    total_discharge_pct_prev: float | None = None
+    # Running cumulative of household_consumption (kWh) for the current
+    # tax period (month or quarter -- see hub_properties.
+    # billing_period_threshold_kwh()), used to find where in the full/
+    # reduced tax tiers the hypothetical "all bought from grid" scenario
+    # currently sits. Reset to 0 whenever tax_period_id changes (new
+    # month/quarter started) -- see calculate_purchase_prices().
+    tax_period_id: str | None = None
+    tax_period_consumption_cum: float = 0.0
 
 
 @dataclass
@@ -231,14 +270,78 @@ class BatteryGridBalanceState:
 
 
 @dataclass
+class HourlyCounterState:
+    """Bookkeeping for one raw, ever-increasing lifetime counter (one of
+    the four ENTITY_KEY_*_HOURLY fields) -- what read_counter_delta()
+    needs to tell a normal hour's rise from a counter reset or an
+    entity_map repoint (Claus, 2026-10-16, see that function)."""
+
+    last_entity_id: str | None = None
+    last_raw_value: float | None = None
+
+
+@dataclass
+class HourlyCountersState:
+    household_consumption: HourlyCounterState = field(default_factory=HourlyCounterState)
+    grid_import: HourlyCounterState = field(default_factory=HourlyCounterState)
+    battery_grid_charge: HourlyCounterState = field(default_factory=HourlyCounterState)
+    battery_discharge: HourlyCounterState = field(default_factory=HourlyCounterState)
+
+
+@dataclass
 class SavingsLedger:
     purchase: PurchasePriceState = field(default_factory=PurchasePriceState)
     battery: BatteryGridBalanceState = field(default_factory=BatteryGridBalanceState)
-    last_hour_price: PriceSnapshot | None = None
-    this_hour_price: PriceSnapshot | None = None
+    counters: HourlyCountersState = field(default_factory=HourlyCountersState)
+    # Plain floats, not PriceSnapshot, since 2026-10-16: there's only one
+    # price left to delay by an hour (see module docstring) -- the
+    # electricity tax split happens in calculate_purchase_prices() itself,
+    # using that same hour's household_consumption, not a price read a
+    # tier ahead of time.
+    last_hour_price: float | None = None
+    this_hour_price: float | None = None
 
 
-def shift_prices(ledger: SavingsLedger, new_price: PriceSnapshot) -> SavingsLedger:
+def read_counter_delta(
+    state: HourlyCounterState, entity_id: str | None, raw_value: float | None
+) -> tuple[float | None, HourlyCounterState]:
+    """This hour's delta (kWh) for one raw, ever-increasing lifetime
+    counter, tolerating both a meter/firmware reset and an entity_map
+    repoint (Claus, 2026-10-16): replacing hardware (e.g. a PV inverter)
+    can make its lifetime counter jump to a much lower value, or make
+    Claus repoint the wizard field at a brand new entity_id whose own
+    counter starts low/at 0 -- either way, naively doing new - old would
+    book a huge negative number into a running total that must never
+    decrease. Pure -- testable on its own.
+
+    - raw_value is None (entity unavailable/unmapped): nothing to read
+      this hour -- (None, state unchanged), same as a missing reading
+      anywhere else in this module.
+    - No previous reading yet, or entity_id differs from last time (first
+      run ever, or a repoint): nothing safe to diff against -- this
+      hour's delta is 0, and raw_value becomes the new baseline. Costs
+      one hour's data right at the swap, which is the safe trade-off:
+      the alternative is guessing whether the new entity's current value
+      is "since the reset" or "since always".
+    - raw_value dropped below last_raw_value on the SAME entity: a
+      meter/firmware reset. Mirrors data/consumption_data.py's own
+      accumulate() helper -- the new, lower reading is itself this
+      period's accumulated amount since the reset, not negative
+      consumption, so it becomes the delta directly.
+    - Otherwise: the normal case, delta = raw_value - last_raw_value.
+    """
+    if raw_value is None:
+        return None, state
+    if state.last_raw_value is None or state.last_entity_id != entity_id:
+        return 0.0, HourlyCounterState(last_entity_id=entity_id, last_raw_value=raw_value)
+    if raw_value < state.last_raw_value:
+        delta = raw_value
+    else:
+        delta = raw_value - state.last_raw_value
+    return delta, HourlyCounterState(last_entity_id=entity_id, last_raw_value=raw_value)
+
+
+def shift_prices(ledger: SavingsLedger, new_price: float) -> SavingsLedger:
     """One run of Node-RED's "gem sidste times priser": "this hour"
     becomes "last hour", and new_price becomes the new "this hour".
     last_hour_price stays None only on the very first shift ever --
@@ -249,63 +352,87 @@ def shift_prices(ledger: SavingsLedger, new_price: PriceSnapshot) -> SavingsLedg
     return ledger
 
 
+def tax_period_id(now, billing_period_is_quarter: bool) -> str:
+    """A string identifying the current tax period (calendar month or
+    quarter, per select.<hub>_billing_period) -- changes exactly when
+    calculate_purchase_prices() should reset tax_period_consumption_cum
+    back to 0. "now" is a tz-aware datetime (dt_util.now()); kept as a
+    plain argument (not read from HA here) so this stays pure/testable."""
+    if billing_period_is_quarter:
+        quarter = (now.month - 1) // 3 + 1
+        return f"{now.year}-Q{quarter}"
+    return f"{now.year}-{now.month:02d}"
+
+
 def calculate_purchase_prices(
     state: PurchasePriceState,
-    last_hour_price: PriceSnapshot,
+    last_hour_real_price: float,
     household_consumption: float,
     grid_import: float,
-    battery_discharge: float,
-    grid_discharge_pct_cum: float,
-    total_discharge_pct_cum: float,
+    tax_full_rate: float,
+    tax_reduced_enabled: bool,
+    tax_threshold_kwh: float,
+    current_tax_period_id: str,
 ) -> PurchasePriceState:
     """One run of Node-RED's "Beregn indkøbspris med og uden PV". Pure --
-    testable on its own. See module docstring for the has_prev DIFF."""
-    has_prev = state.grid_discharge_pct_prev is not None
-    grid_discharge_pct_delta = 0.0
-    total_discharge_pct_delta = 0.0
-    if has_prev:
-        grid_discharge_pct_delta = grid_discharge_pct_cum - (state.grid_discharge_pct_prev or 0.0)
-        total_discharge_pct_delta = total_discharge_pct_cum - (state.total_discharge_pct_prev or 0.0)
+    testable on its own. See module docstring for 2026-10-16's rework of
+    purchase_price_real_without_pv (same commodity price as
+    purchase_price_real, plus the electricity tax that hypothetical
+    all-grid consumption would have incurred, split across the full/
+    reduced tax tiers).
 
-    grid_share_of_discharge = 0.0
-    if total_discharge_pct_delta > 0:
-        grid_share_of_discharge = grid_discharge_pct_delta / total_discharge_pct_delta
+    DIFF from both Node-RED and this module's own first port (Claus,
+    2026-10-16): purchase_price_real is now exactly grid_import * price,
+    nothing added for battery_discharge. grid_import (his sensor.
+    strom_indkob) is confirmed to already count ALL electricity bought
+    from the grid, including whatever went into charging the battery --
+    so a battery_discharge-weighted top-up on top of that was double-
+    counting money already counted once, at the hour it was actually
+    bought, and counting it again (at a different hour's price, no less)
+    when it was later discharged from the battery. The money actually
+    spent charging the battery from grid, and the arbitrage value of
+    discharging it later, are already tracked correctly and separately in
+    BatteryGridBalanceState/calculate_battery_grid_balance() below --
+    that's a different question (battery arbitrage savings) from this
+    one (total real spend vs. the hypothetical no-PV spend)."""
+    # Tax period rolled over (new month/quarter) since the last run --
+    # start this period's cumulative back at 0.
+    period_consumption_before = (
+        state.tax_period_consumption_cum if state.tax_period_id == current_tax_period_id else 0.0
+    )
 
-    grid_import_total = grid_import + battery_discharge * grid_share_of_discharge
+    if tax_reduced_enabled:
+        kwh_at_full_rate = max(
+            0.0, min(household_consumption, tax_threshold_kwh - period_consumption_before)
+        )
+    else:
+        # select.<hub>_electricity_tax is "Full" -- no reduced tier at
+        # all, every kWh taxed at the full rate.
+        kwh_at_full_rate = household_consumption
+    kwh_at_reduced_rate = household_consumption - kwh_at_full_rate
+
+    tax_cost = kwh_at_full_rate * tax_full_rate + kwh_at_reduced_rate * _REDUCED_ELECTRICITY_TAX_RATE
 
     purchase_price_real_without_pv = round(
-        state.purchase_price_real_without_pv + household_consumption * last_hour_price.without_pv,
-        2,
-    )
-    # Deliberately household_consumption x the *variable* price (not
-    # without_pv) -- literal to Node-RED: "what would full consumption
-    # have cost at variable price, with no PV at all".
-    purchase_price_variable_without_pv = round(
-        state.purchase_price_variable_without_pv + household_consumption * last_hour_price.variable,
+        state.purchase_price_real_without_pv
+        + household_consumption * last_hour_real_price
+        + tax_cost,
         2,
     )
     purchase_price_real = round(
-        state.purchase_price_real + grid_import_total * last_hour_price.real, 2
-    )
-    purchase_price_variable = round(
-        state.purchase_price_variable + grid_import_total * last_hour_price.variable, 2
+        state.purchase_price_real + grid_import * last_hour_real_price, 2
     )
 
     own_production_savings = state.own_production_savings
     if (purchase_price_real_without_pv - purchase_price_real) > own_production_savings:
         own_production_savings = round(purchase_price_real_without_pv - purchase_price_real, 2)
 
-    price_agreement_savings = round(purchase_price_real - purchase_price_variable, 2)
-
     return PurchasePriceState(
         purchase_price_real=purchase_price_real,
-        purchase_price_variable=purchase_price_variable,
         purchase_price_real_without_pv=purchase_price_real_without_pv,
-        purchase_price_variable_without_pv=purchase_price_variable_without_pv,
         own_production_savings=own_production_savings,
-        price_agreement_savings=price_agreement_savings,
-        grid_discharge_pct_prev=grid_discharge_pct_cum,
-        total_discharge_pct_prev=total_discharge_pct_cum,
+        tax_period_id=current_tax_period_id,
+        tax_period_consumption_cum=period_consumption_before + household_consumption,
     )
 
 
@@ -356,6 +483,35 @@ def calculate_battery_grid_balance(
 # ---------------------------------------------------------------------------
 
 
+def _counter_from_restored(raw: dict[str, Any] | None) -> HourlyCounterState:
+    """Builds one HourlyCounterState from restored state. Explicit
+    field-by-field reads, not HourlyCounterState(**raw), so an unexpected
+    key (e.g. from a future version of this module) is ignored instead of
+    crashing restore."""
+    if raw is None:
+        return HourlyCounterState()
+    return HourlyCounterState(
+        last_entity_id=raw.get("last_entity_id"),
+        last_raw_value=raw.get("last_raw_value"),
+    )
+
+
+def _price_from_restored(raw: Any) -> float | None:
+    """Reads last_hour_price/this_hour_price back from restored state.
+    Tolerates the dict shape ({"real": ..., "without_pv": ...}) a version
+    of this module from before 2026-10-16 may have saved -- only "real"
+    survives (see module docstring on why "without_pv" dropped its own
+    price). A plain float is the current/new shape."""
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return raw.get("real", _PRICE_FALLBACK)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
 @dataclass
 class PwMngtSavingsStoredData(ExtraStoredData):
     """Everything PwMngtSavingsDataSensor restores across a restart --
@@ -368,16 +524,14 @@ class PwMngtSavingsStoredData(ExtraStoredData):
     def as_dict(self) -> dict[str, Any]:
         purchase = self.ledger.purchase
         battery = self.ledger.battery
+        counters = self.ledger.counters
         return {
             "purchase": {
                 "purchase_price_real": purchase.purchase_price_real,
-                "purchase_price_variable": purchase.purchase_price_variable,
                 "purchase_price_real_without_pv": purchase.purchase_price_real_without_pv,
-                "purchase_price_variable_without_pv": purchase.purchase_price_variable_without_pv,
                 "own_production_savings": purchase.own_production_savings,
-                "price_agreement_savings": purchase.price_agreement_savings,
-                "grid_discharge_pct_prev": purchase.grid_discharge_pct_prev,
-                "total_discharge_pct_prev": purchase.total_discharge_pct_prev,
+                "tax_period_id": purchase.tax_period_id,
+                "tax_period_consumption_cum": purchase.tax_period_consumption_cum,
             },
             "battery": {
                 "battery_grid_charge_sum": battery.battery_grid_charge_sum,
@@ -385,39 +539,35 @@ class PwMngtSavingsStoredData(ExtraStoredData):
                 "battery_charging_savings": battery.battery_charging_savings,
                 "grid_discharge_pct_prev": battery.grid_discharge_pct_prev,
             },
-            "last_hour_price": (
-                None
-                if self.ledger.last_hour_price is None
-                else vars(self.ledger.last_hour_price)
-            ),
-            "this_hour_price": (
-                None
-                if self.ledger.this_hour_price is None
-                else vars(self.ledger.this_hour_price)
-            ),
+            "counters": {
+                "household_consumption": vars(counters.household_consumption),
+                "grid_import": vars(counters.grid_import),
+                "battery_grid_charge": vars(counters.battery_grid_charge),
+                "battery_discharge": vars(counters.battery_discharge),
+            },
+            "last_hour_price": self.ledger.last_hour_price,
+            "this_hour_price": self.ledger.this_hour_price,
         }
 
     @classmethod
     def from_dict(cls, restored: dict[str, Any]) -> "PwMngtSavingsStoredData":
         purchase_raw = restored.get("purchase") or {}
         battery_raw = restored.get("battery") or {}
+        counters_raw = restored.get("counters") or {}
         last_hour_raw = restored.get("last_hour_price")
         this_hour_raw = restored.get("this_hour_price")
         return cls(
             ledger=SavingsLedger(
                 purchase=PurchasePriceState(
                     purchase_price_real=purchase_raw.get("purchase_price_real", 0.0),
-                    purchase_price_variable=purchase_raw.get("purchase_price_variable", 0.0),
                     purchase_price_real_without_pv=purchase_raw.get(
                         "purchase_price_real_without_pv", 0.0
                     ),
-                    purchase_price_variable_without_pv=purchase_raw.get(
-                        "purchase_price_variable_without_pv", 0.0
-                    ),
                     own_production_savings=purchase_raw.get("own_production_savings", 0.0),
-                    price_agreement_savings=purchase_raw.get("price_agreement_savings", 0.0),
-                    grid_discharge_pct_prev=purchase_raw.get("grid_discharge_pct_prev"),
-                    total_discharge_pct_prev=purchase_raw.get("total_discharge_pct_prev"),
+                    tax_period_id=purchase_raw.get("tax_period_id"),
+                    tax_period_consumption_cum=purchase_raw.get(
+                        "tax_period_consumption_cum", 0.0
+                    ),
                 ),
                 battery=BatteryGridBalanceState(
                     battery_grid_charge_sum=battery_raw.get("battery_grid_charge_sum", 0.0),
@@ -427,12 +577,20 @@ class PwMngtSavingsStoredData(ExtraStoredData):
                     battery_charging_savings=battery_raw.get("battery_charging_savings", 0.0),
                     grid_discharge_pct_prev=battery_raw.get("grid_discharge_pct_prev"),
                 ),
-                last_hour_price=(
-                    None if last_hour_raw is None else PriceSnapshot(**last_hour_raw)
+                counters=HourlyCountersState(
+                    household_consumption=_counter_from_restored(
+                        counters_raw.get("household_consumption")
+                    ),
+                    grid_import=_counter_from_restored(counters_raw.get("grid_import")),
+                    battery_grid_charge=_counter_from_restored(
+                        counters_raw.get("battery_grid_charge")
+                    ),
+                    battery_discharge=_counter_from_restored(
+                        counters_raw.get("battery_discharge")
+                    ),
                 ),
-                this_hour_price=(
-                    None if this_hour_raw is None else PriceSnapshot(**this_hour_raw)
-                ),
+                last_hour_price=_price_from_restored(last_hour_raw),
+                this_hour_price=_price_from_restored(this_hour_raw),
             )
         )
 
@@ -462,11 +620,9 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
 
         entity_map = entry.options.get(CONF_ENTITY_MAP, {})
         # "real" is read via hub_properties.electricity_price() instead
-        # (see _PRICE_SOURCE_KEYS' comment) -- not in this dict.
-        self._price_entity_ids = {
-            field_name: entity_map.get(key) or None
-            for field_name, key in _PRICE_SOURCE_KEYS.items()
-        }
+        # (see _TAX_FULL_RATE_KEY's comment). _tax_full_rate_entity_id is
+        # the only price-ish entity_map field left for this sensor.
+        self._tax_full_rate_entity_id = entity_map.get(_TAX_FULL_RATE_KEY) or None
         self._household_consumption_entity_id = (
             entity_map.get(ENTITY_KEY_HOUSEHOLD_CONSUMPTION_HOURLY) or None
         )
@@ -528,6 +684,22 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
                 value,
             )
 
+        # own_production_savings/battery_charging_savings have no seed
+        # field of their own any more (Claus, 2026-10-16) -- derive both
+        # from whatever the four sums above just seeded (or their 0.0
+        # defaults, on a fresh install with nothing mapped), same formula
+        # calculate_purchase_prices()/calculate_battery_grid_balance() use
+        # every hour. Never negative -- matches those functions' own
+        # high-water-mark floor of 0.
+        purchase = self._ledger.purchase
+        purchase.own_production_savings = max(
+            0.0, purchase.purchase_price_real_without_pv - purchase.purchase_price_real
+        )
+        battery = self._ledger.battery
+        battery.battery_charging_savings = max(
+            0.0, battery.battery_grid_discharge_sum - battery.battery_grid_charge_sum
+        )
+
     def _seed_value(self, entity_id: str | None) -> float | None:
         if not entity_id:
             return None
@@ -547,7 +719,7 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
     @callback
     def _handle_price_shift(self, _now=None) -> None:
         self._pending_shift = None
-        new_price = self._read_price_snapshot()
+        new_price = self._read_real_price()
         if new_price is None:
             return
         self._ledger = shift_prices(self._ledger, new_price)
@@ -556,30 +728,48 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
     @callback
     def _handle_accumulate(self, _now=None) -> None:
         self._pending_accumulate = None
-        last_hour_price = self._ledger.last_hour_price
-        if last_hour_price is None:
+        last_hour_real_price = self._ledger.last_hour_price
+        if last_hour_real_price is None:
             # No shift has ever completed yet (fresh install, or this is
             # the very first hourly cycle since startup) -- nothing to
             # price this hour's energy at. Node-RED: global.get() returns
             # undefined here too before its own first run.
             return
 
-        household_consumption = self._read_hourly(self._household_consumption_entity_id)
-        grid_import = self._read_hourly(self._grid_import_entity_id)
-        battery_grid_charge = self._read_hourly(self._battery_grid_charge_entity_id)
-        battery_discharge = self._read_hourly(self._battery_discharge_entity_id)
-        grid_discharge_pct_cum, total_discharge_pct_cum = self._read_discharge_pct_cum()
+        counters = self._ledger.counters
+        household_consumption, counters.household_consumption = self._read_counter(
+            self._household_consumption_entity_id, counters.household_consumption
+        )
+        grid_import, counters.grid_import = self._read_counter(
+            self._grid_import_entity_id, counters.grid_import
+        )
+        battery_grid_charge, counters.battery_grid_charge = self._read_counter(
+            self._battery_grid_charge_entity_id, counters.battery_grid_charge
+        )
+        battery_discharge, counters.battery_discharge = self._read_counter(
+            self._battery_discharge_entity_id, counters.battery_discharge
+        )
+        grid_discharge_pct_cum, _total_discharge_pct_cum = self._read_discharge_pct_cum()
         battery_size = self._read_battery_size()
 
-        if household_consumption is not None and grid_import is not None and battery_discharge is not None:
+        if household_consumption is not None and grid_import is not None:
+            tax_full_rate = self._read_tax_full_rate()
+            tax_reduced_enabled = hub_properties.electricity_tax_reduced_enabled(
+                self.hass, self._entry
+            )
+            tax_threshold_kwh = hub_properties.billing_period_threshold_kwh(
+                self.hass, self._entry
+            )
+            current_tax_period_id = self._current_tax_period_id()
             self._ledger.purchase = calculate_purchase_prices(
                 self._ledger.purchase,
-                last_hour_price,
+                last_hour_real_price,
                 household_consumption,
                 grid_import,
-                battery_discharge,
-                grid_discharge_pct_cum,
-                total_discharge_pct_cum,
+                tax_full_rate,
+                tax_reduced_enabled,
+                tax_threshold_kwh,
+                current_tax_period_id,
             )
         else:
             LOGGER.debug(
@@ -590,7 +780,7 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         if battery_grid_charge is not None and battery_discharge is not None:
             self._ledger.battery = calculate_battery_grid_balance(
                 self._ledger.battery,
-                last_hour_price.real,
+                last_hour_real_price,
                 battery_grid_charge,
                 battery_discharge,
                 grid_discharge_pct_cum,
@@ -607,20 +797,22 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
 
     # -- reads ---------------------------------------------------------------
 
-    def _read_price_snapshot(self) -> PriceSnapshot | None:
+    def _read_real_price(self) -> float | None:
         real = hub_properties.electricity_price(self.hass, self._entry)
-        real = round(real, 2) if real is not None else None
-        variable = self._read_price(self._price_entity_ids["variable"])
-        without_pv = self._read_price(self._price_entity_ids["without_pv"])
-        if real is None and variable is None and without_pv is None:
-            # None of the three price sources are configured at all --
-            # don't bother shifting an all-fallback snapshot in.
-            return None
-        return PriceSnapshot(
-            real=real if real is not None else _PRICE_FALLBACK,
-            variable=variable if variable is not None else _PRICE_FALLBACK,
-            without_pv=without_pv if without_pv is not None else _PRICE_FALLBACK,
-        )
+        return round(real, 2) if real is not None else None
+
+    def _read_tax_full_rate(self) -> float:
+        """The full electricity-tax rate (kr/kWh), from Claus's own
+        entity_map field -- falls back to the reduced rate when
+        unmapped/unavailable, same "don't invent a tax rate higher than
+        reality" reasoning as elsewhere, and matching today's actual law
+        (no full-rate tier currently in effect -- see module docstring)."""
+        value = self._read_price(self._tax_full_rate_entity_id)
+        return value if value is not None else _REDUCED_ELECTRICITY_TAX_RATE
+
+    def _current_tax_period_id(self) -> str:
+        is_quarter = hub_properties.billing_period_is_quarter(self.hass, self._entry)
+        return tax_period_id(dt_util.now(), is_quarter)
 
     def _read_price(self, entity_id: str | None) -> float | None:
         if not entity_id:
@@ -628,16 +820,17 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         value = read_float_state(self.hass.states.get(entity_id))
         return round(value, 2) if value is not None else None
 
-    def _read_hourly(self, entity_id: str | None) -> float | None:
-        """The entity's "last_period" attribute (previous full hour's
-        total), not its live .state -- see const.py's own docstring on
-        the ENTITY_KEY_*_HOURLY fields."""
-        if not entity_id:
-            return None
-        state = self.hass.states.get(entity_id)
-        if state is None:
-            return None
-        return _read_float_attribute(state, "last_period")
+    def _read_counter(
+        self, entity_id: str | None, state: HourlyCounterState
+    ) -> tuple[float | None, HourlyCounterState]:
+        """This hour's delta (kWh) for one of the four ENTITY_KEY_*_HOURLY
+        fields, read from the entity's live .state -- a raw, ever-
+        increasing lifetime counter (Claus's own Utility Meter helpers
+        were dropped 2026-10-16 in favour of this, so a hardware swap,
+        e.g. a new PV inverter, doesn't need a new helper set up too).
+        See read_counter_delta() for the reset/entity-swap handling."""
+        raw_value = read_float_state(self.hass.states.get(entity_id)) if entity_id else None
+        return read_counter_delta(state, entity_id, raw_value)
 
     def _read_discharge_pct_cum(self) -> tuple[float, float]:
         entity_id = pv_properties.battery_data_entity_id(self.hass, self._entry)
@@ -658,13 +851,15 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
     def _write_state(self) -> None:
         purchase = self._ledger.purchase
         battery = self._ledger.battery
-        self._attr_native_value = purchase.price_agreement_savings
+        # No price_agreement_savings any more to use as the headline value
+        # (dropped, see module docstring) -- purchase_price_real (total
+        # actually spent) is the most meaningful single number left for
+        # this bundle sensor's own native_value; the full picture is in
+        # its attributes, same as data/balance_data.py's own pattern.
+        self._attr_native_value = purchase.purchase_price_real
         self._attr_extra_state_attributes = {
             "purchase_price_real": purchase.purchase_price_real,
-            "purchase_price_variable": purchase.purchase_price_variable,
             "purchase_price_real_without_pv": purchase.purchase_price_real_without_pv,
-            "purchase_price_variable_without_pv": purchase.purchase_price_variable_without_pv,
-            "price_agreement_savings": purchase.price_agreement_savings,
             "battery_grid_charge_sum": battery.battery_grid_charge_sum,
             "battery_grid_discharge_sum": battery.battery_grid_discharge_sum,
         }

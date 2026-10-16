@@ -176,23 +176,56 @@ ENTITY_KEY_SPOT_ELECTRICITY_PRICE = "spot_electricity_price"
 # Savings tracking -- entity_map fields read by data/savings_data.py, port
 # of Claus's Node-RED functions "Beregn indkøbspris med og uden PV" and
 # "Beregn balance på ladning af batteri fra grid". Entirely optional: not
-# every install has Claus's own variable/without-PV price sensors or the
-# hourly utility_meter helpers this depends on. ENTITY_KEY_SPOT_ELECTRICITY_
-# PRICE above doubles as the "reel" price here too (Claus, 2026-10-15:
-# "det er det samme reelt set") -- no separate field for it.
+# every install has the hourly utility_meter helpers this depends on.
+# ENTITY_KEY_SPOT_ELECTRICITY_PRICE above doubles as the "reel" price here
+# too (Claus, 2026-10-15: "det er det samme reelt set") -- no separate
+# field for it.
 # ---------------------------------------------------------------------------
 
-# Two more electricity prices (kr/kWh), alongside ENTITY_KEY_SPOT_ELECTRICITY_
-# PRICE's "reel" price -- Claus's own sensors, not derivable from anything
-# else PwMngt has. Old: sensor.el_kobspris_variabel / sensor.el_kobspris_udenpv.
-ENTITY_KEY_PRICE_VARIABLE = "price_variable"
-ENTITY_KEY_PRICE_WITHOUT_PV = "price_without_pv"
+# Dropped (Claus, 2026-10-15/16): ENTITY_KEY_PRICE_WITHOUT_PV, a plain
+# entity_map field for Claus's own "uden PV" price sensor (Old: sensor.
+# el_kobspris_udenpv). Turned out to be the wrong model entirely: the
+# underlying commodity/spot price is identical in the "with PV" and
+# "without PV" scenarios (the market price doesn't care how much solar you
+# have) -- the only real difference is the electricity TAX (elafgift),
+# because without PV you'd hit Denmark's tax threshold faster (same
+# consumption, but all of it bought from the grid instead of partly
+# self-produced). That's now calculated instead of read from a sensor --
+# see ENTITY_KEY_ELECTRICITY_TAX_FULL_RATE below and savings_data.py's
+# module docstring. (Same day, same reasoning as dropping ENTITY_KEY_
+# PRICE_VARIABLE: a sensor that looked like a separate price turned out to
+# have nothing genuinely separate behind it.)
 
-# Four hourly energy counters (kWh) -- each a Home Assistant Utility Meter
-# (or equivalent) that resets every hour, read through its own "last_period"
-# attribute (last full hour's total), not its live .state. Old:
-# sensor.strom_forbrug_husstand_pr_time / sensor.strom_indkob /
-# sensor.batteri_ladet_fra_grid_time / sensor.forbrug_fra_batteri_time.
+# Denmark's electricity tax (elafgift) has a two-tier threshold: a "full"
+# rate on the first N kWh purchased from the grid per billing period, then
+# a much-reduced rate (currently ~0.01 kr/kWh incl. VAT -- see
+# savings_data.py's _REDUCED_ELECTRICITY_TAX_RATE, hardcoded, not user-
+# configurable, because Claus says this reduced rate is always this exact
+# figure) on the rest. N is 4000 kWh/year, i.e. 333.3 kWh/month for a
+# monthly-settled customer or 1000 kWh/quarter for quarterly-settled --
+# which one applies is select.<hub>_billing_period (see hub_properties.
+# billing_period_threshold_kwh()). The reduced tier currently applies to
+# everyone regardless of consumption (no full-rate tier in effect as of
+# 2026), but Claus expects the full-rate tier to return 2028-01-01 --
+# select.<hub>_electricity_tax ("Full" vs. "Reduced (electric heating)")
+# is the switch for whether this household gets the reduced tier at all;
+# "Full" means every kWh is taxed at the full rate, no threshold math.
+# Claus's own sensor for the *full* rate (there's no sensor for the
+# reduced rate -- see above):
+ENTITY_KEY_ELECTRICITY_TAX_FULL_RATE = "electricity_tax_full_rate"
+
+# Four raw, ever-increasing lifetime energy counters (kWh) -- NOT a Home
+# Assistant Utility Meter helper. Old: sensor.strom_forbrug_husstand_pr_
+# time / sensor.strom_indkob / sensor.batteri_ladet_fra_grid_time /
+# sensor.forbrug_fra_batteri_time (those were Claus's own Utility Meter
+# sensors; dropped in favour of their underlying raw counters, Claus,
+# 2026-10-16, so a hardware swap -- e.g. a new PV inverter -- doesn't
+# force him to rebuild a Utility Meter helper too). data/savings_data.py
+# reads each one's live .state and derives the hour's own delta itself,
+# the same way data/consumption_data.py already does for
+# ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL -- including handling a counter
+# reset or an entity_map repoint without corrupting the running totals
+# this feeds (see savings_data.py's read_counter_delta()).
 ENTITY_KEY_HOUSEHOLD_CONSUMPTION_HOURLY = "household_consumption_hourly"
 ENTITY_KEY_GRID_IMPORT_HOURLY = "grid_import_hourly"
 ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY = "battery_grid_charge_hourly"
@@ -209,15 +242,17 @@ ENTITY_KEY_BATTERY_DISCHARGE_HOURLY = "battery_discharge_hourly"
 # unmapped, PwMngt simply starts that running total at 0 -- the normal,
 # fully-supported state for a fresh install with no Node-RED history to
 # carry over (Claus, 2026-10-15).
+#
+# No separate seed field for own_production_savings or
+# battery_charging_savings (dropped, Claus, 2026-10-16): both are just
+# max(0, bigger sum - smaller sum) of two other seeded totals, so seeding
+# them from their own old Node-RED sensor risked a mismatch against
+# whatever those two sums were seeded from. _seed_ledger() derives both
+# with that same formula instead, right after seeding the four sums below.
 ENTITY_KEY_SEED_PURCHASE_PRICE_REAL = "seed_purchase_price_real"
-ENTITY_KEY_SEED_PURCHASE_PRICE_VARIABLE = "seed_purchase_price_variable"
 ENTITY_KEY_SEED_PURCHASE_PRICE_REAL_WITHOUT_PV = "seed_purchase_price_real_without_pv"
-ENTITY_KEY_SEED_PURCHASE_PRICE_VARIABLE_WITHOUT_PV = "seed_purchase_price_variable_without_pv"
-ENTITY_KEY_SEED_PRICE_AGREEMENT_SAVINGS = "seed_price_agreement_savings"
-ENTITY_KEY_SEED_OWN_PRODUCTION_SAVINGS = "seed_own_production_savings"
 ENTITY_KEY_SEED_BATTERY_GRID_CHARGE_SUM = "seed_battery_grid_charge_sum"
 ENTITY_KEY_SEED_BATTERY_GRID_DISCHARGE_SUM = "seed_battery_grid_discharge_sum"
-ENTITY_KEY_SEED_BATTERY_CHARGING_SAVINGS = "seed_battery_charging_savings"
 
 # Consumption tracking -- entity_map field(s) read by
 # data/consumption_data.py straight from Recorder (hourly long-term
