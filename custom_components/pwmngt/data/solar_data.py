@@ -139,6 +139,11 @@ PwM_SOLAR_DATA_SENSORS: list[SensorEntityDescription] = [
         key="solar_data",
         name="Solar data",
         icon="mdi:solar-power-variant-outline",
+        # Diagnostic, like consumption_data.py's own attribute-only
+        # "_data" sensor (Claus, 19-10-2026: this was the odd one out,
+        # showing up under "Sensors" instead of "Diagnostic" -- same fix
+        # as savings_data.py's just got).
+        entity_category=EntityCategory.DIAGNOSTIC,
     ),
 ]
 
