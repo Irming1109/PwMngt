@@ -133,6 +133,7 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
+from homeassistant.const import EntityCategory
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er, event
@@ -189,6 +190,11 @@ PwM_SAVINGS_DATA_SENSORS: list[SensorEntityDescription] = [
         key="savings_data",
         name="Savings data",
         icon="mdi:cash-sync",
+        # Diagnostic, like consumption_data.py/solar_data.py's own
+        # attribute-only "_data" sensors this was modelled on (Claus,
+        # 19-10-2026: it was the odd one out, showing up under "Sensors"
+        # instead of "Diagnostic" on the device page).
+        entity_category=EntityCategory.DIAGNOSTIC,
         # No device_class/native_unit_of_measurement (Claus, 2026-10-17,
         # fixing a bug from the very same day): a device_class forces HA
         # to require a NUMERIC state -- that's exactly why setting this

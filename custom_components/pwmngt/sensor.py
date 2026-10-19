@@ -93,7 +93,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         sensors.append(entity)
 
     for description, entity_map_key in PwM_PV_MIRROR_SENSORS:
-        entity = PwMngtPvMirrorSensor(description, entry, entity_map_key)
+        entity = PwMngtPvMirrorSensor(
+            description,
+            entry,
+            entity_map_key,
+            zero_if_unconfigured=entity_map_key in _ZERO_IF_UNCONFIGURED_PV_POWER_KEYS,
+        )
         LOGGER.info("Added PV mirror sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
@@ -291,6 +296,14 @@ class PwMngtChargerSensor(SensorEntity):
 # imported below.
 # ---------------------------------------------------------------------------
 
+
+# PV1/PV2/PV3 power: see PwMngtPvMirrorSensor's zero_if_unconfigured --
+# these three default to 0 W instead of staying "unavailable" forever
+# when the user hasn't picked a source entity (e.g. a plant with only
+# two strings, never a PV3).
+_ZERO_IF_UNCONFIGURED_PV_POWER_KEYS = frozenset(
+    {ENTITY_KEY_PV1_POWER, ENTITY_KEY_PV2_POWER, ENTITY_KEY_PV3_POWER}
+)
 
 # ---------------------------------------------------------------------------
 # PV-device sensors that live-mirror another entity's state. The source
@@ -770,6 +783,12 @@ class PwMngtPvMirrorSensor(_PwMngtMirrorSensor):
     """A PwM PV-device sensor that live-mirrors another entity's state,
     where the source entity_id is picked by the user in Options -> Solar
     PV Plant (see PwM_PV_MIRROR_SENSORS above).
+
+    zero_if_unconfigured (PV1/PV2/PV3 power only): default to 0 W,
+    available, instead of staying "unavailable" forever when no source
+    entity is configured -- a PV string that isn't installed genuinely
+    reads 0, same reasoning as PwMngtPvSumSensor's own "missing source
+    contributes 0" design.
     """
 
     def __init__(
@@ -777,6 +796,7 @@ class PwMngtPvMirrorSensor(_PwMngtMirrorSensor):
         description: SensorEntityDescription,
         entry: ConfigEntry,
         entity_map_key: str,
+        zero_if_unconfigured: bool = False,
     ) -> None:
         self.entity_description = description
         self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
@@ -787,6 +807,12 @@ class PwMngtPvMirrorSensor(_PwMngtMirrorSensor):
         entity_map = entry.options.get(CONF_ENTITY_MAP, {})
         self._source_entity_id = entity_map.get(entity_map_key) or None
         if self._source_entity_id is None:
+            if zero_if_unconfigured:
+                # Not installed -- 0 W is the correct reading, not
+                # "unknown".
+                self._attr_native_value = 0.0
+                self._attr_available = True
+                return
             # Not picked yet (e.g. an entry created before this field
             # existed, or the user hasn't set it) -- nothing to mirror
             # until it's set via the integration's options ("Configure" ->
