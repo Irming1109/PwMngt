@@ -201,9 +201,13 @@ _ACTIVE_CHARGE_COMMANDS = frozenset(
 # charge is planned later today. Old: "Ja (i dag)".
 _CHARGE_STATUS_YES_TODAY = "yes_today"
 
-# Minimum SoC floor/ceiling, as in Node-RED.
+# Minimum SoC floor/ceiling. The floor (5) matches Node-RED. The ceiling
+# was 90 in Node-RED's original port; DIFF (Claus, 19-10-2026): raised to
+# 95 so min_soc can lock all the way up to battery_nightly_target, which
+# is itself capped at 95 (see data/solar_data.py's _TARGET_CEILING) -- a
+# deliberate behaviour change, not a literal port anymore.
 _MIN_SOC_FLOOR = 5
-_MIN_SOC_CEILING = 90
+_MIN_SOC_CEILING = 95
 
 # A grid cell may only be discharged if the current price is at least this
 # much (kr/kWh) above the cell's own purchase price. Old: NAT_PRIS_TILLAEG.
