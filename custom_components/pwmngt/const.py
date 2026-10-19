@@ -231,17 +231,21 @@ ENTITY_KEY_GRID_IMPORT_HOURLY = "grid_import_hourly"
 ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY = "battery_grid_charge_hourly"
 ENTITY_KEY_BATTERY_DISCHARGE_HOURLY = "battery_discharge_hourly"
 
-# One-time seed fields (DKK) -- each optionally points at the matching
-# sensor Claus's own Node-RED already maintains, so PwMngt's own running
-# totals start from his real historical figures instead of 0 when it takes
-# over, rather than silently resetting years of tracked savings. Each is
-# read exactly once (PwMngtSavingsDataSensor's very first run, when there's
-# no restored PwMngt state yet) -- after that, PwMngt's own bookkeeping is
-# authoritative and these are never read again, so it's safe to leave them
-# mapped (or even decommission the Node-RED sensors) indefinitely. Left
-# unmapped, PwMngt simply starts that running total at 0 -- the normal,
-# fully-supported state for a fresh install with no Node-RED history to
-# carry over (Claus, 2026-10-15).
+# Seed fields (DKK) -- each optionally points at the matching sensor
+# Claus's own Node-RED already maintains, so PwMngt's own running
+# totals start from his real historical figures instead of 0, rather
+# than silently resetting years of tracked savings. Applied as a high-
+# water mark every time PwMngtSavingsDataSensor is added to hass (every
+# HA restart or options reload, not just the very first run ever --
+# Claus, 2026-10-16, see savings_data.py's _seed_ledger()): each field
+# only ever moves the matching running total UP to the seed sensor's
+# current value, never down -- so it's safe to leave these mapped
+# indefinitely (an unavailable or decommissioned Node-RED sensor is
+# just ignored) and safe to re-run the wizard as often as needed. Left
+# unmapped, PwMngt simply keeps that running total at whatever it's
+# already tracked on its own -- the normal, fully-supported state for
+# a fresh install with no Node-RED history to carry over (Claus,
+# 2026-10-15).
 #
 # No separate seed field for own_production_savings or
 # battery_charging_savings (dropped, Claus, 2026-10-16): both are just

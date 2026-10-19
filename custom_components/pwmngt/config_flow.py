@@ -111,8 +111,8 @@ _SOLAR_PV_PLANT_FIELDS = [
     (ENTITY_KEY_GRID_IMPORT_HOURLY, "kWh", False),
     (ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY, "kWh", False),
     (ENTITY_KEY_BATTERY_DISCHARGE_HOURLY, "kWh", False),
-    # One-time seed fields (DKK) -- see const.py's own docstring above
-    # these keys for what they're for and when they're read.
+    # Seed fields (DKK) -- see const.py's own docstring above these keys
+    # for what they're for and when they're read.
     (ENTITY_KEY_SEED_PURCHASE_PRICE_REAL, "DKK", False),
     (ENTITY_KEY_SEED_PURCHASE_PRICE_REAL_WITHOUT_PV, "DKK", False),
     (ENTITY_KEY_SEED_BATTERY_GRID_CHARGE_SUM, "DKK", False),
@@ -223,9 +223,9 @@ _SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
     ),
     (
         "savings_seed",
-        True,  # collapsed by default -- one-time migration aid, most
-        # installs (anything not migrating from Claus's own Node-RED) will
-        # never touch this
+        True,  # collapsed by default -- a migration aid most installs
+        # (anything not migrating from Claus's own Node-RED) will never
+        # touch
         [
             ENTITY_KEY_SEED_PURCHASE_PRICE_REAL,
             ENTITY_KEY_SEED_PURCHASE_PRICE_REAL_WITHOUT_PV,

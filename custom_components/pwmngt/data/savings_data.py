@@ -17,12 +17,13 @@ Entirely optional: every entity_map field this reads (ENTITY_KEY_
 ELECTRICITY_TAX_FULL_RATE, the four hourly ENTITY_KEY_*_HOURLY counters)
 is Claus's own sensor setup, not derivable from anything else PwMngt has.
 Left unmapped, the affected running totals simply never update (see
-_run()). The "real" price is ENTITY_KEY_SPOT_ELECTRICITY_PRICE (already
-used elsewhere) -- Claus, 2026-10-15: "det er det samme reelt set" -- no
-separate field for it -- read via hub_properties.electricity_price(),
-which adds Claus's configured kr/kWh surcharge on top (added the same
-day, see that function's own docstring): his supplier's markup isn't
-something the configured price sensor itself knows about.
+_handle_accumulate()). The "real" price is ENTITY_KEY_SPOT_ELECTRICITY_PRICE
+(already used elsewhere) -- Claus, 2026-10-15: "det er det samme reelt
+set" -- no separate field for it -- read via hub_properties.
+electricity_price(), which adds Claus's configured kr/kWh surcharge on
+top (added the same day, see that function's own docstring): his
+supplier's markup isn't something the configured price sensor itself
+knows about.
 
 Reworked (Claus, 2026-10-16): "uden PV" no longer means "read a different
 price sensor". The underlying commodity/spot price is the SAME with or
@@ -104,18 +105,6 @@ sums restart at 0 would freeze it at the seeded value for months, until
 the fresh sums grew large enough on their own to overtake it (Claus,
 2026-10-15 design discussion).
 
-Deliberate difference from Node-RED (DIFF, Claus 2026-10-15): "Beregn
-indkøbspris med og uden PV" tracks its own previous
-grid_afladning_pct_cum/total_afladning_pct_cum with a plain `|| 0`
-fallback, unlike "Beregn balance på ladning af batteri fra grid" in the
-very same export, which guards the equivalent tracker against a missing
-previous value (not just a previous value of 0) to avoid booking an
-entire lifetime's grid-discharge percentage as "this hour"'s after a
-Node-RED restart/deploy wipes local context. That guard is ported here for
-*both* functions, matching the pattern Claus's own code already uses for
-one of them -- not a new behaviour, just applied consistently. See
-_calculate_purchase_prices()'s has_prev handling.
-
 Not ported (confirmed dead in the exported source): "Beregn indkøbspris
 med og uden PV" reads select.pv_batteri_stromkilde into `stromkilde`, and
 a whole soc_state/context-restore block (`saved`/`ha_attrs`/`har_saved`/
@@ -171,9 +160,12 @@ from . import DATA_SENSOR_STATE
 
 LOGGER = logging.getLogger(__name__)
 
-# Node-RED's own `|| 2.3` fallback price (kr/kWh) when a price sensor is
-# unavailable -- a deliberately generous guess so a missing reading never
-# makes this run under-count what was spent.
+# Node-RED's own `|| 2.3` fallback price (kr/kWh), carried over only to
+# migrate an old restored value of the pre-2026-10-16 dict shape (see
+# _price_from_restored() below) where the "real" key is missing --
+# deliberately generous, so a migrated reading never under-counts what
+# was spent. Not used anywhere else; the live calculation has its own
+# "price unavailable -> skip this run" handling instead.
 _PRICE_FALLBACK = 2.3
 
 # The reduced electricity-tax rate (kr/kWh, incl. VAT) that applies above
@@ -188,6 +180,8 @@ PwM_SAVINGS_DATA_ATTRIBUTES: list[str] = [
     "purchase_price_real_without_pv",
     "battery_grid_charge_sum",
     "battery_grid_discharge_sum",
+    "own_production_savings",
+    "battery_charging_savings",
 ]
 
 PwM_SAVINGS_DATA_SENSORS: list[SensorEntityDescription] = [
@@ -242,11 +236,13 @@ PwM_SAVINGS_HEADLINE_SENSORS: list[SensorEntityDescription] = [
 # entity_map field.
 _TAX_FULL_RATE_KEY = ENTITY_KEY_ELECTRICITY_TAX_FULL_RATE
 
-# entity_map key -> dotted ledger field, for the one-time seed (see module
-# docstring). Checked in __init__/_run_first_ever() against SavingsLedger's
-# actual attribute names. own_production_savings/battery_charging_savings
-# have no entry here any more (Claus, 2026-10-16) -- _seed_ledger() derives
-# both from the four sums below instead of seeding them separately.
+# entity_map key -> dotted ledger field, for the high-water-mark seed
+# (see module docstring's "Reworked yet again" paragraph). Built in
+# __init__, applied in _seed_ledger() against SavingsLedger's actual
+# attribute names. own_production_savings/battery_charging_savings
+# have no entry here any more (Claus, 2026-10-16) -- _seed_ledger()
+# derives both from the four sums below instead of seeding them
+# separately.
 _SEED_SOURCE_KEYS: dict[str, str] = {
     ENTITY_KEY_SEED_PURCHASE_PRICE_REAL: "purchase.purchase_price_real",
     ENTITY_KEY_SEED_PURCHASE_PRICE_REAL_WITHOUT_PV: "purchase.purchase_price_real_without_pv",
@@ -254,7 +250,6 @@ _SEED_SOURCE_KEYS: dict[str, str] = {
     ENTITY_KEY_SEED_BATTERY_GRID_DISCHARGE_SUM: "battery.battery_grid_discharge_sum",
 }
 
-_HOURLY_TRIGGER_HOURS = list(range(24))
 _PRICE_SHIFT_DELAY_SECONDS = 60
 _ACCUMULATE_DELAY_SECONDS = 75
 

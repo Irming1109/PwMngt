@@ -144,7 +144,7 @@
             }
           },
           "savings_seed": {
-            "name": "Node-RED historical savings data (optional, one-time)",
+            "name": "Node-RED historical savings data (optional)",
             "data": {
               "seed_purchase_price_real": "Seed: purchase price (real)",
               "seed_purchase_price_real_without_pv": "Seed: purchase price without PV (real)",
@@ -152,7 +152,7 @@
               "seed_battery_grid_discharge_sum": "Seed: battery discharged from grid (sum)"
             },
             "data_description": {
-              "seed_purchase_price_real": "If you're migrating from an existing Node-RED setup tracking this same running total (kr), point this at that old sensor so PwMngt's own total starts from its current value instead of 0. Read only once, on PwMngt's very first savings calculation -- never touched again afterwards. Leave empty (\"Not available\") on a fresh install with no history to carry over. \"Own production savings\" is then derived automatically from this and the field below, instead of needing its own seed.",
+              "seed_purchase_price_real": "If you're migrating from an existing Node-RED setup tracking this same running total (kr), point this at that old sensor so PwMngt's own total starts from its current value instead of 0. Checked every time this wizard is completed, and only ever raises PwMngt's own total up to this sensor's current value -- never lowers it, so it's safe to re-run this wizard any time. Leave empty (\"Not available\") on a fresh install with no history to carry over. \"Own production savings\" is then derived automatically from this and the field below, instead of needing its own seed.",
               "seed_purchase_price_real_without_pv": "Same idea as above, for the \"purchase price without PV (real)\" running total.",
               "seed_battery_grid_charge_sum": "Same idea as above, for the \"battery charged from grid\" running total. \"Battery charging savings\" is then derived automatically from this and the field below, instead of needing its own seed.",
               "seed_battery_grid_discharge_sum": "Same idea as above, for the \"battery discharged from grid\" running total."
