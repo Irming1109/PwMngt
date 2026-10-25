@@ -12,3 +12,8 @@ __pycache__/
 # Scratch file Claude writes per release; content ends up in the git tag
 # message, not meant to be committed to history.
 RELEASE_NOTES.md
+
+# Personal Claude Code files (each developer's own setup - never shared)
+/CLAUDE.local.md
+.claude/settings.local.json
+.claude/worktrees/
