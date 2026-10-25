@@ -39,7 +39,9 @@ GitHub Issues er **den eneste opgaveliste** for PwMngt. `BACKLOG.md` bruges ikke
 
 **Kode vinder:** kræver en opgave kode, ligger hele opgaven i `Udvikling`. **Ingen sub-issues:** dele står som tjekliste (`- [ ]`) i issuet; afhængigheder skrives som "Afhænger af #N" i den afhængige opgave.
 
-**Automatik og visninger:** GitHub har intet API til boardets workflows og visninger – de sættes op på github.com (boardet → ⋯ → Workflows / "Save view"). Er *Auto-add* og *Item added → needs-triage* ikke slået til, så læg selv issuet på boardet og sæt Status (kommandoerne nedenfor). Et lukket issue får `done` via workflowet *Item closed*.
+**Automatik på boardet** (Workflows – som på Billboard): alle nye åbne issues i repoet lægges på boardet (*Auto-add to project*, `is:issue is:open`) og får Status `needs-triage` (*Item added to project*); et lukket issue får `done` (*Item closed*), og et issue sat til `done` lukkes (*Auto-close issue*). *Auto-add sub-issues* er slået fra (vi bruger ikke sub-issues). Issue type, Område, Prio og Spor sættes altid manuelt. Er det klart, at opgaven skal laves nu, sættes Status til `ready-for-dev`.
+
+**Visninger på boardet** (som på Billboard – alle boards med Column by Status og Prio + Issue type vist på kortene): "Alle Issues" (`is:open`), "Kasper" (`assignee:repzak is:open`), "Claus" (`assignee:Irming1109 is:open`) og "Beslutninger" (`spor:Beslutning is:open`) – med Swimlanes by Spor og Sort by Prio – samt "Nylige ændringer" (`updated:>@today-2d`, uden swimlanes, nyeste først efter Updated). Et utildelt issue i `ready-for-dev` ses kun i "Alle Issues". GitHub har intet API til workflows og visninger – de ændres på github.com (ændringer i en visning gemmes først med "Save").
 
 ## Skabeloner for brødteksten
 
