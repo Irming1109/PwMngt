@@ -50,7 +50,7 @@ Python, Home Assistant ≥ 2025.3 (`hacs.json`), ingen eksterne pakker ud over `
 - Brug altid **nyeste fil pr. person efter datoen i filnavnet** (parse DD-MM-YYYY – ikke leksikalsk sortering); ældre filer kun til at sammenligne. **Claus's version er referencen.** Søg i `func`-teksten med Python, ikke på node-navne, og tjek om tab/node er disabled ("Skraldespand", "backup").
 
 ## Kommandoer
-- Syntakstjek: `python -m py_compile custom_components/pwmngt/*.py custom_components/pwmngt/*/*.py` (Git Bash) (der er ingen testsuite – test sker i HA).
+- Syntakstjek: `python -m py_compile custom_components/pwmngt/*.py custom_components/pwmngt/*/*.py` (Git Bash) (der er ingen testsuite – test sker i HA). Hele tjekket før en release: `python -I .claude/skills/pwmngt-deploy/precheck.py`.
 - Release: `.\release.ps1` fra repo-roden (læser version fra `manifest.json`, laver annoteret tag `vX.Y.Z` fra `RELEASE_NOTES.md`, pusher kun tagget; `.github/workflows/release.yml` opretter GitHub Release som "Latest"). Se skillen **`pwmngt-deploy`**.
 - GitHub CLI: `C:\Program Files\GitHub CLI\gh.exe` (på Kaspers maskine).
 
@@ -74,7 +74,7 @@ Python, Home Assistant ≥ 2025.3 (`hacs.json`), ingen eksterne pakker ud over `
 - Brug **Claude in Chrome** (ejerens egen, loggede-ind browser) til HA – den indbyggede browser er ikke logget ind. Log aldrig selv ind; er browseren ikke logget ind, så sig det.
 
 ## Skills (`.claude/skills/`)
-- **`pwmngt-deploy`** – når der siges "Deploy": release-noter, tag, tjek af release, HACS "Update information".
+- **`pwmngt-deploy`** – når der siges "Deploy": tjek før release (`precheck.py`), evt. versionsbump, release-noter med issues, ét samlet "ja", tag og release, issues får en kommentar og sættes til `in-test`, HACS "Update information" (kun Kasper).
 - **`pwmngt-nodered-reference`** – opslag i Node-RED-eksporterne.
 - **`github-issue`** – opret/opdatér issues og felterne på boardet.
 - **`pwmngt-visual-docs`** – den interaktive drill-down-dokumentation (`docs/visual-documentation.html`); kun når der bedes om det, aldrig som del af deploy.
