@@ -1,6 +1,7 @@
-// SessionStart hook: keeps the shared Claude files (CLAUDE.md, skills, hooks, settings) in step with GitHub,
-// without touching the code. Fetches origin/main and copies only SHARED_PATHS that GitHub has changed and
-// that have no local changes. The rest of main is only reported (run "git pull --autostash" to get the code).
+// SessionStart hook: keeps the checkout in step with GitHub. Fetches origin/main and fast-forwards the whole
+// checkout when it is safe (see tryFastForward). Otherwise it copies only the shared Claude files (CLAUDE.md,
+// skills, hooks, settings) that GitHub has changed and that have no local changes, and reports how far behind
+// the code is (run "git pull --autostash" to get it).
 // Cross-platform (Windows + macOS): plain Node, no shell features.
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -40,6 +41,55 @@ try {
     git("fetch", "--quiet", "origin", "main");
 } catch {
     // Offline or no access: never block the session.
+    process.exit(0);
+}
+
+// Both developers push code, so a session should start on the newest main. Fast-forward the whole checkout
+// when that can't touch anyone's work: on main, no unpushed commits, and no uncommitted changes in tracked
+// files - apart from shared files an earlier run of this hook copied (they equal origin/main). Otherwise fall
+// through to copying only the shared files and reporting how far behind the code is.
+function isSharedPath(file) {
+    return SHARED_PATHS.some((path) => file === path || file.startsWith(`${path}/`));
+}
+
+function tryFastForward() {
+    if (gitSucceeds("symbolic-ref", "--quiet", "HEAD") === false || git("symbolic-ref", "--short", "HEAD") !== "main") {
+        return null;
+    }
+    if (Number(git("rev-list", "--count", `${REMOTE_BRANCH}..HEAD`)) > 0) {
+        return null;
+    }
+    const behind = Number(git("rev-list", "--count", `HEAD..${REMOTE_BRANCH}`));
+    if (behind === 0) {
+        return null;
+    }
+    const dirty = lines(git("status", "--porcelain", "--untracked-files=no")).map((line) => line.slice(3));
+    const hookCopies = dirty.filter((file) => isSharedPath(file) && workingTreeBlob(file) === blobAt(REMOTE_BRANCH, file));
+    if (hookCopies.length !== dirty.length) {
+        return null;
+    }
+    const before = git("rev-parse", "HEAD");
+    if (hookCopies.length > 0) {
+        git("checkout", "HEAD", "--", ...hookCopies);
+    }
+    if (!gitSucceeds("merge", "--ff-only", "--quiet", REMOTE_BRANCH)) {
+        return null;
+    }
+    return {
+        behind,
+        sharedChanged: lines(git("diff", "--name-only", before, "HEAD", "--", ...SHARED_PATHS)),
+        subjects: lines(git("log", "--format=%h %s", `${before}..HEAD`)),
+    };
+}
+
+const pulled = tryFastForward();
+if (pulled !== null) {
+    const shared = pulled.sharedChanged.length > 0 ? ` Shared Claude files changed: ${pulled.sharedChanged.join(", ")}.` : "";
+    output(
+        `Pulled ${pulled.behind} new commit(s) from GitHub.${pulled.sharedChanged.length > 0 ? ` Updated: ${pulled.sharedChanged.join(", ")}` : ""}`,
+        `This session's checkout was just fast-forwarded to ${REMOTE_BRANCH} (${pulled.behind} commit(s)) after the session loaded its instructions:\n${pulled.subjects.join("\n")}\n`
+            + `${shared} ${pulled.sharedChanged.length > 0 ? "Read the changed shared files now (CLAUDE.md first) before working. " : ""}`
+            + "Briefly tell the user in Danish what is new.");
     process.exit(0);
 }
 
