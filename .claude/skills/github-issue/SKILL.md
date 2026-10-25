@@ -128,6 +128,8 @@ Projektets id er `PVT_kwHOBJveEs4BooKR`. Ændres felterne på boardet, ændres i
 
 **Oprette:** forstå behovet → spørg ind til det manglende → søg efter dubletter → foreslå de fem felter → vis udkast → opret efter ja → læg på boardet og sæt felterne → giv linket.
 
+**Alle commits skal så vidt muligt have et issue-nummer** (se CLAUDE.md, **Opgaver og backlog**) – mangler der et issue til en kodeændring, så find eller foreslå ét, før der committes.
+
 **Når Claude laver et issue:** tildel personen, sæt `in-progress` → (arbejde) → commit, når der bedes om det, med **nummeret først i emnelinjen** (`#2 Port Automatik Styring (0.4.04)`) og `Refs #<nr>` i beskeden – ikke `Fixes`/`Closes`, som lukker ved push før test. Giv beskeden med `-m`/`-F` (git sletter ellers linjer, der starter med `#` – eller sæt `git config commit.cleanup scissors` i klonen) → sæt `in-test`, tildel den, hvis HA det testes på, og skriv en kort kommentar: hvilke commits og hvilken version, hvad er lavet, og hvad der skal tjekkes i HA.
 
 **Når det er testet:** luk issuet (`gh issue close <nr> --repo Irming1109/PwMngt`). Fejler testen: tilbage til `ready-for-dev`/`in-progress` med en kommentar om, hvad der ikke virkede.
