@@ -1,5 +1,8 @@
 # Backlog
 
+> **Arkiv – bruges ikke længere (25. okt. 2026).** Alle opgaver ligger nu som GitHub Issues på boardet "Power Management" (https://github.com/users/Irming1109/projects/6) – se skillen `github-issue`. Punkterne herunder blev flyttet til #1–#7; "Port Skal batteri lades" var allerede lavet (`data/battery_charge_decision.py`), og "Sæt battery_command" er delvist lavet (resten er #2).
+
+
 Ting vi bevidst har skudt til hjørne for nu, så de ikke går tabt undervejs -- ikke prioriteret, bare en samlet liste over det vi støder på men ikke bygger med det samme. Tilføj nye punkter her efterhånden som de dukker op, f.eks. mens vi arbejder os igennem Claus's Node-RED.
 
 - [ ] **Simulator-instans.** Genåbn `single_config_entry` (`manifest.json` / `config_flow.py`'s `PwMngtConfigFlow`-docstring) for at tillade en ekstra PwMngt-instans, der kan bruges som simulator -- til både demo og debugging.

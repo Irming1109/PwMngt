@@ -1,0 +1,54 @@
+name: Ønske eller forbedring
+description: En ny funktion – eller en eksisterende, der kan blive bedre
+projects: ["Irming1109/6"]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: Behov
+      description: Hvad mangler, og hvorfor?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Forslag til løsning
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptkriterier
+      description: Hvornår er det færdigt?
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: Ikke med
+      description: Valgfrit – hvad hører ikke til denne opgave?
+  - type: textarea
+    id: nodered
+    attributes:
+      label: Node-RED-modstykke
+      description: Valgfrit – funktion og tab hos Claus.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Område
+      description: Sættes som feltet Område på boardet ved triage.
+      options:
+        - solar (Solar PV Plant, prognose, inverter)
+        - battery (batteristyring)
+        - consumption (forbrug)
+        - savings (besparelser og priser)
+        - ev (EV-ladere)
+        - pool
+        - pvsurplus (PV-overskud)
+        - heatpump (jordvarmepumpe)
+        - wizard (opsætning og options-wizard)
+        - cards (Lovelace-kort og dashboards)
+        - deploy (release, HACS, installation)
+        - docs (dokumentation)

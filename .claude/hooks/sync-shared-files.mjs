@@ -7,7 +7,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const SHARED_PATHS = ["CLAUDE.md", ".claude/skills", ".claude/hooks", ".claude/settings.json"];
+const SHARED_PATHS = ["CLAUDE.md", ".claude/skills", ".claude/hooks", ".claude/settings.json", ".github/ISSUE_TEMPLATE"];
 const REMOTE_BRANCH = "origin/main";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");

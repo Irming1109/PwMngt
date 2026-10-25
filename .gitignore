@@ -17,3 +17,6 @@ RELEASE_NOTES.md
 /CLAUDE.local.md
 .claude/settings.local.json
 .claude/worktrees/
+
+# Screenshots for GitHub issues (uploaded to the issue-screenshots branch)
+/issue-screenshots/

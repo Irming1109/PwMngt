@@ -1,0 +1,65 @@
+name: Fejl
+description: Noget virker forkert i integrationen
+projects: ["Irming1109/6"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Ingen private data:** ingen adresser, HA-adresser, tokens, adgangskoder eller serienumre – heller ikke på skærmbilleder.
+  - type: input
+    id: where
+    attributes:
+      label: Hvor og version
+      placeholder: "Fx Claus's HA, PwMngt 0.4.03, Growatt + Wallbox"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Trin til at genskabe fejlen
+      placeholder: |
+        1. Gå til …
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Forventet
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Faktisk
+      description: Gerne entity_id, state/attributter og log-linjer.
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Skærmbilleder
+      description: Træk billederne ind her – uden private data.
+  - type: textarea
+    id: nodered
+    attributes:
+      label: Hvordan gør Node-RED?
+      description: Valgfrit – funktion, tab og eksportens dato.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Område
+      description: Sættes som feltet Område på boardet ved triage.
+      options:
+        - solar (Solar PV Plant, prognose, inverter)
+        - battery (batteristyring)
+        - consumption (forbrug)
+        - savings (besparelser og priser)
+        - ev (EV-ladere)
+        - pool
+        - pvsurplus (PV-overskud)
+        - heatpump (jordvarmepumpe)
+        - wizard (opsætning og options-wizard)
+        - cards (Lovelace-kort og dashboards)
+        - deploy (release, HACS, installation)
+        - docs (dokumentation)

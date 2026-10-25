@@ -7,10 +7,10 @@ Udviklere: **Kasper** (erfaren C#/ASP.NET-udvikler og løsningsarkitekt – fork
 - **Begge koder, committer og pusher** – kode, denne fil, skills og hooks. Der er ingen tester-rolle som i Billboard.
 - Arbejd altid ovenpå den andens seneste: `git pull --autostash` **før** en opgave startes og igen **før** push. Små, afgrænsede commits; push ikke halvfærdigt arbejde, der kan bryde den andens HA.
 - Rør ikke den andens igangværende, ikke-committede filer – commit kun de filer, din egen opgave har ændret (aldrig `git add -A` blindt).
-- Commit kun, når den du taler med, beder om det. Commit-beskeder på dansk (som de seneste), kort hvad og hvorfor, og versionen i parentes ved et versionsbump, fx `Ret seed-felter der blev ignoreret (0.3.37)`.
+- Commit kun, når den du taler med, beder om det. Commit-beskeder på dansk (som de seneste), kort hvad og hvorfor, og versionen i parentes ved et versionsbump, fx `Ret seed-felter der blev ignoreret (0.3.37)`. Hører committet til et issue, starter emnelinjen med nummeret og beskeden har `Refs #<nr>` – se **Opgaver og backlog**.
 - **Hver har sin egen Home Assistant.** Kasper: `https://homeassistant.karacore.dk`. Claus har sin egen installation, som Kaspers Claude ikke kan nå. Claus's Node-RED er referencen for logikken (se **Node-RED-referencen**).
 - **Denne fil er fælles viden og styres af GitHub.** Begge må rette i den – hold den kort og sand, og commit rettelsen sammen med (eller lige efter) den ændring, den beskriver. Personlige ting (egen maskine, stier, HA-adresse, browser, arbejdsvaner) lægges i `CLAUDE.local.md` i projektmappen – den læses også automatisk, men er git-ignoreret. Claudes hukommelse (memory) er personlig og bruges ikke til projektviden.
-- **Automatisk opdatering:** `.claude/settings.json` kører ved hver sessionsstart `.claude/hooks/sync-shared-files.mjs` (Node – virker på Windows og Mac). Den henter `origin/main` og kopierer **kun** de fælles Claude-filer (`CLAUDE.md`, `.claude/skills`, `.claude/hooks`, `.claude/settings.json`), som GitHub har ændret, og som ikke har lokale ændringer. Koden røres ikke – hooken melder blot, hvor mange commits der mangler. Claude skal så læse de opdaterede filer, kort fortælle hvad der er nyt, og foreslå `git pull --autostash` (filer opdateret af hooken tæller som lokale ændringer).
+- **Automatisk opdatering:** `.claude/settings.json` kører ved hver sessionsstart `.claude/hooks/sync-shared-files.mjs` (Node – virker på Windows og Mac). Den henter `origin/main` og kopierer **kun** de fælles Claude-filer (`CLAUDE.md`, `.claude/skills`, `.claude/hooks`, `.claude/settings.json`, `.github/ISSUE_TEMPLATE`), som GitHub har ændret, og som ikke har lokale ændringer. Koden røres ikke – hooken melder blot, hvor mange commits der mangler. Claude skal så læse de opdaterede filer, kort fortælle hvad der er nyt, og foreslå `git pull --autostash` (filer opdateret af hooken tæller som lokale ændringer).
   - Har en fælles fil egne lokale ændringer, opdateres den ikke, og hooken siger det – commit og push dine ændringer (efter pull), eller kassér dem (`git checkout HEAD -- <fil>`).
 
 ## Formål
@@ -55,11 +55,11 @@ Python, Home Assistant ≥ 2025.3 (`hacs.json`), ingen eksterne pakker ud over `
 - GitHub CLI: `C:\Program Files\GitHub CLI\gh.exe` (på Kaspers maskine).
 
 ## Arbejdsgang (hver opgave)
-1. `git pull --autostash`. Læs relevante filer og den tilsvarende Node-RED-funktion; stil afklarende spørgsmål ved uklarheder.
+1. `git pull --autostash`. Kommer opgaven fra et issue: tildel dig selv og sæt `in-progress` (skillen `github-issue`). Læs relevante filer og den tilsvarende Node-RED-funktion; stil afklarende spørgsmål ved uklarheder.
 2. Byg ændringen. Nye config-felter: `const.py` + `config_flow.py` + platformfil + `strings.json`/`translations/*.json` + evt. `www/pwm-cards.js`.
 3. Bump `version` i `manifest.json` ved ændringer, der skal ud (format `0.4.03` – patch altid to cifre).
-4. `py_compile` uden fejl. Opdatér `BACKLOG.md` (fjern det, der er lavet; tilføj det, der bevidst er skudt til hjørne) og denne fil, hvis arkitekturen ændres.
-5. Commit når der bedes om det, `git pull --autostash`, push. Deploy er et separat skridt ("Deploy").
+4. `py_compile` uden fejl. Opdatér denne fil, hvis arkitekturen ændres. Nye fund undervejs oprettes som issues – ikke som noter her.
+5. Commit når der bedes om det, `git pull --autostash`, push. Sæt issuet til `in-test` med en kort kommentar (commits, version, hvad der skal tjekkes i HA). Deploy er et separat skridt ("Deploy").
 
 ## Version og deploy
 - Versionen står i `custom_components/pwmngt/manifest.json` og tagges `v<version>`. Patch er zero-padded til to cifre (`0.4.01`, ikke `0.4.1`).
@@ -76,13 +76,18 @@ Python, Home Assistant ≥ 2025.3 (`hacs.json`), ingen eksterne pakker ud over `
 ## Skills (`.claude/skills/`)
 - **`pwmngt-deploy`** – når der siges "Deploy": release-noter, tag, tjek af release, HACS "Update information".
 - **`pwmngt-nodered-reference`** – opslag i Node-RED-eksporterne.
+- **`github-issue`** – opret/opdatér issues og felterne på boardet.
 - **`pwmngt-visual-docs`** – den interaktive drill-down-dokumentation (`docs/visual-documentation.html`); kun når der bedes om det, aldrig som del af deploy.
 
-## Backlog
-`BACKLOG.md` er den fælles liste over det, vi bevidst har skudt til hjørne (fx simulator-instans, Pool, PV Surplus, jordvarmepumpe, at sætte `battery_command` og skrive min_soc til inverteren). Tilføj nye punkter dér, når de dukker op – ikke her.
+## Opgaver og backlog – GitHub Issues
+Alle opgaver, fejl og ønsker ligger som **GitHub Issues** i `Irming1109/PwMngt` og på projekt-boardet **"Power Management"** (https://github.com/users/Irming1109/projects/6) – det er den eneste opgaveliste. `BACKLOG.md` blev flyttet dertil 25. okt. 2026 (#1–#7) og er kun arkiv.
+- Issues oprettes og opdateres efter skillen **`github-issue`** – samme opbygning og farver som Billboards board. Formularer til github.com: `.github/ISSUE_TEMPLATE/`.
+- **Ingen labels** – alt er felter på boardet: **Issue type** (`bug`/`feature`), **Område** (`solar`, `battery`, `consumption`, `savings`, `ev`, `pool`, `pvsurplus`, `heatpump`, `wizard`, `cards`, `deploy`, `docs`), **Status** (`needs-triage` → `ready-for-dev` → `in-progress` → `in-test` → `done`), **Prio** (`prio-1` vigtigst … `prio-4` lav; `prio-5` = out of scope lige nu) og **Spor** (`Udvikling` = kode, `Data` = uden kode, `Beslutning` = aftales mellem Kasper og Claus).
+- **Tildeling = hvem har bolden:** et issue i `ready-for-dev` må være utildelt; den der går i gang, tildeler sig selv; `in-test` tildeles den, hvis HA det testes på; `Beslutning` tildeles begge.
+- Commits til et issue **starter med nummeret** – `#2 Port Automatik Styring (0.4.04)` – og har `Refs #<nr>` i beskeden (ikke `Fixes`, som lukker før test). Git sletter linjer, der starter med `#`, når beskeden skrives i en editor – commit med `-m`/`-F`, eller kør én gang `git config commit.cleanup scissors` i klonen. Issuet lukkes, når det er testet.
 
 ## Historik (kort)
 - **Sep. 2026:** Projektet startet af Kasper i Claude CoWork (v0.1–0.3): hub, Solar PV Plant-wizard med auto-detect, forbrugsmåling fra Recorder (statistics frem for history), egne Lovelace-kort, visuel dokumentation, release-flow via `release.ps1` + GitHub Actions. 28.–30. sep.: forbrugsmodulerne slået sammen til `consumption_data.py`; `solar_data`/`battery_data` tilpasset Claus's Node-RED (PV-prognose 08–16 i stedet for 11–16; kumulerede afladningstællere fjernet).
 - **14.–15. okt. 2026 (v0.3.24–0.3.35):** port af batteristyringen fra "Batteri styring NY": charge decision/level, battery mode gate, timevis gentjek af `battery_charge_status`, PV shift detection, battery sell decision (blokér ladning ved salg), savings tracking og konfigurerbart pristillæg.
 - **16.–19. okt. 2026 (v0.3.36–0.4.03, primært Claus):** afgiftstrappe på indkøbspris uden PV, rettelser af seed-felter og headline-sensorer ved opstart, min_soc låst op til target (max 95), diagnostiske sensorer flyttet til *Diagnostisk*.
-- **25. okt. 2026:** Flyttet fra Claude CoWork til Claude Code med fælles `CLAUDE.md`, skills og sync-hook (samme opsætning som Billboard).
+- **25. okt. 2026:** Flyttet fra Claude CoWork til Claude Code med fælles `CLAUDE.md`, skills og sync-hook (samme opsætning som Billboard). Backloggen flyttet til GitHub Issues og boardet "Power Management".
