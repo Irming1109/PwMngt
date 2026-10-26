@@ -55,7 +55,7 @@ Python, Home Assistant ≥ 2025.3 (`hacs.json`), ingen eksterne pakker ud over `
 
 ## Kommandoer
 - Syntakstjek: `python -m py_compile custom_components/pwmngt/*.py custom_components/pwmngt/*/*.py` (Git Bash) (der er ingen testsuite – test sker i HA). Hele tjekket før en release: `python -I .claude/skills/pwmngt-deploy/precheck.py`.
-- Release: `.\release.ps1` fra repo-roden (læser version fra `manifest.json`, laver annoteret tag `vX.Y.Z` fra `RELEASE_NOTES.md`, pusher kun tagget; `.github/workflows/release.yml` opretter GitHub Release som "Latest"). Se skillen **`pwmngt-deploy`**.
+- Release: `.\release.ps1` fra repo-roden (læser version fra `manifest.json`, laver annoteret tag `vX.Y.Z` fra `RELEASE_NOTES.md`, pusher kun tagget og opretter selv GitHub Release som "Latest" med `gh`, så den står i navnet på den, der deployer). Se skillen **`pwmngt-deploy`**.
 - GitHub CLI: `C:\Program Files\GitHub CLI\gh.exe` (på Kaspers maskine).
 
 ## Arbejdsgang (hver opgave)
@@ -68,7 +68,7 @@ Python, Home Assistant ≥ 2025.3 (`hacs.json`), ingen eksterne pakker ud over `
 ## Version og deploy
 - Versionen står i `custom_components/pwmngt/manifest.json` og tagges `v<version>`. Patch er zero-padded til to cifre (`0.4.01`, ikke `0.4.1`).
 - `RELEASE_NOTES.md` er git-ignoreret kladde – indholdet bliver tag-beskeden og release-teksten. `release.ps1` tagger med `--cleanup=verbatim`, ellers forsvinder Markdown-overskrifter (`##`).
-- `release.yml` henter tagget igen efter checkout (ellers mistes annotationen, og release-teksten bliver commit-beskeden) og springer over, hvis releasen allerede findes.
+- `.github/workflows/release.yml` er kun en manuel reserve (Actions → Run workflow med tagget) – den starter ikke længere ved tag-push, og en release herfra står som "github-actions". Den henter tagget igen efter checkout (ellers mistes annotationen) og springer over, hvis releasen allerede findes.
 - HACS: releases siden v0.2.24 er "Latest" (ikke pre-release), så nye installationer får den nyeste version.
 
 ## Home Assistant – sikkerhedsregler

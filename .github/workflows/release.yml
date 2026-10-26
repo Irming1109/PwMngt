@@ -1,10 +1,15 @@
 name: Create GitHub Release
 
-# Fires automatically whenever a tag like "v0.2.11" is pushed. Reads the
-# release title/notes straight from that tag's own annotated message (set
-# by release.ps1 via `git tag -a -F RELEASE_NOTES.md`), and publishes it as
-# a full (non-prerelease) GitHub Release, marked as "Latest" -- no manual
-# clicking on github.com needed.
+# Manual fallback only (Actions -> "Create GitHub Release" -> Run workflow,
+# enter the tag). release.ps1 normally creates the release itself with gh,
+# so it is published under the name of whoever deploys -- a release made
+# here shows "github-actions" as its author instead (Claus, 2026-10-26).
+# No longer triggered by tag pushes, or it would race release.ps1.
+#
+# Reads the release title/notes straight from the tag's own annotated
+# message (set by release.ps1 via `git tag -a -F RELEASE_NOTES.md`), and
+# publishes it as a full (non-prerelease) GitHub Release, marked as
+# "Latest".
 #
 # IMPORTANT: every release up through v0.2.23 was published with
 # --prerelease, which means HACS never saw a "latest" release for this
@@ -18,17 +23,14 @@ name: Create GitHub Release
 # "Workflow permissions" under Settings -> Actions -> General to be set to
 # "Read and write permissions" (one-time repo setting, not per-release).
 #
-# A release published straight from github.com's "Releases -> New release"
-# form (pick/create the tag there, then "Publish release") creates the tag
-# AND the release in one step, which still triggers this same tag-push
-# event -- so this run then finds the release already exists and skips
-# instead of failing (v0.3.25/v0.3.26: fixed 2026-10-14, were red X's in
-# Actions even though the release itself published fine).
+# Skips instead of failing if the release already exists.
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release, e.g. v0.4.04"
+        required: true
 
 permissions:
   contents: write
@@ -47,10 +49,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -e
-          TAG="${GITHUB_REF#refs/tags/}"
+          TAG="${{ inputs.tag }}"
 
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release $TAG already exists (likely published straight from github.com) -- nothing to do."
+            echo "Release $TAG already exists -- nothing to do."
             exit 0
           fi
 

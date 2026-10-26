@@ -1,6 +1,6 @@
 ---
 name: pwmngt-deploy
-description: Use when Kasper or Claus says "Deploy" (or similar) for PwMngt - runs the pre-release checks, bumps the version if needed, writes release notes with the linked issues, shows ONE summary for approval, then tags and releases, waits for the GitHub Action, updates the issues, and (on Kasper's machine) clicks HACS "Update information".
+description: Use when Kasper or Claus says "Deploy" (or similar) for PwMngt - runs the pre-release checks, bumps the version if needed, writes release notes with the linked issues, shows ONE summary for approval, then tags and releases (under the deployer's own GitHub name), updates the issues, and (on Kasper's machine) clicks HACS "Update information".
 ---
 
 # PwMngt deploy
@@ -28,9 +28,8 @@ If the only errors are "not newer than the last tag" / "tag already exists", pro
 Show in one message: version (and whether it gets bumped), the warnings, the issues (number, title, current status → new status), and the full release notes. Proceed only after a yes. Corrections → update and show again.
 
 ## 5. Release
-- Run `.\release.ps1` from the repo root with the PowerShell tool. It tags `v<version>` with `RELEASE_NOTES.md` as annotated message (`--cleanup=verbatim`) and pushes only the tag.
-- Follow the Action instead of guessing: `gh run list --repo Irming1109/PwMngt --workflow release.yml --limit 1 --json databaseId,headBranch` and then `gh run watch <id> --repo Irming1109/PwMngt --exit-status` (run it in the background if it may take long). On failure: `gh run view <id> --repo Irming1109/PwMngt --log-failed`, report, and stop.
-- Check the result: `gh release view v<version> --repo Irming1109/PwMngt` - it must be "Latest" and the body must be the real notes, not a short commit message. If the body is wrong, check the tag re-fetch step in `.github/workflows/release.yml`, and ask before editing the published release.
+- Run `.\release.ps1` from the repo root with the PowerShell tool. It tags `v<version>` with `RELEASE_NOTES.md` as annotated message (`--cleanup=verbatim`), pushes only the tag, and then creates the GitHub Release itself with `gh release create` (body = `RELEASE_NOTES.md`, marked "Latest"). Done locally so the release shows the deployer as author, not "github-actions". If the script fails after pushing the tag, report it and stop - `.github/workflows/release.yml` can then be run by hand (Actions → Run workflow, with the tag), but ask first.
+- Check the result: `gh release view v<version> --repo Irming1109/PwMngt` - it must be "Latest", the author must be the deployer's own login, and the body must be the real notes. Ask before editing a published release.
 - Delete `RELEASE_NOTES.md` afterwards, so an old draft is never reused.
 
 ## 6. Update the issues
@@ -45,4 +44,4 @@ For each issue from step 3 (still open):
 - Confirm that the "release" badge shows the new version. If HA shows the login page, don't log in - tell Kasper. Close the tab afterwards.
 
 ## 8. Report
-Release URL and version, that the Action and the release body are OK, which issues got a comment / moved to `in-test`, and (Kasper) that HACS shows the update. Installing the update and restarting HA is always the owner's own step.
+Release URL and version, that the release (author, "Latest", body) is OK, which issues got a comment / moved to `in-test`, and (Kasper) that HACS shows the update. Installing the update and restarting HA is always the owner's own step.
