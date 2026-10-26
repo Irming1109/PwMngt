@@ -293,6 +293,10 @@ class BatteryGridBalanceState:
     battery_grid_discharge_sum: float = 0.0
     battery_charging_savings: float = 0.0
     grid_discharge_pct_prev: float | None = None
+    # kWh of grid-share discharge cut off by last hour's clamp to the
+    # actual discharge, carried into the next hour (Node-RED:
+    # grid_afladning_rest_kwh) -- see calculate_battery_grid_balance().
+    grid_discharge_rest_kwh: float = 0.0
 
 
 @dataclass
@@ -503,8 +507,18 @@ def calculate_battery_grid_balance(
             0.0, grid_discharge_pct_cum - state.grid_discharge_pct_prev
         )
 
-    battery_discharge_from_grid = min(
-        grid_discharge_pct_this_hour * kwh_per_percent_point, battery_discharge
+    # The SoC counter only moves in whole percentage points, so clamping
+    # to the hour's actual discharge cuts off a part that really was
+    # discharged -- carry it into the next hour instead of dropping it
+    # (Claus, 2026-10-26). Capped at one percentage point, so the rest
+    # can't grow without bound if the SoC counter systematically counts
+    # more than the AC discharge (conversion losses).
+    potential_discharge_from_grid = (
+        grid_discharge_pct_this_hour * kwh_per_percent_point + state.grid_discharge_rest_kwh
+    )
+    battery_discharge_from_grid = min(potential_discharge_from_grid, battery_discharge)
+    grid_discharge_rest_kwh = min(
+        potential_discharge_from_grid - battery_discharge_from_grid, kwh_per_percent_point
     )
 
     battery_grid_charge_sum = round(
@@ -524,6 +538,7 @@ def calculate_battery_grid_balance(
         battery_grid_discharge_sum=battery_grid_discharge_sum,
         battery_charging_savings=battery_charging_savings,
         grid_discharge_pct_prev=grid_discharge_pct_cum,
+        grid_discharge_rest_kwh=grid_discharge_rest_kwh,
     )
 
 
@@ -587,6 +602,7 @@ class PwMngtSavingsStoredData(ExtraStoredData):
                 "battery_grid_discharge_sum": battery.battery_grid_discharge_sum,
                 "battery_charging_savings": battery.battery_charging_savings,
                 "grid_discharge_pct_prev": battery.grid_discharge_pct_prev,
+                "grid_discharge_rest_kwh": battery.grid_discharge_rest_kwh,
             },
             "counters": {
                 "household_consumption": vars(counters.household_consumption),
@@ -625,6 +641,7 @@ class PwMngtSavingsStoredData(ExtraStoredData):
                     ),
                     battery_charging_savings=battery_raw.get("battery_charging_savings", 0.0),
                     grid_discharge_pct_prev=battery_raw.get("grid_discharge_pct_prev"),
+                    grid_discharge_rest_kwh=battery_raw.get("grid_discharge_rest_kwh", 0.0),
                 ),
                 counters=HourlyCountersState(
                     household_consumption=_counter_from_restored(
