@@ -44,13 +44,15 @@
               "battery_pv_charged": "Battery PV charged",
               "battery_pv_discharged": "Battery PV discharged",
               "battery_power": "Battery power",
+              "invert_battery_power": "Invert battery power sign",
               "battery_grid_charged_day": "Battery grid charged (day)"
             },
             "data_description": {
               "battery_soc": "The entity that reports your home battery's state of charge (%), e.g. your inverter's battery SoC sensor. Only \"%\"-unit sensors are listed.",
-              "battery_pv_charged": "The entity that reports total energy charged into the battery (kWh) from your solar plant, e.g. from your inverter. Only \"kWh\"-unit sensors are listed.",
+              "battery_pv_charged": "The entity that reports total energy charged into the battery (kWh) from your solar plant, e.g. from your inverter. Only \"kWh\"-unit sensors are listed. With Growatt Modbus, leave empty: PwMngt calculates it as Battery Charge Total minus AC Charge Energy Total.",
               "battery_pv_discharged": "The entity that reports total energy discharged from the battery (kWh). Only \"kWh\"-unit sensors are listed.",
               "battery_power": "The entity that reports the battery's current charge/discharge power (W). Only \"W\"-unit sensors are listed.",
+              "invert_battery_power": "Tick if the battery power entity reports charging as positive. PwMngt expects positive = discharging. Ticked automatically for Growatt Modbus.",
               "battery_grid_charged_day": "The entity that reports how much energy has been charged into the battery from the grid today (kWh) -- a daily counter that resets at midnight, e.g. your inverter's own \"charge from grid today\" sensor. Only \"kWh\"-unit sensors are listed. Pre-filled automatically from your inverter if it's a supported brand. Used to tell grid-charged battery content from PV-charged."
             }
           },
@@ -71,14 +73,16 @@
             "name": "Grid & consumption",
             "data": {
               "grid_power": "Grid power",
+              "invert_grid_power": "Invert grid power sign",
               "pv_direct_consumption": "PV direct consumption",
               "pv_total_consumption": "PV total consumption",
               "property_consumption_total": "Total property consumption"
             },
             "data_description": {
               "grid_power": "The entity that reports current power flow to/from the grid (W). Only \"W\"-unit sensors are listed.",
-              "pv_direct_consumption": "The entity that reports power currently consumed directly from PV production (W), without going through the battery. Only \"W\"-unit sensors are listed.",
-              "pv_total_consumption": "The entity that reports total cumulative PV consumption (kWh). Only \"kWh\"-unit sensors are listed.",
+              "invert_grid_power": "Tick if the grid power entity reports export as positive. PwMngt expects positive = buying from the grid. Ticked automatically for Growatt Modbus.",
+              "pv_direct_consumption": "The entity that reports power currently consumed directly from PV production (W), without going through the battery. Only \"W\"-unit sensors are listed. With Growatt Modbus, leave empty: PwMngt calculates it from House Consumption, PV, grid import and battery discharge.",
+              "pv_total_consumption": "The entity that reports total cumulative PV consumption (kWh). Only \"kWh\"-unit sensors are listed. With Growatt Modbus, leave empty: PwMngt sums PV direct consumption over time.",
               "property_consumption_total": "The entity that reports the whole property's cumulative energy consumption (kWh) as a raw, ever-increasing lifetime counter -- e.g. your inverter's own lifetime consumption sensor. Only \"kWh\"-unit sensors are listed. Pre-filled automatically from your inverter if it's a supported brand -- pick a different entity if you don't want that. Do not point this at a Daily Utility Meter helper -- PwMngt tracks its own local-midnight reset internally, so it needs the raw, never-resetting counter instead."
             }
           },
@@ -170,12 +174,14 @@
           "battery_pv_charged": "Battery PV charged",
           "battery_pv_discharged": "Battery PV discharged",
           "battery_power": "Battery power",
+          "invert_battery_power": "Invert battery power sign",
           "pv1_power": "PV1 power",
           "pv2_power": "PV2 power (optional)",
           "pv3_power": "PV3 power (optional)",
           "pv_direct_consumption": "PV direct consumption",
           "pv_total_consumption": "PV total consumption",
           "grid_power": "Grid power",
+          "invert_grid_power": "Invert grid power sign",
           "pv_forecast_today": "PV forecast today",
           "pv_forecast_tomorrow": "PV forecast tomorrow",
           "spot_electricity_price": "Electricity price (incl. VAT)",
@@ -196,15 +202,17 @@
         },
         "data_description": {
           "battery_soc": "The entity that reports your home battery's state of charge (%), e.g. your inverter's battery SoC sensor. Only \"%\"-unit sensors are listed.",
-          "battery_pv_charged": "The entity that reports total energy charged into the battery (kWh) from your solar plant, e.g. from your inverter. Only \"kWh\"-unit sensors are listed.",
+          "battery_pv_charged": "The entity that reports total energy charged into the battery (kWh) from your solar plant, e.g. from your inverter. Only \"kWh\"-unit sensors are listed. With Growatt Modbus, leave empty: PwMngt calculates it as Battery Charge Total minus AC Charge Energy Total.",
           "battery_pv_discharged": "The entity that reports total energy discharged from the battery (kWh). Only \"kWh\"-unit sensors are listed.",
           "battery_power": "The entity that reports the battery's current charge/discharge power (W). Only \"W\"-unit sensors are listed.",
+          "invert_battery_power": "Tick if the battery power entity reports charging as positive. PwMngt expects positive = discharging. Ticked automatically for Growatt Modbus.",
           "pv1_power": "The entity that reports PV string 1's current power output (W). Only \"W\"-unit sensors are listed.",
           "pv2_power": "The entity that reports PV string 2's current power output (W). Only \"W\"-unit sensors are listed. Optional -- leave empty if you don't have a second PV string.",
           "pv3_power": "The entity that reports PV string 3's current power output (W). Only \"W\"-unit sensors are listed. Optional -- leave empty if you don't have a third PV string.",
-          "pv_direct_consumption": "The entity that reports power currently consumed directly from PV production (W), without going through the battery. Only \"W\"-unit sensors are listed.",
-          "pv_total_consumption": "The entity that reports total cumulative PV consumption (kWh). Only \"kWh\"-unit sensors are listed.",
+          "pv_direct_consumption": "The entity that reports power currently consumed directly from PV production (W), without going through the battery. Only \"W\"-unit sensors are listed. With Growatt Modbus, leave empty: PwMngt calculates it from House Consumption, PV, grid import and battery discharge.",
+          "pv_total_consumption": "The entity that reports total cumulative PV consumption (kWh). Only \"kWh\"-unit sensors are listed. With Growatt Modbus, leave empty: PwMngt sums PV direct consumption over time.",
           "grid_power": "The entity that reports current power flow to/from the grid (W). Only \"W\"-unit sensors are listed.",
+          "invert_grid_power": "Tick if the grid power entity reports export as positive. PwMngt expects positive = buying from the grid. Ticked automatically for Growatt Modbus.",
           "pv_forecast_today": "The entity that reports today's forecasted PV production for the whole plant (kWh), e.g. from a solar forecast integration. Only \"kWh\"-unit sensors are listed. Pre-filled automatically if Solcast PV Forecast is installed and unambiguous -- pick a different entity if you don't want that.",
           "pv_forecast_tomorrow": "The entity that reports tomorrow's forecasted PV production for the whole plant (kWh), e.g. from a solar forecast integration. Only \"kWh\"-unit sensors are listed. Pre-filled automatically if Solcast PV Forecast is installed and unambiguous -- pick a different entity if you don't want that.",
           "spot_electricity_price": "The entity that reports your current total electricity price including VAT/tariffs (kr/kWh) -- not the raw spot price -- e.g. Strømligning's own VAT-inclusive price sensor. Only \"kr/kWh\"-unit sensors are listed.",

@@ -82,11 +82,18 @@ CHARGER_CONSUMPTION_SOURCE_TRANSLATION_KEYS: dict[str, tuple[str, str]] = {
 # dropdown down to the brand(s) actually configured in this Home Assistant,
 # never required (an install with neither just sees "Not installed" and
 # fills in the Core group's fields by hand, same as always).
+#
+# A brand can come from more than one integration: Growatt is either the
+# official cloud integration (growatt_server) or the HACS integration
+# 0xAHA/Growatt_ModbusTCP (growatt_modbus), which talks to the inverter
+# directly -- Claus's install uses the latter.
 # ---------------------------------------------------------------------------
 
-INVERTER_TYPE_INTEGRATION_DOMAINS: dict[str, str] = {
-    "Kostal Plenticore": "kostal_plenticore",
-    "Growatt": "growatt_server",
+GROWATT_MODBUS_PLATFORM = "growatt_modbus"
+
+INVERTER_TYPE_INTEGRATION_DOMAINS: dict[str, tuple[str, ...]] = {
+    "Kostal Plenticore": ("kostal_plenticore",),
+    "Growatt": ("growatt_server", GROWATT_MODBUS_PLATFORM),
 }
 
 # ---------------------------------------------------------------------------
@@ -270,7 +277,7 @@ ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL = "property_consumption_total"
 # (config_flow.py's async_step_pv_inverter, narrowed to installed brands by
 # INVERTER_TYPE_INTEGRATION_DOMAINS above) names a brand, this is what
 # auto-fills the Core group's fields (see _SOLAR_PV_PLANT_GROUPS) --
-# config_flow.py's _auto_detect_entity_by_name() matches each entry against
+# helpers/entity_registry_helper.py's find_entity_by_name() matches each entry against
 # the entity registry, one brand + one Core field (ENTITY_KEY_*) at a time.
 #
 # Deliberately (platform, original_name) here, NOT (platform,
@@ -296,7 +303,7 @@ ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL = "property_consumption_total"
 # well-known third-party fork Home Assistant's own integration descends
 # from (indykoning/home-assistant-growatt-server), retitled to the same
 # Title Case convention used everywhere else in this file. A wrong guess
-# here is harmless -- _auto_detect_entity_by_name() just finds zero
+# here is harmless -- find_entity_by_name() just finds zero
 # matches and that field stays blank for manual pick, exactly as if this
 # dict didn't have an entry for it -- but they should be swapped for
 # confirmed names as soon as someone can check a real Growatt install
@@ -305,60 +312,128 @@ ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL = "property_consumption_total"
 # Not every Core field has a known equivalent for every brand -- left out
 # rather than guessed (e.g. no confirmed Growatt equivalent for the two
 # battery charge/discharge *energy* totals, as opposed to power).
+#
+# Shape: brand -> integration platform -> {Core field: original_name}. A
+# brand with more than one integration (Growatt) lists each one's own
+# names; whichever is installed is the one that matches.
+#
+# The growatt_modbus names are confirmed against Claus's own install
+# (27-10-2026) and the integration's source (0xAHA/Growatt_ModbusTCP
+# v2.0.5, sensor.py). It uses has_entity_name, so original_name is the
+# name without the sub-device in front (device "Growatt Battery" + name
+# "Battery SOC" -> friendly name "Growatt Battery Battery SOC").
+# Battery PV charged, PV direct consumption and PV total consumption have
+# no growatt_modbus sensor -- PwMngt calculates them itself when those
+# fields are left empty (see data/inverter_derived_data.py).
 # ---------------------------------------------------------------------------
 
-INVERTER_CORE_AUTO_DETECT_NAMES: dict[str, dict[str, tuple[str, str]]] = {
+INVERTER_CORE_AUTO_DETECT_NAMES: dict[str, dict[str, dict[str, str]]] = {
     "Kostal Plenticore": {
-        ENTITY_KEY_BATTERY_SOC: ("kostal_plenticore", "Battery SoC"),
-        ENTITY_KEY_BATTERY_PV_CHARGED: ("kostal_plenticore", "Battery Charge from PV Total"),
-        ENTITY_KEY_BATTERY_PV_DISCHARGED: ("kostal_plenticore", "Battery Discharge Total"),
-        ENTITY_KEY_BATTERY_POWER: ("kostal_plenticore", "Battery Power"),
-        # Daily counter (resets at local midnight). Confirmed live
-        # 2026-09-28 on Kasper's install
-        # (sensor.pileaas_sol_battery_charge_from_grid_day).
-        ENTITY_KEY_BATTERY_GRID_CHARGED_DAY: ("kostal_plenticore", "Battery Charge from Grid Day"),
-        ENTITY_KEY_PV1_POWER: ("kostal_plenticore", "DC1 Power"),
-        ENTITY_KEY_PV2_POWER: ("kostal_plenticore", "DC2 Power"),
-        ENTITY_KEY_PV3_POWER: ("kostal_plenticore", "DC3 Power"),
-        ENTITY_KEY_PV_DIRECT_CONSUMPTION: ("kostal_plenticore", "Home Power from PV"),
-        # "from PV" -- NOT plain "Home Consumption Total", which is the
-        # whole house (PV + battery + grid) and belongs to
-        # ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL below. This entry used to
-        # point at "Home Consumption Total" by mistake; caught 2026-09-27
-        # against Kasper's live install, where his own manual picks were
-        # already right (pv_total_consumption mirror = 11669.2 =
-        # "Home Consumption from PV Total"; property baseline tracks
-        # "Home Consumption Total" = 37536.9). His install was never
-        # affected since auto-detect never overwrites an existing pick.
-        ENTITY_KEY_PV_TOTAL_CONSUMPTION: ("kostal_plenticore", "Home Consumption from PV Total"),
-        ENTITY_KEY_GRID_POWER: ("kostal_plenticore", "Grid Power"),
-        # Raw lifetime counter (state_class total_increasing, never resets)
-        # -- exactly what data/consumption_data.py needs. Confirmed
-        # live 2026-09-27 on Kasper's install (sensor.pileaas_sol_home_consumption_total).
-        ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL: ("kostal_plenticore", "Home Consumption Total"),
+        "kostal_plenticore": {
+            ENTITY_KEY_BATTERY_SOC: "Battery SoC",
+            ENTITY_KEY_BATTERY_PV_CHARGED: "Battery Charge from PV Total",
+            ENTITY_KEY_BATTERY_PV_DISCHARGED: "Battery Discharge Total",
+            ENTITY_KEY_BATTERY_POWER: "Battery Power",
+            # Daily counter (resets at local midnight). Confirmed live
+            # 2026-09-28 on Kasper's install
+            # (sensor.pileaas_sol_battery_charge_from_grid_day).
+            ENTITY_KEY_BATTERY_GRID_CHARGED_DAY: "Battery Charge from Grid Day",
+            ENTITY_KEY_PV1_POWER: "DC1 Power",
+            ENTITY_KEY_PV2_POWER: "DC2 Power",
+            ENTITY_KEY_PV3_POWER: "DC3 Power",
+            ENTITY_KEY_PV_DIRECT_CONSUMPTION: "Home Power from PV",
+            # "from PV" -- NOT plain "Home Consumption Total", which is the
+            # whole house (PV + battery + grid) and belongs to
+            # ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL below. This entry used to
+            # point at "Home Consumption Total" by mistake; caught 2026-09-27
+            # against Kasper's live install, where his own manual picks were
+            # already right (pv_total_consumption mirror = 11669.2 =
+            # "Home Consumption from PV Total"; property baseline tracks
+            # "Home Consumption Total" = 37536.9). His install was never
+            # affected since auto-detect never overwrites an existing pick.
+            ENTITY_KEY_PV_TOTAL_CONSUMPTION: "Home Consumption from PV Total",
+            ENTITY_KEY_GRID_POWER: "Grid Power",
+            # Raw lifetime counter (state_class total_increasing, never resets)
+            # -- exactly what data/consumption_data.py needs. Confirmed
+            # live 2026-09-27 on Kasper's install (sensor.pileaas_sol_home_consumption_total).
+            ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL: "Home Consumption Total",
+        },
     },
     "Growatt": {
+        GROWATT_MODBUS_PLATFORM: {
+            ENTITY_KEY_BATTERY_SOC: "Battery SOC",
+            ENTITY_KEY_BATTERY_PV_DISCHARGED: "Battery Discharge Total",
+            # Positive = charging (opposite of Kostal) -- see
+            # SIGN_INVERTED_PLATFORMS below.
+            ENTITY_KEY_BATTERY_POWER: "Battery Power",
+            # Grid -> battery today, resets at local midnight.
+            ENTITY_KEY_BATTERY_GRID_CHARGED_DAY: "AC Charge Energy Today",
+            ENTITY_KEY_PV1_POWER: "PV1 Power",
+            ENTITY_KEY_PV2_POWER: "PV2 Power",
+            ENTITY_KEY_PV3_POWER: "PV3 Power",
+            # Positive = export (opposite of Kostal) -- see
+            # SIGN_INVERTED_PLATFORMS below.
+            ENTITY_KEY_GRID_POWER: "Grid Power",
+            # Lifetime counter of everything the house used (PV + battery
+            # + grid), total_increasing.
+            ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL: "Load Energy Total",
+        },
         # -- best-effort, unverified -- see the dict's own docstring above.
-        ENTITY_KEY_BATTERY_SOC: ("growatt_server", "Battery percentage"),
-        ENTITY_KEY_BATTERY_POWER: ("growatt_server", "Storage charging/discharging"),
-        # From Home Assistant's own growatt_server strings.json
-        # (storage_grid_charged_today), NOT checked against a real install.
-        # TLX/MIN inverters name theirs "Batteries charged from grid today"
-        # (tlx_batteries_charged_from_grid_today) instead -- also
-        # unverified; this dict only holds one name per field, so a TLX
-        # install has to pick it by hand for now.
-        ENTITY_KEY_BATTERY_GRID_CHARGED_DAY: ("growatt_server", "Grid charged today"),
-        ENTITY_KEY_PV1_POWER: ("growatt_server", "Input 1 Wattage"),
-        ENTITY_KEY_PV2_POWER: ("growatt_server", "Input 2 Wattage"),
-        ENTITY_KEY_PV_DIRECT_CONSUMPTION: ("growatt_server", "Solar power production"),
-        ENTITY_KEY_PV_TOTAL_CONSUMPTION: ("growatt_server", "Load consumption"),
-        ENTITY_KEY_GRID_POWER: ("growatt_server", "Import from grid"),
-        # No ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL guess: it must be a raw,
-        # never-resetting lifetime counter, and no Growatt sensor name is
-        # known to be one -- left for manual pick rather than risk
-        # auto-filling a daily-resetting sensor.
+        "growatt_server": {
+            ENTITY_KEY_BATTERY_SOC: "Battery percentage",
+            ENTITY_KEY_BATTERY_POWER: "Storage charging/discharging",
+            # From Home Assistant's own growatt_server strings.json
+            # (storage_grid_charged_today), NOT checked against a real install.
+            # TLX/MIN inverters name theirs "Batteries charged from grid today"
+            # (tlx_batteries_charged_from_grid_today) instead -- also
+            # unverified; this dict only holds one name per field, so a TLX
+            # install has to pick it by hand for now.
+            ENTITY_KEY_BATTERY_GRID_CHARGED_DAY: "Grid charged today",
+            ENTITY_KEY_PV1_POWER: "Input 1 Wattage",
+            ENTITY_KEY_PV2_POWER: "Input 2 Wattage",
+            ENTITY_KEY_PV_DIRECT_CONSUMPTION: "Solar power production",
+            ENTITY_KEY_PV_TOTAL_CONSUMPTION: "Load consumption",
+            ENTITY_KEY_GRID_POWER: "Import from grid",
+            # No ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL guess: it must be a raw,
+            # never-resetting lifetime counter, and no Growatt sensor name is
+            # known to be one -- left for manual pick rather than risk
+            # auto-filling a daily-resetting sensor.
+        },
     },
 }
+
+# ---------------------------------------------------------------------------
+# Sign convention for the two signed power fields. PwMngt expects Grid
+# power positive = buying from the grid and Battery power positive =
+# discharging (what Kostal Plenticore reports, and what
+# data/balance_data.py adds up). An inverter that reports the opposite
+# gets the matching "invert" option ticked in the wizard; every reader of
+# these two fields goes through pv_properties.power_sign().
+#
+# SIGN_INVERTED_PLATFORMS: integrations known to report the opposite --
+# the wizard ticks the option when it picks a source from one of them.
+# growatt_modbus: Grid Power positive = export, Battery Power positive =
+# charging (its own sensor descriptions; Claus's Node-RED flips the
+# battery too, node "Batteri effekt" in "Ha data - opsaetning").
+# ---------------------------------------------------------------------------
+
+CONF_INVERT_GRID_POWER = "invert_grid_power"
+CONF_INVERT_BATTERY_POWER = "invert_battery_power"
+
+POWER_SIGN_OPTIONS: dict[str, str] = {
+    ENTITY_KEY_GRID_POWER: CONF_INVERT_GRID_POWER,
+    ENTITY_KEY_BATTERY_POWER: CONF_INVERT_BATTERY_POWER,
+}
+
+SIGN_INVERTED_PLATFORMS = frozenset({GROWATT_MODBUS_PLATFORM})
+
+# growatt_modbus sensors (original_name) that data/inverter_derived_data.py
+# calculates Battery PV charged and PV direct consumption from, when those
+# fields are left empty. Looked up by (platform, name) like the auto-detect
+# above -- never by entity_id.
+GROWATT_MODBUS_BATTERY_CHARGE_TOTAL = "Battery Charge Total"
+GROWATT_MODBUS_AC_CHARGE_ENERGY_TOTAL = "AC Charge Energy Total"
+GROWATT_MODBUS_HOUSE_CONSUMPTION = "House Consumption"
 
 # ---------------------------------------------------------------------------
 # Segments: optional areas of PwMngt a given installation may not need.

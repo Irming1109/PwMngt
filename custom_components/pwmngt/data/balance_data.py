@@ -313,6 +313,10 @@ class PwMngtBalanceDataSensor(RestoreEntity, SensorEntity):
         )
         if grid_power is None or battery_power is None:
             return
+        # Normalized to grid positive = buying, battery positive =
+        # discharging (the wizard's "invert sign" options).
+        grid_power *= pv_properties.power_sign(self._entry, ENTITY_KEY_GRID_POWER)
+        battery_power *= pv_properties.power_sign(self._entry, ENTITY_KEY_BATTERY_POWER)
 
         status = grid_power
         if not pv_properties.is_forced_charging(self.hass, self._entry):

@@ -67,8 +67,14 @@ from .data.savings_data import (
     PwMngtSavingsDataSensor,
     PwMngtSavingsHeadlineSensor,
 )
+from .data.inverter_derived_data import (
+    PwMngtBatteryPvChargedDerivedSensor,
+    PwMngtPvDirectConsumptionDerivedSensor,
+    derivable_entity_map_keys,
+)
 from .base import use_description_key_as_translation_key
 from .helpers.state_helper import read_float_state
+from .properties import pv_properties
 
 LOGGER = logging.getLogger(__name__)
 
@@ -92,14 +98,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         LOGGER.info("Added balance-data sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
+    # An empty field PwMngt can calculate itself on this install (Growatt
+    # Modbus) gets the calculated sensor instead of the mirror -- same
+    # unique_id, see data/inverter_derived_data.py.
+    entity_map = entry.options.get(CONF_ENTITY_MAP, {})
+    derived_keys = {
+        key for key in derivable_entity_map_keys(hass) if not entity_map.get(key)
+    }
     for description, entity_map_key in PwM_PV_MIRROR_SENSORS:
-        entity = PwMngtPvMirrorSensor(
-            description,
-            entry,
-            entity_map_key,
-            zero_if_unconfigured=entity_map_key in _ZERO_IF_UNCONFIGURED_PV_POWER_KEYS,
-        )
-        LOGGER.info("Added PV mirror sensor with entity_id '%s'", entity.entity_id)
+        if entity_map_key in derived_keys:
+            entity = _derived_pv_sensor(hass, entry, description, entity_map_key)
+            LOGGER.info("Added PV derived sensor with entity_id '%s'", entity.entity_id)
+        else:
+            entity = PwMngtPvMirrorSensor(
+                description,
+                entry,
+                entity_map_key,
+                zero_if_unconfigured=entity_map_key in _ZERO_IF_UNCONFIGURED_PV_POWER_KEYS,
+            )
+            LOGGER.info("Added PV mirror sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
     for description, entity_map_keys in PwM_PV_SUM_SENSORS:
@@ -189,6 +206,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
     use_description_key_as_translation_key(sensors)
     async_add_entities(sensors)
+
+
+def _derived_pv_sensor(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    description: SensorEntityDescription,
+    entity_map_key: str,
+) -> SensorEntity:
+    """The calculated sensor for one of data/inverter_derived_data.py's
+    derivable fields."""
+    if entity_map_key == ENTITY_KEY_BATTERY_PV_CHARGED:
+        return PwMngtBatteryPvChargedDerivedSensor(description, entry, hass)
+    if entity_map_key == ENTITY_KEY_PV_DIRECT_CONSUMPTION:
+        return PwMngtPvDirectConsumptionDerivedSensor(description, entry, hass)
+    # ENTITY_KEY_PV_TOTAL_CONSUMPTION: pv_direct_consumption integrated
+    # into kWh, the same way Energy import/export integrate grid power.
+    return PwMngtEnergyIntegrationSensor(description, entry, "pv_direct_consumption")
 
 
 # ---------------------------------------------------------------------------
@@ -726,6 +760,10 @@ class _PwMngtMirrorSensor(SensorEntity):
     __init__ (None if there's nothing to mirror yet) before this class's
     async_added_to_hass runs.
 
+    self._value_factor (default 1.0) multiplies the mirrored numeric value
+    before the offset -- -1.0 for a power field whose "invert sign" option
+    is ticked (see pv_properties.power_sign()).
+
     self._value_offset (default 0.0) is added to the mirrored numeric
     value only -- the mirrored attributes stay untouched. Added for
     PwMngtHubMirrorSensor's spot_electricity_price mirror specifically
@@ -737,6 +775,7 @@ class _PwMngtMirrorSensor(SensorEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
+    _value_factor: float = 1.0
     _value_offset: float = 0.0
 
     async def async_added_to_hass(self) -> None:
@@ -767,7 +806,9 @@ class _PwMngtMirrorSensor(SensorEntity):
             self._attr_extra_state_attributes = {}
         else:
             try:
-                self._attr_native_value = float(source_state.state) + self._value_offset
+                self._attr_native_value = (
+                    float(source_state.state) * self._value_factor + self._value_offset
+                )
             except ValueError:
                 self._attr_native_value = source_state.state
             self._attr_available = True
@@ -806,6 +847,7 @@ class PwMngtPvMirrorSensor(_PwMngtMirrorSensor):
 
         entity_map = entry.options.get(CONF_ENTITY_MAP, {})
         self._source_entity_id = entity_map.get(entity_map_key) or None
+        self._value_factor = pv_properties.power_sign(entry, entity_map_key)
         if self._source_entity_id is None:
             if zero_if_unconfigured:
                 # Not installed -- 0 W is the correct reading, not
@@ -963,6 +1005,9 @@ class PwMngtGridSplitSensor(SensorEntity):
 
         entity_map = entry.options.get(CONF_ENTITY_MAP, {})
         self._source_entity_id = entity_map.get(entity_map_key) or None
+        # The split assumes Grid power positive = buying -- see
+        # pv_properties.power_sign().
+        self._sign = pv_properties.power_sign(entry, entity_map_key)
         if not self._source_entity_id:
             LOGGER.warning(
                 "PwMngt: no source entity configured for '%s' (set it under "
@@ -996,7 +1041,7 @@ class PwMngtGridSplitSensor(SensorEntity):
             self._attr_available = False
             self.async_write_ha_state()
             return
-        self._attr_native_value = self._split_fn(value)
+        self._attr_native_value = self._split_fn(value * self._sign)
         self._attr_available = True
         self.async_write_ha_state()
 
@@ -1027,8 +1072,10 @@ class PwMngtEnergyIntegrationSensor(RestoreEntity, SensorEntity):
         self._attr_device_info = pv_device_info(entry)
         self._attr_native_value = 0.0
         self._attr_available = False
-        # unique_id of the PwM_PV_SPLIT_SENSORS sensor this integrates --
-        # resolved to an entity_id in _start_source_tracking().
+        # unique_id of the PwMngt PV sensor this integrates (one of
+        # PwM_PV_SPLIT_SENSORS, or pv_direct_consumption for a derived
+        # pv_total_consumption) -- resolved to an entity_id in
+        # _start_source_tracking().
         self._source_unique_id = f"{entry.entry_id}_pv_{source_split_key}"
         self._source_entity_id: str | None = None
         self._last_source_value: float | None = None

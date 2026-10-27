@@ -4,9 +4,20 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from ..const import DOMAIN
+from ..const import DOMAIN, POWER_SIGN_OPTIONS
 
 _DEFAULT_HISTORY_PERIOD_DAYS = 7
+
+
+def power_sign(entry: ConfigEntry, entity_map_key: str) -> float:
+    """-1.0 when the wizard's "invert sign" option for this power field is
+    ticked (see POWER_SIGN_OPTIONS in const.py), else 1.0. Multiply the
+    source entity's raw value by this, so Grid power is always positive =
+    buying from the grid and Battery power positive = discharging,
+    whatever the inverter itself reports. Fields without such an option
+    are always 1.0."""
+    option = POWER_SIGN_OPTIONS.get(entity_map_key)
+    return -1.0 if option and entry.options.get(option) else 1.0
 
 
 def _pv_entity_id(hass: HomeAssistant, entry: ConfigEntry, platform: str, key: str) -> str | None:

@@ -6,7 +6,6 @@ from typing import Any
 from homeassistant import config_entries
 from homeassistant.const import CONF_NAME
 from homeassistant.core import callback
-from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
@@ -14,7 +13,9 @@ from homeassistant.data_entry_flow import SectionConfig, section
 from homeassistant.helpers.event import async_call_later
 
 from . import async_setup_entry, async_unload_entry
+from .data.inverter_derived_data import derivable_entity_map_keys
 from .devices import CHARGERS
+from .helpers.entity_registry_helper import entity_platform, find_entity_by_name
 from .select import PwM_CONFIG_SELECTS, PwM_PV_CONFIG_SELECTS
 from .const import (
     DOMAIN,
@@ -57,6 +58,10 @@ from .const import (
     CHARGER_CONSUMPTION_SOURCE_TRANSLATION_KEYS,
     INVERTER_TYPE_INTEGRATION_DOMAINS,
     INVERTER_CORE_AUTO_DETECT_NAMES,
+    CONF_INVERT_BATTERY_POWER,
+    CONF_INVERT_GRID_POWER,
+    POWER_SIGN_OPTIONS,
+    SIGN_INVERTED_PLATFORMS,
     SEGMENT_EV_CHARGING,
     SEGMENT_POOL,
     SEGMENT_PV_SURPLUS,
@@ -151,6 +156,9 @@ _SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
             ENTITY_KEY_BATTERY_PV_CHARGED,
             ENTITY_KEY_BATTERY_PV_DISCHARGED,
             ENTITY_KEY_BATTERY_POWER,
+            # Not an entity_map field -- a checkbox, see POWER_SIGN_OPTIONS
+            # in const.py. Special-cased like CONF_ELECTRICITY_PRICE_SURCHARGE.
+            CONF_INVERT_BATTERY_POWER,
             ENTITY_KEY_BATTERY_GRID_CHARGED_DAY,
         ],
     ),
@@ -168,6 +176,7 @@ _SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
         False,
         [
             ENTITY_KEY_GRID_POWER,
+            CONF_INVERT_GRID_POWER,
             ENTITY_KEY_PV_DIRECT_CONSUMPTION,
             ENTITY_KEY_PV_TOTAL_CONSUMPTION,
             ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL,
@@ -473,7 +482,10 @@ def _installed_inverter_type_options(hass, options: list[str], current_value: st
         for option in options
         if option == current_value
         or option not in INVERTER_TYPE_INTEGRATION_DOMAINS
-        or hass.config_entries.async_entries(INVERTER_TYPE_INTEGRATION_DOMAINS[option])
+        or any(
+            hass.config_entries.async_entries(domain)
+            for domain in INVERTER_TYPE_INTEGRATION_DOMAINS[option]
+        )
     ]
 
 
@@ -511,68 +523,6 @@ def _auto_detect_charger_consumption_entity(
     ]
     return matches[0] if len(matches) == 1 else None
 
-
-def _auto_detect_entity_by_name(hass, platform: str, name: str) -> str | None:
-    """Find the single entity_id from `platform` whose entity registry
-    original_name matches, for pre-filling a Solar PV Plant Core field once
-    an inverter brand is picked (see INVERTER_CORE_AUTO_DETECT_NAMES in
-    const.py).
-
-    Used instead of _auto_detect_entity_id (translation_key-based) because
-    the inverter integrations that dict covers don't set translation_key at
-    all -- confirmed directly against Kasper's own live Kostal Plenticore
-    install (see that dict's own comment for how). original_name is the
-    next most stable thing Home Assistant's entity registry exposes: same
-    as translation_key, it doesn't care what the entity_id happens to be or
-    what the device is currently named, it just stops matching if the user
-    has explicitly renamed that entity's friendly name.
-
-    Returns None unless exactly one match exists, same reasoning as
-    _auto_detect_entity_id -- e.g. two Kostal Plenticore inverters would
-    otherwise risk mixing up which one's "Grid Power" is whose.
-    """
-    registry = er.async_get(hass)
-    device_registry = dr.async_get(hass)
-    matches = [
-        entry.entity_id
-        for entry in registry.entities.values()
-        if entry.platform == platform
-        and name in _registry_entry_names(entry, device_registry)
-    ]
-    return matches[0] if len(matches) == 1 else None
-
-
-def _registry_entry_names(entry, device_registry) -> set[str]:
-    """Every form of an entity registry entry's integration-given name that
-    _auto_detect_entity_by_name() should match against.
-
-    An integration that doesn't use has_entity_name (Kostal Plenticore
-    doesn't) stores its full name, device name included, as original_name
-    -- e.g. "Pileaas-Sol Battery SoC" on Kasper's install (device "Pileaas-Sol"), not "Battery
-    SoC". Recent Home Assistant versions also keep the device-name-stripped
-    form as original_name_unprefixed, and that stripped form is what the
-    frontend and the entity-registry websocket API show (which is why an
-    earlier check against those looked right while this function matched
-    nothing -- found 2026-09-28). So: the raw original_name, the
-    unprefixed one when Home Assistant provides it, and -- for versions
-    that don't -- original_name with the entity's own device name
-    stripped off the front by hand.
-    """
-    names: set[str] = set()
-    if entry.original_name:
-        names.add(entry.original_name)
-    unprefixed = getattr(entry, "original_name_unprefixed", None)
-    if unprefixed:
-        names.add(unprefixed)
-    if entry.original_name and entry.device_id:
-        device = device_registry.async_get(entry.device_id)
-        for device_name in (
-            (device.name_by_user, device.name) if device is not None else ()
-        ):
-            prefix = f"{device_name} " if device_name else None
-            if prefix and entry.original_name.startswith(prefix):
-                names.add(entry.original_name[len(prefix):])
-    return names
 
 
 class PwMngtOptionsFlow(config_entries.OptionsFlow):
@@ -633,6 +583,12 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                     CONF_ELECTRICITY_PRICE_SURCHARGE,
                     self.config_entry.options.get(CONF_ELECTRICITY_PRICE_SURCHARGE, 0.0),
                 ),
+                **{
+                    option: self._data.get(
+                        option, self.config_entry.options.get(option, False)
+                    )
+                    for option in POWER_SIGN_OPTIONS.values()
+                },
             },
         )
 
@@ -697,7 +653,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         type/device page is split from its consumption page: Home
         Assistant's options-flow pages are static per render, so page 3's
         own auto-detect (driven by INVERTER_CORE_AUTO_DETECT_NAMES, see
-        _auto_detect_entity_by_name) needs this pick already *saved*, not
+        find_entity_by_name) needs this pick already *saved*, not
         just typed into a still-open form. Submitting this page saves the
         pick via a blocking service call first, then moves straight into a
         fresh render of async_step_solar_pv_plant that reads it
@@ -785,7 +741,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         Core group's fields (Battery SoC, Battery power, DC/PV string
         power, consumption, grid power) get the same treatment from
         whichever inverter brand was picked on page 2 -- see
-        INVERTER_CORE_AUTO_DETECT_NAMES and _auto_detect_entity_by_name.
+        INVERTER_CORE_AUTO_DETECT_NAMES and find_entity_by_name().
         Both mechanisms share this page's single {auto_filled_note}. The
         user can still pick something else; an existing pick is never
         overwritten.
@@ -863,14 +819,35 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         # INVERTER_CORE_AUTO_DETECT_NAMES ("Not installed", or a brand with
         # no entry at all) simply contributes nothing here.
         inverter_type = self._pv_inverter_type_current_value()
-        for key, (platform, name) in INVERTER_CORE_AUTO_DETECT_NAMES.get(
+        auto_filled_keys: set[str] = set()
+        for platform, names in INVERTER_CORE_AUTO_DETECT_NAMES.get(
             inverter_type, {}
         ).items():
-            if not values.get(key):
-                detected = _auto_detect_entity_by_name(self.hass, platform, name)
-                if detected:
-                    values[key] = detected
-                    auto_filled_labels.append(_AUTO_DETECT_LABELS.get(key, key))
+            for key, name in names.items():
+                if not values.get(key):
+                    detected = find_entity_by_name(self.hass, platform, name)
+                    if detected:
+                        values[key] = detected
+                        auto_filled_keys.add(key)
+                        auto_filled_labels.append(_AUTO_DETECT_LABELS.get(key, key))
+
+        # The two "invert sign" checkboxes (POWER_SIGN_OPTIONS in const.py):
+        # the saved choice -- unless the power field was just auto-filled
+        # or the option was never saved, then whatever the source's own
+        # integration needs (SIGN_INVERTED_PLATFORMS).
+        for key, option in POWER_SIGN_OPTIONS.items():
+            stored = self.config_entry.options.get(option)
+            if stored is None or key in auto_filled_keys:
+                values[option] = (
+                    entity_platform(self.hass, values.get(key)) in SIGN_INVERTED_PLATFORMS
+                )
+            else:
+                values[option] = stored
+
+        # Fields PwMngt can calculate itself on this install (Growatt
+        # Modbus, see data/inverter_derived_data.py) aren't required --
+        # left empty, the calculated value is used.
+        derivable_keys = derivable_entity_map_keys(self.hass)
 
         if user_input is not None:
             # Flatten each section's nested dict (keyed by group_key) back
@@ -883,7 +860,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             errors = {
                 key: "required"
                 for key, _unit, required in _SOLAR_PV_PLANT_FIELDS
-                if required and not flat_input.get(key)
+                if required and key not in derivable_keys and not flat_input.get(key)
             }
             if errors:
                 # Home Assistant doesn't render a field-specific error for a
@@ -905,6 +882,9 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                 self._data[CONF_ELECTRICITY_PRICE_SURCHARGE] = (
                     flat_input.get(CONF_ELECTRICITY_PRICE_SURCHARGE) or 0.0
                 )
+                # An unticked checkbox may be left out of the input entirely.
+                for option in POWER_SIGN_OPTIONS.values():
+                    self._data[option] = bool(flat_input.get(option))
                 self._save_progress()
                 return await self._advance()
 
@@ -947,6 +927,8 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                             unit_of_measurement="kr/kWh",
                         )
                     )
+                elif key in POWER_SIGN_OPTIONS.values():
+                    group_schema_dict[vol.Optional(key)] = selector.BooleanSelector()
                 else:
                     group_schema_dict[vol.Optional(key)] = _entity_picker(
                         self.hass, _FIELD_UNIT_BY_KEY[key]
