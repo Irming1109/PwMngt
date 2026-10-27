@@ -185,6 +185,20 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["None"] + [str(size) for size in range(1, 97)],
         default_option="8",
     ),
+    # New -- no Node-RED counterpart: Node-RED assumes the battery is
+    # discharged to 5 %. Claus's Growatt batteries stop at 10 %, so the
+    # level is configurable (Claus, 27-10-2026). Only used in PwMngt's own
+    # calculations (battery nightly target, min_soc, battery ledger); it
+    # never changes the inverter's own discharge limit -- hence the name.
+    # Read through pv_properties.battery_min_soc().
+    PwMngtSelectEntityDescription(
+        key="battery_min_soc",
+        name="Battery minimum SoC, calculation only (%)",
+        icon="mdi:battery-10",
+        entity_category=EntityCategory.CONFIG,
+        options=[str(percent) for percent in range(0, 31)],
+        default_option="5",
+    ),
     # Old key="history_period_days" (input_select.historik_periode)
     # Old name="Antal dage til historik"
     PwMngtSelectEntityDescription(

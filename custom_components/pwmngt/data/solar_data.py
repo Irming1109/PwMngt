@@ -22,7 +22,8 @@ _sample_pv_shift() below for its 10-second sampling.
 Battery nightly target: the battery charge (in %) needed to cover the
 evening/night, i.e.
     (night consumption - PV forecast 17-21 today) x 1.07
-converted to % of the battery, + 5, kept within 5-95. "Night consumption"
+converted to % of the battery, + the battery's minimum SoC, kept within
+minimum SoC-95. "Night consumption"
 is consumption_data's nighttime_average (Node-RED:
 sensor.spidstimer_nat_17_06_snit). It stays a sensor of its own (not an
 attribute): it's a key control value other parts react to (see
@@ -56,10 +57,16 @@ Deliberate differences from Node-RED (each marked "DIFF" below):
   sensor.dagtimer_8_16_snit) aren't read.
 - Battery size "None" (no battery) gives an unknown target instead of
   Node-RED's NaN.
+- The "+ 5" (and the floor of 5) is the battery's minimum SoC from
+  select.<pv>_battery_min_soc instead (pv_properties.battery_min_soc(),
+  default 5): the target is the energy needed *on top of* what the battery
+  can't deliver. Claus's Growatt batteries stop at 10 % (Claus,
+  27-10-2026).
 
 Triggers: every 20 minutes from 08:00 to 21:00, daily at 06:00, whenever
 today's forecast entity is updated (state or attributes -- Solcast
-refreshes its forecast a few times a day), and when Battery size changes.
+refreshes its forecast a few times a day), and when Battery size or
+Battery minimum SoC changes.
 Plus once shortly after startup, so the values aren't unknown until the
 next scheduled run. Node-RED: inject "Opdater hver 20. minut 8-21" (its
 cron "*/20 8-20 * * *" actually stopped at 20:40; 21:00 added here to match
@@ -171,7 +178,6 @@ _LEGACY_UNIQUE_ID_SUFFIXES: list[str] = [
 _DEFAULT_NIGHT_CONSUMPTION = 5.0   # "|| 5" when the average is missing or 0
 _MIN_NIGHT_CONSUMPTION = 2.0       # used when the average is negative
 _TARGET_MARGIN = 1.07
-_TARGET_FLOOR = 5
 _TARGET_CEILING = 95
 
 # Triggers.
@@ -255,6 +261,7 @@ def sum_pv_forecast(
 class SolarInputs:
     night_consumption: float | None  # consumption_data nighttime_average (kWh)
     battery_size_kwh: float | None   # None = no battery / unknown
+    battery_min_soc: float           # % the battery is discharged to
     today_hourly: list[dict[str, Any]]
     tomorrow_hourly: list[dict[str, Any]]
 
@@ -288,8 +295,9 @@ def calculate_solar_data(inputs: SolarInputs) -> dict[str, float | None]:
 
     target: float | None = None
     if inputs.battery_size_kwh:
-        battery = target_kwh / inputs.battery_size_kwh * 100 + 5
-        battery = min(max(battery, _TARGET_FLOOR), _TARGET_CEILING)
+        # DIFF: Node-RED's "+ 5" is the battery's minimum SoC.
+        battery = target_kwh / inputs.battery_size_kwh * 100 + inputs.battery_min_soc
+        battery = min(max(battery, inputs.battery_min_soc), _TARGET_CEILING)
         target = _js_round(battery)
     values[KEY_BATTERY_NIGHTLY_TARGET] = target
     return values
@@ -318,7 +326,7 @@ class PwMngtSolarDataCoordinator(DataUpdateCoordinator[dict[str, float | None]])
         self._today_entity_id = entity_map.get(ENTITY_KEY_PV_FORECAST_TODAY) or None
         self._tomorrow_entity_id = entity_map.get(ENTITY_KEY_PV_FORECAST_TOMORROW) or None
         self._unsubscribers: list = []
-        self._battery_size_unsub = None
+        self._battery_selects_unsub = None
         self.data = {}
         self._pv_total_entity_id: str | None = None
         self._pv_shift_state = PvShiftState()
@@ -385,16 +393,24 @@ class PwMngtSolarDataCoordinator(DataUpdateCoordinator[dict[str, float | None]])
                 # removed again.
                 pass
         self._unsubscribers.clear()
-        if self._battery_size_unsub is not None:
-            self._battery_size_unsub()
-            self._battery_size_unsub = None
+        if self._battery_selects_unsub is not None:
+            self._battery_selects_unsub()
+            self._battery_selects_unsub = None
 
     @callback
     def _handle_startup(self, _event_or_time=None) -> None:
-        battery_size_entity_id = pv_properties.battery_size_entity_id(self.hass, self._entry)
-        if battery_size_entity_id and self._battery_size_unsub is None:
-            self._battery_size_unsub = event.async_track_state_change_event(
-                self.hass, [battery_size_entity_id], self._handle_trigger
+        # Battery size and Battery minimum SoC both change the target.
+        battery_select_ids = [
+            entity_id
+            for entity_id in (
+                pv_properties.battery_size_entity_id(self.hass, self._entry),
+                pv_properties.battery_min_soc_entity_id(self.hass, self._entry),
+            )
+            if entity_id
+        ]
+        if battery_select_ids and self._battery_selects_unsub is None:
+            self._battery_selects_unsub = event.async_track_state_change_event(
+                self.hass, battery_select_ids, self._handle_trigger
             )
         self._run()
         self._sample_pv_shift()
@@ -436,6 +452,7 @@ class PwMngtSolarDataCoordinator(DataUpdateCoordinator[dict[str, float | None]])
         return SolarInputs(
             night_consumption=self._read_night_consumption(),
             battery_size_kwh=self._read_battery_size(),
+            battery_min_soc=pv_properties.battery_min_soc(self.hass, self._entry),
             today_hourly=today_hourly,
             tomorrow_hourly=tomorrow_hourly,
         )

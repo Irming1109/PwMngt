@@ -4,7 +4,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from ..const import DOMAIN, POWER_SIGN_OPTIONS
+from ..const import DEFAULT_BATTERY_MIN_SOC, DOMAIN, POWER_SIGN_OPTIONS
 
 _DEFAULT_HISTORY_PERIOD_DAYS = 7
 
@@ -135,6 +135,27 @@ def battery_price_difference_entity_id(hass: HomeAssistant, entry: ConfigEntry) 
     """Entity id of select.<pv>_pv_battery_price_difference (see
     PwM_PV_CONFIG_SELECTS in select.py)."""
     return _pv_entity_id(hass, entry, "select", "pv_battery_price_difference")
+
+
+def battery_min_soc_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+    """Entity id of select.<pv>_battery_min_soc (see PwM_PV_CONFIG_SELECTS
+    in select.py)."""
+    return _pv_entity_id(hass, entry, "select", "battery_min_soc")
+
+
+def battery_min_soc(hass: HomeAssistant, entry: ConfigEntry) -> float:
+    """The SoC (%) the battery is discharged down to, as set in
+    select.<pv>_battery_min_soc -- the "empty" level PwMngt's battery
+    calculations count from (Node-RED: a fixed 5). Only used for
+    calculations; the inverter's own discharge limit is set in the
+    inverter. Falls back to DEFAULT_BATTERY_MIN_SOC while the select isn't
+    registered or has no usable state yet."""
+    entity_id = battery_min_soc_entity_id(hass, entry)
+    state = hass.states.get(entity_id) if entity_id else None
+    try:
+        return float(state.state) if state is not None else DEFAULT_BATTERY_MIN_SOC
+    except ValueError:
+        return DEFAULT_BATTERY_MIN_SOC
 
 
 def history_period_days_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:

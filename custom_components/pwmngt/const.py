@@ -461,3 +461,8 @@ SEGMENT_PV_SURPLUS = "pv_surplus"
 # ---------------------------------------------------------------------------
 
 RESTORE_MAX_AGE = timedelta(minutes=30)
+
+# The SoC (%) PwMngt's battery calculations treat as "empty" until
+# select.<pv>_battery_min_soc has a value. 5 is what Node-RED hardcodes
+# everywhere -- see pv_properties.battery_min_soc().
+DEFAULT_BATTERY_MIN_SOC = 5.0

@@ -278,6 +278,9 @@
   },
   "entity": {
     "select": {
+      "battery_min_soc": {
+        "name": "Battery minimum SoC, calculation only (%)"
+      },
       "battery_mode": {
         "state": {
           "auto": "Auto",

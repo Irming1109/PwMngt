@@ -1,6 +1,9 @@
 {
   "entity": {
     "select": {
+      "battery_min_soc": {
+        "name": "Batteri minimum SoC, kun til beregning (%)"
+      },
       "battery_mode": {
         "state": {
           "auto": "Auto",

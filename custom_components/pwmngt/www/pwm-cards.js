@@ -74,6 +74,11 @@ const PWM_CARD_STYLE = `
     color: var(--state-icon-color, var(--paper-item-icon-color));
     flex-shrink: 0;
   }
+  .pwm-row-hint {
+    display: block;
+    font-size: 12px;
+    color: var(--secondary-text-color);
+  }
   .pwm-row-control select,
   .pwm-row-control input {
     font-family: inherit;
@@ -110,6 +115,7 @@ const PWM_CARD_STYLE = `
  *     icon: "mdi:ev-station",
  *     type: "select" | "number" | "text" | "sensor",   // also the domain
  *     hideUnless: { device: "hub", key: "...", equals: "Easee" },  // optional, a select
+ *     hint: "Shown in small text under the label",  // optional
  *   }
  * "sensor" is read-only: it just displays the entity's current state (plus
  * its unit_of_measurement, if any), with no input control and no service
@@ -218,6 +224,12 @@ class PwMngtBaseCard extends HTMLElement {
     }
     const labelText = document.createElement("span");
     labelText.textContent = field.label;
+    if (field.hint) {
+      const hintEl = document.createElement("span");
+      hintEl.className = "pwm-row-hint";
+      hintEl.textContent = field.hint;
+      labelText.appendChild(hintEl);
+    }
     labelEl.appendChild(labelText);
 
     const controlWrap = document.createElement("div");
@@ -598,6 +610,13 @@ class PwMPvCard extends PwMngtBaseCard {
         device: "pv", key: "battery_size",
         label: "Battery size (kWh)",
         icon: "mdi:home-battery",
+        type: "select",
+      },
+      {
+        device: "pv", key: "battery_min_soc",
+        label: "Battery minimum SoC (%)",
+        hint: "Only used in PwMngt's calculations - does not change the battery's discharge limit in the inverter",
+        icon: "mdi:battery-10",
         type: "select",
       },
       {
