@@ -3,11 +3,9 @@ minimum SoC right now (its state), plus a running ledger of where the
 battery's content came from (grid or PV, and at what price).
 
 Port of Claus's Node-RED function "Min_SOC beregning" (tab "Batteri
-styring NY"), which writes sensor.pv_battery_status. Ported from Claus's
-corrected export (the one superseding the 30-09-2026 export, which
-contained an extra "backup" copy of this function and an unrelated
-relay-switching subflow that are not part of this automation and were
-not ported). Only the calculation is ported: in Node-RED the state is
+styring NY"), which writes sensor.pv_battery_status. Checked against
+Claus's export of 27-10-2026 (its "Min_SOC beregning backup" copy is not
+part of this automation and is not ported). Only the calculation is ported: in Node-RED the state is
 then written to the inverter's own minimum-SoC number (via "Batteri
 status - onsket min_soc" in "Ha data - opsaetning") -- PwMngt does not do
 that; battery_data only computes and shows the value.
@@ -33,10 +31,7 @@ following Node-RED quirks that are reproduced on purpose rather than
   they don't affect min_soc, soc_grid/pv or the cell ledger in Node-RED.
 - forced_charge is "on"/"off" (lowercase, what is_forced_charging() and
   Home Assistant expect) rather than Node-RED's "On"/"Off" -- a spelling
-  choice local to this entity, not a behavioural difference. Node-RED's
-  one latch that reads this value back ("stop forcing once SoC reaches
-  min_soc") is dead code there: by the time it runs, tvangslad is
-  already 0 whenever min_soc <= SoC, so it's left out here too.
+  choice local to this entity, not a behavioural difference.
 - The per-percent-point cells are one list attribute ("soc_cells"),
   not 100 separate attributes soc_1..soc_100.
 
@@ -54,31 +49,30 @@ New in this export (not present in the previously-ported version):
   from that point instead of from 09:00/SoC 5 -- so resuming after a
   daytime block doesn't demand catching up to where the curve "should"
   already be.
-- The night-time (21:00-05:59) and target-end-time grid protections are
-  now capped (at the current SoC, respectively the target) rather than
-  being able to push min_soc arbitrarily high, and the target-end-time
-  protection no longer applies before 06:00 or during 17:00-20:59.
+- The night-time (21:00-05:59) grid protection is capped at the current
+  SoC rather than being able to push min_soc arbitrarily high.
+- The target-end-time protection (from 06:00, never during 17:00-20:59)
+  holds the battery at the level it has after a night charge: while there
+  are grid cells, the floor is min(SoC, target), and it is remembered for
+  the rest of the day so it never drops (Node-RED: context 'target_gulv',
+  export 27-10-2026). It used to be 5 + the number of grid cells.
+- forced_charge also reads "on" while battery_command is actively one of
+  the charge_now_* options (select.py, Old: "Lad nu - 25/50/75/100%
+  effekt"), on top of the min_soc > soc check. PwMngt had this first
+  (Claus, 15-10-2026); Node-RED has it too since the 27-10-2026 export. It
+  matters to data/balance_data.py's is_forced_charging(): without it the
+  battery's charging draw was netted out of the grid balance during a
+  charge_now_* command, showing a false surplus while buying from the grid.
 
-Deliberate difference from Node-RED (DIFF, Claus 2026-10-15): forced_charge
-also reads "on" while battery_command is actively one of the charge_now_*
-options (select.py, Old: "Lad nu - 25/50/75/100% effekt"), on top of the
-original min_soc > soc check. Node-RED's own "Min_SOC beregning" never
-checked this, so forced_charge stayed "Off" during an active charge_now_*
-command whenever this calculation's own min_soc ladder had no reason to
-raise min_soc above soc -- most commonly while battery_charge_status is
-already "yes_today" (the grid charge is being driven by a separate
-"charge_now_*" select write instead, see data/battery_charge_level.py, so
-this calculation's own grid_charge_planned_today branch deliberately holds
-min_soc at the current SoC). Confirmed against a live mismatch between
-PwMngt and Node-RED during the 15-10-2026 parallel-validation window:
-data/balance_data.py's is_forced_charging() gate reads this same
-forced_charge value to decide whether to cancel the battery's power out of
-the grid-balance reading -- under-reporting forced_charge there made
-balance_data.py wrongly net the battery's charging draw out of the
-balance, showing a false surplus while actually buying from the grid to
-charge. The same fix was also given to Claus for his own Node-RED "Min_SOC
-beregning"/Balance functions, as separate, independent code outside this
-repo.
+Deliberate differences from Node-RED:
+- DIFF (Claus, 19-10-2026): the min_soc ceiling is 95, not 90, and the
+  target-end-time floor uses the same ceiling (Claus, 27-10-2026) -- see
+  _MIN_SOC_CEILING.
+- DIFF (Claus, 27-10-2026): Node-RED's latch "stop forcing once SoC
+  reaches min_soc" (it reads last run's forced_charge back) is left out.
+  It runs after the "Lad nu" rule there, so during a charge_now_* command
+  forced_charge flips On/Off on every run. Here it stays "on" for as long
+  as the command is active.
 
 Triggers (same as Node-RED, see PwMngtBatteryDataSensor): Battery SoC
 changes, Battery nightly target changes (only 00:01-16:59), target end
@@ -193,7 +187,7 @@ _COMMAND_BLOCK_BATTERY = "block_battery"
 # data/battery_charge_level.py's own _ACTIVE_CHARGE_COMMANDS (duplicated
 # rather than imported, to avoid a cross-module coupling between the two
 # "Min_SOC"/"Bestem ladeeffekt" ports). Old: "Lad nu - 25/50/75/100%
-# effekt". Used below to fix forced_charge (DIFF, Claus 2026-10-15).
+# effekt". Used below for forced_charge.
 _ACTIVE_CHARGE_COMMANDS = frozenset(
     {"charge_now_25", "charge_now_50", "charge_now_75", "charge_now_100"}
 )
@@ -295,6 +289,10 @@ class BatteryLedger:
     plan_date: str | None = None
     plan_start_minutes: float | None = None
     plan_start_soc: float | None = None
+    # The target-end-time floor (Node-RED: context 'target_gulv'), see
+    # _target_floor(). None = no floor kept (protection not active).
+    target_floor_date: str | None = None
+    target_floor: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -309,6 +307,8 @@ class BatteryLedger:
             "plan_date": self.plan_date,
             "plan_start_minutes": self.plan_start_minutes,
             "plan_start_soc": self.plan_start_soc,
+            "target_floor_date": self.target_floor_date,
+            "target_floor": self.target_floor,
         }
 
     @classmethod
@@ -325,6 +325,8 @@ class BatteryLedger:
             plan_date=restored.get("plan_date"),
             plan_start_minutes=restored.get("plan_start_minutes"),
             plan_start_soc=restored.get("plan_start_soc"),
+            target_floor_date=restored.get("target_floor_date"),
+            target_floor=restored.get("target_floor"),
         )
 
 
@@ -402,7 +404,7 @@ def _discharge_cells(
     that were PV). Node-RED: the removal loop inside "Min_SOC beregning".
 
     price_mode: cells priced above price_floor are protected -- use the
-    cheapest *unprotected* grid cell first, then PV, and only once
+    most expensive *unprotected* grid cell first, then PV, and only once
     nothing else is left, a protected cell.
     target_mode: protect all grid cells until the target end time -- use
     PV first, otherwise the most expensive grid cell.
@@ -438,6 +440,7 @@ def _restart_plan(
     previous: BatteryLedger,
     today: str,
     blocked: bool,
+    hour: int,
     now_minutes: int,
     soc: float,
 ) -> tuple[str | None, float | None, float | None]:
@@ -445,10 +448,40 @@ def _restart_plan(
     the battery command blocks charging/the battery during 06:00-16:59,
     remember today's date and the current time/SoC, overwriting whatever
     was remembered before (even from earlier today). Returns the plan to
-    carry forward (possibly unchanged)."""
-    if blocked and 6 * 60 <= now_minutes <= 16 * 60 + 59:
+    carry forward (possibly unchanged).
+
+    The window is checked on the real hour, not now_minutes: now_minutes
+    uses the minute rounded to the nearest quarter, so 05:53 would
+    otherwise count as 06:00 and 16:53 as 17:00 (Node-RED: klokken)."""
+    if blocked and 6 <= hour <= 16:
         return today, float(now_minutes), soc
     return previous.plan_date, previous.plan_start_minutes, previous.plan_start_soc
+
+
+def _target_floor(
+    previous: BatteryLedger,
+    today: str,
+    active: bool,
+    has_grid_cells: bool,
+    soc: float,
+    target: float,
+) -> tuple[str | None, float | None]:
+    """The floor that protects grid-bought energy until the target end time
+    (Node-RED: context 'target_gulv'). While the battery holds grid cells,
+    the floor follows the SoC up (capped at the target and the min_soc
+    ceiling), but it never drops for the rest of the day -- otherwise it
+    would chase the SoC down as the battery discharges. Cleared whenever
+    the protection isn't active. Returns (date, floor) to carry forward;
+    (None, None) = no floor."""
+    if not active:
+        return None, None
+    kept = (previous.target_floor or 0.0) if previous.target_floor_date == today else 0.0
+    if not has_grid_cells and kept <= 0:
+        # Node-RED keeps the floor object untouched here; it is 0/stale
+        # either way, so it is cleared.
+        return None, None
+    new_floor = min(soc, target, _MIN_SOC_CEILING) if has_grid_cells else 0.0
+    return today, max(kept, new_floor)
 
 
 def calculate_battery_data(
@@ -579,7 +612,7 @@ def calculate_battery_data(
     blocked = inputs.battery_command in (_COMMAND_BLOCK_CHARGING, _COMMAND_BLOCK_BATTERY)
     today = inputs.now.strftime("%Y-%m-%d")
     plan_date, plan_start_minutes, plan_start_soc = _restart_plan(
-        previous, today, blocked, now_minutes, soc
+        previous, today, blocked, hour, now_minutes, soc
     )
     plan_active = (
         plan_date == today
@@ -650,13 +683,19 @@ def calculate_battery_data(
             min_soc = soc
 
     # ---- Protect grid-bought energy until the target end time -----------
-    # Can only raise min_soc, and never above the target. Uses the cells
-    # after this run's rise/fall.
-    if target_protection_active:
-        grid_cells = [v for v in cells if v != 0]
-        if grid_cells:
-            protected_floor = min(_MIN_SOC_FLOOR + len(grid_cells), target)
-            min_soc = max(min_soc, protected_floor)
+    # Holds the battery at the level it has after a night charge (see
+    # _target_floor()). Can only raise min_soc. Uses the cells after this
+    # run's rise/fall.
+    target_floor_date, target_floor = _target_floor(
+        previous,
+        today,
+        target_protection_active,
+        any(v != 0 for v in cells),
+        soc,
+        target,
+    )
+    if target_floor is not None:
+        min_soc = max(min_soc, target_floor)
 
     # ---- Night price protection (21:00-05:59) ----------------------------
     # Only the grid cells priced above price_floor are protected. Can only
@@ -674,10 +713,11 @@ def calculate_battery_data(
     if vinter:
         min_soc = max(_MIN_SOC_FLOOR, min(min_soc, soc))
 
-    # DIFF (Claus, 2026-10-15) -- see module docstring: an active
-    # charge_now_* command counts as forced grid charging too, even when
-    # min_soc > soc isn't itself true (most commonly while
+    # An active charge_now_* command counts as forced grid charging too,
+    # even when min_soc > soc isn't itself true (most commonly while
     # grid_charge_planned_today already held min_soc at soc above).
+    # Node-RED's "stop forcing once SoC reaches min_soc" latch is left out
+    # on purpose -- see module docstring.
     forced_charge = "on" if (
         inputs.battery_command in _ACTIVE_CHARGE_COMMANDS
         or (not vinter and min_soc > soc)
@@ -702,6 +742,8 @@ def calculate_battery_data(
         plan_date=plan_date,
         plan_start_minutes=plan_start_minutes,
         plan_start_soc=plan_start_soc,
+        target_floor_date=target_floor_date,
+        target_floor=target_floor,
     )
     return min_soc_rounded, ledger, forced_charge
 
