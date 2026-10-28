@@ -60,6 +60,11 @@ from .data.battery_charge_decision import (
     PwMngtBatteryChargeDecisionSensor,
 )
 from .data.battery_charge_level import PwMngtBatteryChargeLevelController
+from .data.battery_hold import (
+    PwM_BATTERY_HOLD_SENSORS,
+    PwMngtBatteryHoldSensor,
+    battery_hold_supported,
+)
 from .data.battery_sell_decision import PwMngtBatterySellDecisionController
 from .data.savings_data import (
     PwM_SAVINGS_DATA_SENSORS,
@@ -175,6 +180,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         entity = PwMngtBatteryChargeDecisionSensor(description, entry)
         LOGGER.info("Added PV battery-charge-decision sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
+
+    # Growatt only -- an inverter that holds its minimum SoC itself
+    # doesn't need it. See data/battery_hold.py.
+    if battery_hold_supported(hass):
+        for description in PwM_BATTERY_HOLD_SENSORS:
+            entity = PwMngtBatteryHoldSensor(description, entry, hass)
+            LOGGER.info("Added PV battery-hold sensor with entity_id '%s'", entity.entity_id)
+            sensors.append(entity)
 
     for description in PwM_SAVINGS_DATA_SENSORS:
         entity = PwMngtSavingsDataSensor(description, entry)

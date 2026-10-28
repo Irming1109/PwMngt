@@ -22,7 +22,8 @@
           "discharge_now_25": "Aflad nu - 25% effekt",
           "discharge_now_50": "Aflad nu - 50% effekt",
           "discharge_now_75": "Aflad nu - 75% effekt",
-          "discharge_now_100": "Aflad nu - 100% effekt"
+          "discharge_now_100": "Aflad nu - 100% effekt",
+          "hold_min_soc": "Hold min. SoC"
         }
       }
     },
@@ -36,6 +37,36 @@
           "no_surplus": "Nej (overskud)",
           "no_price": "Nej (pris)",
           "no_deferred": "Nej (udskudt)"
+        }
+      },
+      "battery_hold_power": {
+        "state_attributes": {
+          "active": {
+            "name": "Aktiv"
+          },
+          "status": {
+            "name": "Status",
+            "state": {
+              "invalid_input": "Ugyldigt input - intet ændret",
+              "paused_manual": "Pause (batteritilstand manuel)",
+              "paused_other_command": "Pause (anden batterikommando)",
+              "released_no_limit": "Frigivet (ingen grænse)",
+              "released_winter": "Frigivet (vinter, grænse under 20%)",
+              "waiting_discharge": "Afventer: aflader ved grænsen",
+              "at_limit": "Ved grænsen - inverteren klarer det selv",
+              "waiting_min_switch_time": "Venter på minimumstid mellem skift",
+              "hold_started": "Lås startet",
+              "released": "Frigivet",
+              "above_limit": "Over grænsen",
+              "catching_up": "Indhenter grænsen - al PV i batteriet",
+              "hard_hold_low_pv": "Hård lås, lav PV",
+              "holding_at_limit": "Lås ved grænsen",
+              "normal_operation": "Frigivet (normal drift)"
+            }
+          },
+          "target_power": {
+            "name": "Ønsket effekt"
+          }
         }
       }
     }

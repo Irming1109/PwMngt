@@ -31,8 +31,9 @@ LOGGER = logging.getLogger(__name__)
 
 
 def signal_set_battery_command(entry_id: str) -> str:
-    """Dispatcher signal data/battery_charge_level.py sends to set
-    battery_command programmatically (Node-RED: "Bestem ladeeffekt" and
+    """Dispatcher signal data/battery_charge_level.py (and battery_sell_
+    decision.py, battery_hold.py) sends to set battery_command
+    programmatically (Node-RED: "Bestem ladeeffekt" and
     the "SOC >= target" gate both write select.pv_batteri_styring
     directly). Payload: the option to select."""
     return f"{DOMAIN}_{entry_id}_set_battery_command"
@@ -294,7 +295,8 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
     # write it (and the user can set it by hand). In PwMngt, written by
     # data/battery_charge_level.py ("charge_now_*"/"internal", tonight's
     # grid charge) and data/battery_sell_decision.py ("block_charging"/
-    # "internal", daytime selling) -- and read by data/battery_data.py
+    # "internal", daytime selling) and data/battery_hold.py ("hold_min_
+    # soc"/"internal", Growatt only) -- and read by data/battery_data.py
     # (its "block_charging"/"block_battery" restart-plan check). Options
     # are translation keys; the display text (English/Danish) lives in
     # strings.json / translations/*.json under entity.select.battery_
@@ -316,6 +318,7 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
             "discharge_now_50",  # Old: "Aflad nu - 50% effekt"
             "discharge_now_75",  # Old: "Aflad nu - 75% effekt"
             "discharge_now_100", # Old: "Aflad nu - 100% effekt"
+            "hold_min_soc",      # New: data/battery_hold.py (Growatt).
         ],
         default_option="internal",
     ),

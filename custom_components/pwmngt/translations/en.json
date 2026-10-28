@@ -299,7 +299,8 @@
           "discharge_now_25": "Discharge now - 25% power",
           "discharge_now_50": "Discharge now - 50% power",
           "discharge_now_75": "Discharge now - 75% power",
-          "discharge_now_100": "Discharge now - 100% power"
+          "discharge_now_100": "Discharge now - 100% power",
+          "hold_min_soc": "Hold min SoC"
         }
       }
     },
@@ -313,6 +314,36 @@
           "no_surplus": "No (surplus)",
           "no_price": "No (price)",
           "no_deferred": "No (deferred)"
+        }
+      },
+      "battery_hold_power": {
+        "state_attributes": {
+          "active": {
+            "name": "Active"
+          },
+          "status": {
+            "name": "Status",
+            "state": {
+              "invalid_input": "Invalid input - nothing changed",
+              "paused_manual": "Paused (battery mode manual)",
+              "paused_other_command": "Paused (another battery command)",
+              "released_no_limit": "Released (no limit)",
+              "released_winter": "Released (winter, limit below 20%)",
+              "waiting_discharge": "Waiting: discharging at the limit",
+              "at_limit": "At the limit - the inverter manages",
+              "waiting_min_switch_time": "Waiting for the minimum switch time",
+              "hold_started": "Hold started",
+              "released": "Released",
+              "above_limit": "Above the limit",
+              "catching_up": "Catching up - all PV into the battery",
+              "hard_hold_low_pv": "Hard hold, low PV",
+              "holding_at_limit": "Holding at the limit",
+              "normal_operation": "Released (normal operation)"
+            }
+          },
+          "target_power": {
+            "name": "Target power"
+          }
         }
       }
     }
