@@ -58,6 +58,24 @@ Deliberate differences from Node-RED (agreed with Claus, issue #12):
 - Winter (November-January) is read in Home Assistant's own time zone
   rather than a fixed Europe/Copenhagen.
 
+New logic with no Node-RED counterpart (Claus, issue #14):
+- The wait at the limit is 3 minutes, but 6 with 3 or more big PV shifts
+  in the last hour (solar_data's pv_big_shifts_last_60min) -- on a
+  cloudy day a discharge is likely a passing cloud, and every hold costs
+  two EEPROM writes.
+- A wait starts when the battery discharges while SoC is AT the limit.
+  During it, SoC dropping below the limit doesn't hold at once (Growatt
+  reports whole percent, so 11.4 % can read 10 % at the first dip) --
+  only 2 or more points below does.
+- If the discharge stops during the wait with SoC below the limit, there
+  is no hold: the inverter charges by itself. It holds once the
+  discharge starts again (or SoC is 2 points below). SoC below the limit
+  without a wait before it (e.g. the limit stepping up at 09:00) still
+  holds at once, as in Node-RED.
+- The worst case is 2 points below the limit, whatever the battery size
+  -- a small battery reaches it within a few minutes, so its wait is
+  shorter in practice.
+
 Triggers (as Node-RED): every minute, and whenever PV total, battery_data
 or battery_command changes -- plus battery_mode, for the manual pause.
 """
@@ -94,6 +112,7 @@ from ..helpers.entity_registry_helper import find_entity_by_name
 from ..helpers.state_helper import read_float_state
 from ..properties import pv_properties
 from ..select import signal_set_battery_command
+from .solar_data import KEY_PV_BIG_SHIFTS_LAST_60MIN
 
 LOGGER = logging.getLogger(__name__)
 
@@ -114,6 +133,13 @@ _HYSTERESIS = 5  # HYSTERESE: points above the limit before releasing.
 _MIN_SWITCH_SECONDS = 10 * 60  # MIN_SKIFT_MS: spares the inverter's EEPROM.
 _DISCHARGE_W = 100  # AFLAD_W: discharging above this counts as "drawing".
 _DISCHARGE_SECONDS = 3 * 60  # AFLAD_TID_MS: at the limit, this long in a row.
+# New (issue #14): with this many big PV shifts in the last hour (clouds),
+# a discharge at the limit is likely a passing cloud -- wait longer.
+_UNSTABLE_PV_SHIFTS = 3
+_DISCHARGE_SECONDS_UNSTABLE = 6 * 60
+# New (issue #14): while waiting, SoC this many points below the limit
+# locks at once after all.
+_WAIT_MAX_POINTS_BELOW = 2
 
 _RUN_INTERVAL_SECONDS = 60  # Node-RED inject "1 Minut".
 
@@ -125,6 +151,8 @@ STATUS_PAUSED_OTHER_COMMAND = "paused_other_command"
 STATUS_RELEASED_NO_LIMIT = "released_no_limit"
 STATUS_RELEASED_WINTER = "released_winter"
 STATUS_WAITING_DISCHARGE = "waiting_discharge"
+STATUS_WAITING_BELOW_LIMIT = "waiting_below_limit"
+STATUS_BELOW_LIMIT_NOT_DISCHARGING = "below_limit_not_discharging"
 STATUS_AT_LIMIT = "at_limit"
 STATUS_WAITING_MIN_SWITCH_TIME = "waiting_min_switch_time"
 STATUS_HOLD_STARTED = "hold_started"
@@ -175,6 +203,12 @@ class BatteryHoldState:
     last_write: float = 0.0
     last_switch: float = 0.0
     discharge_start: float = 0.0
+    # The current discharge began while SoC was AT the limit -- a dip below
+    # it doesn't lock before the wait is over (issue #14).
+    waiting: bool = False
+    # A wait ended without a hold (the discharge stopped) with SoC below
+    # the limit: no hold unless the discharge starts again (issue #14).
+    held_off_below: bool = False
 
 
 @dataclass
@@ -188,6 +222,7 @@ class BatteryHoldInputs:
     battery_mode_manual: bool
     now: float  # Epoch seconds.
     winter: bool
+    pv_big_shifts: int = 0  # solar_data's pv_big_shifts_last_60min.
 
 
 @dataclass
@@ -214,12 +249,25 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
     st = replace(state)
 
     # How long has the battery been discharging in a row?
-    if inputs.battery_power > _DISCHARGE_W:
+    discharging = inputs.battery_power > _DISCHARGE_W
+    if discharging:
         if not st.discharge_start:
             st.discharge_start = now
     else:
         st.discharge_start = 0.0
+        if st.waiting and soc < limit:
+            # The wait ended without a hold (e.g. the cloud passed) --
+            # don't hold for the dip it left behind (issue #14, rule 5).
+            st.held_off_below = True
+        st.waiting = False
+    if soc >= limit:
+        st.held_off_below = False
     discharge_seconds = now - st.discharge_start if st.discharge_start else 0.0
+    wait_seconds = (
+        _DISCHARGE_SECONDS_UNSTABLE
+        if inputs.pv_big_shifts >= _UNSTABLE_PV_SHIFTS
+        else _DISCHARGE_SECONDS
+    )
 
     # Paused while battery_command belongs to someone else. Forgets its
     # state, so it starts cleanly afterwards (Node-RED: tvangslad).
@@ -233,6 +281,8 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
         st.power_w = 0.0
         st.last_switch = 0.0  # May hold at once when the other command ends.
         st.discharge_start = 0.0
+        st.waiting = False
+        st.held_off_below = False
         return BatteryHoldResult(
             st, None, paused_status, inputs.battery_command == COMMAND_HOLD, None
         )
@@ -259,16 +309,36 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
             else STATUS_RELEASED_NO_LIMIT
         )
     elif not active and soc <= limit:
-        if soc < limit or discharge_seconds >= _DISCHARGE_SECONDS:
+        if soc == limit and discharging:
+            st.waiting = True
+        if soc <= limit - _WAIT_MAX_POINTS_BELOW:
+            # Far below: hold at once, waiting or not.
+            hold_now = True
+        elif soc == limit or st.waiting:
+            # At the limit, or dipped below it during the wait: hold only
+            # once the battery has kept discharging long enough --
+            # otherwise the inverter manages by itself (issue #14: longer
+            # on a cloudy day, and a dip during the wait doesn't count).
+            hold_now = discharge_seconds >= wait_seconds
+            if not hold_now:
+                if soc < limit:
+                    status = STATUS_WAITING_BELOW_LIMIT
+                else:
+                    status = STATUS_WAITING_DISCHARGE if discharging else STATUS_AT_LIMIT
+        elif st.held_off_below and not discharging:
+            # A wait ended below the limit without discharging since:
+            # the inverter charges by itself (issue #14, rule 5).
+            hold_now = False
+            status = STATUS_BELOW_LIMIT_NOT_DISCHARGING
+        else:
             # Below the limit: hold at once (all PV into the battery to
-            # catch up). At the limit: only while the battery keeps
-            # discharging -- otherwise the inverter manages by itself.
+            # catch up).
+            hold_now = True
+        if hold_now:
             if switch_ok:
                 should_hold = True
             else:
                 status = STATUS_WAITING_MIN_SWITCH_TIME
-        else:
-            status = STATUS_WAITING_DISCHARGE if discharge_seconds > 0 else STATUS_AT_LIMIT
     elif active and soc >= min(limit + _HYSTERESIS, _FULL_SOC):
         if switch_ok:
             should_hold = False
@@ -276,6 +346,8 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
             status = STATUS_WAITING_MIN_SWITCH_TIME
 
     if should_hold and not active:
+        st.waiting = False
+        st.held_off_below = False
         st.holding = True
         st.power_w = None
         st.last_write = now  # The start writes the power too -- respect the lock.
@@ -350,6 +422,8 @@ class PwMngtBatteryHoldStoredData(ExtraStoredData):
                 last_write=float(restored.get("last_write") or 0.0),
                 last_switch=float(restored.get("last_switch") or 0.0),
                 discharge_start=float(restored.get("discharge_start") or 0.0),
+                waiting=bool(restored.get("waiting", False)),
+                held_off_below=bool(restored.get("held_off_below", False)),
             )
         )
 
@@ -457,7 +531,18 @@ class PwMngtBatteryHoldSensor(RestoreEntity, SensorEntity):
             battery_mode_manual=pv_properties.is_battery_mode_manual(self.hass, self._entry),
             now=dt_util.utcnow().timestamp(),
             winter=dt_util.now().month in _WINTER_MONTHS,
+            pv_big_shifts=self._read_pv_big_shifts(),
         )
+
+    def _read_pv_big_shifts(self) -> int:
+        """solar_data's pv_big_shifts_last_60min -- 0 (the normal wait)
+        while it isn't there."""
+        entity_id = pv_properties.solar_data_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        try:
+            return int(state.attributes.get(KEY_PV_BIG_SHIFTS_LAST_60MIN) or 0) if state else 0
+        except (TypeError, ValueError):
+            return 0
 
     def _read(self, entity_id: str | None) -> float | None:
         return read_float_state(self.hass.states.get(entity_id)) if entity_id else None

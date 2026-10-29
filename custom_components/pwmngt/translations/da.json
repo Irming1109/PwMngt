@@ -53,6 +53,8 @@
               "released_no_limit": "Frigivet (ingen grænse)",
               "released_winter": "Frigivet (vinter, grænse under 20%)",
               "waiting_discharge": "Afventer: aflader ved grænsen",
+              "waiting_below_limit": "Afventer: under grænsen under afladning",
+              "below_limit_not_discharging": "Under grænsen - aflader ikke, inverteren lader selv",
               "at_limit": "Ved grænsen - inverteren klarer det selv",
               "waiting_min_switch_time": "Venter på minimumstid mellem skift",
               "hold_started": "Lås startet",

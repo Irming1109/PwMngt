@@ -330,6 +330,8 @@
               "released_no_limit": "Released (no limit)",
               "released_winter": "Released (winter, limit below 20%)",
               "waiting_discharge": "Waiting: discharging at the limit",
+              "waiting_below_limit": "Waiting: dipped below the limit while discharging",
+              "below_limit_not_discharging": "Below the limit - not discharging, the inverter charges",
               "at_limit": "At the limit - the inverter manages",
               "waiting_min_switch_time": "Waiting for the minimum switch time",
               "hold_started": "Hold started",
