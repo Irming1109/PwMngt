@@ -839,7 +839,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             stored = self.config_entry.options.get(option)
             if stored is None or key in auto_filled_keys:
                 values[option] = (
-                    entity_platform(self.hass, values.get(key)) in SIGN_INVERTED_PLATFORMS
+                    entity_platform(self.hass, values.get(key)) in SIGN_INVERTED_PLATFORMS[key]
                 )
             else:
                 values[option] = stored

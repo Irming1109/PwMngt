@@ -80,7 +80,7 @@
             },
             "data_description": {
               "grid_power": "The entity that reports current power flow to/from the grid (W). Only \"W\"-unit sensors are listed.",
-              "invert_grid_power": "Tick if the grid power entity reports export as positive. PwMngt expects positive = buying from the grid. Ticked automatically for Growatt Modbus.",
+              "invert_grid_power": "Tick if the grid power entity reports export as positive. PwMngt expects positive = buying from the grid.",
               "pv_direct_consumption": "The entity that reports power currently consumed directly from PV production (W), without going through the battery. Only \"W\"-unit sensors are listed. With Growatt Modbus, leave empty: PwMngt calculates it from House Consumption, PV, grid import and battery discharge.",
               "pv_total_consumption": "The entity that reports total cumulative PV consumption (kWh). Only \"kWh\"-unit sensors are listed. With Growatt Modbus, leave empty: PwMngt sums PV direct consumption over time.",
               "property_consumption_total": "The entity that reports the whole property's cumulative energy consumption (kWh) as a raw, ever-increasing lifetime counter -- e.g. your inverter's own lifetime consumption sensor. Only \"kWh\"-unit sensors are listed. Pre-filled automatically from your inverter if it's a supported brand -- pick a different entity if you don't want that. Do not point this at a Daily Utility Meter helper -- PwMngt tracks its own local-midnight reset internally, so it needs the raw, never-resetting counter instead."
@@ -212,7 +212,7 @@
           "pv_direct_consumption": "The entity that reports power currently consumed directly from PV production (W), without going through the battery. Only \"W\"-unit sensors are listed. With Growatt Modbus, leave empty: PwMngt calculates it from House Consumption, PV, grid import and battery discharge.",
           "pv_total_consumption": "The entity that reports total cumulative PV consumption (kWh). Only \"kWh\"-unit sensors are listed. With Growatt Modbus, leave empty: PwMngt sums PV direct consumption over time.",
           "grid_power": "The entity that reports current power flow to/from the grid (W). Only \"W\"-unit sensors are listed.",
-          "invert_grid_power": "Tick if the grid power entity reports export as positive. PwMngt expects positive = buying from the grid. Ticked automatically for Growatt Modbus.",
+          "invert_grid_power": "Tick if the grid power entity reports export as positive. PwMngt expects positive = buying from the grid.",
           "pv_forecast_today": "The entity that reports today's forecasted PV production for the whole plant (kWh), e.g. from a solar forecast integration. Only \"kWh\"-unit sensors are listed. Pre-filled automatically if Solcast PV Forecast is installed and unambiguous -- pick a different entity if you don't want that.",
           "pv_forecast_tomorrow": "The entity that reports tomorrow's forecasted PV production for the whole plant (kWh), e.g. from a solar forecast integration. Only \"kWh\"-unit sensors are listed. Pre-filled automatically if Solcast PV Forecast is installed and unambiguous -- pick a different entity if you don't want that.",
           "spot_electricity_price": "The entity that reports your current total electricity price including VAT/tariffs (kr/kWh) -- not the raw spot price -- e.g. Strømligning's own VAT-inclusive price sensor. Only \"kr/kWh\"-unit sensors are listed.",

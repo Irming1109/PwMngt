@@ -371,8 +371,8 @@ INVERTER_CORE_AUTO_DETECT_NAMES: dict[str, dict[str, dict[str, str]]] = {
             ENTITY_KEY_PV1_POWER: "PV1 Power",
             ENTITY_KEY_PV2_POWER: "PV2 Power",
             ENTITY_KEY_PV3_POWER: "PV3 Power",
-            # Positive = export (opposite of Kostal) -- see
-            # SIGN_INVERTED_PLATFORMS below.
+            # Positive = buying, same as Kostal (confirmed live on Claus's
+            # install, 2026-10-29) -- not inverted.
             ENTITY_KEY_GRID_POWER: "Grid Power",
             # Lifetime counter of everything the house used (PV + battery
             # + grid), total_increasing.
@@ -410,11 +410,13 @@ INVERTER_CORE_AUTO_DETECT_NAMES: dict[str, dict[str, dict[str, str]]] = {
 # gets the matching "invert" option ticked in the wizard; every reader of
 # these two fields goes through pv_properties.power_sign().
 #
-# SIGN_INVERTED_PLATFORMS: integrations known to report the opposite --
-# the wizard ticks the option when it picks a source from one of them.
-# growatt_modbus: Grid Power positive = export, Battery Power positive =
-# charging (its own sensor descriptions; Claus's Node-RED flips the
-# battery too, node "Batteri effekt" in "Ha data - opsaetning").
+# SIGN_INVERTED_PLATFORMS: per field, the integrations known to report the
+# opposite -- the wizard ticks that field's option when it picks a source
+# from one of them. growatt_modbus: only Battery Power (positive =
+# charging; Claus's Node-RED flips it too, node "Batteri effekt" in "Ha
+# data - opsaetning"). Its Grid Power is positive = buying, like Kostal --
+# confirmed live on Claus's install (2026-10-29), despite the integration's
+# own sensor description saying export.
 # ---------------------------------------------------------------------------
 
 CONF_INVERT_GRID_POWER = "invert_grid_power"
@@ -425,7 +427,10 @@ POWER_SIGN_OPTIONS: dict[str, str] = {
     ENTITY_KEY_BATTERY_POWER: CONF_INVERT_BATTERY_POWER,
 }
 
-SIGN_INVERTED_PLATFORMS = frozenset({GROWATT_MODBUS_PLATFORM})
+SIGN_INVERTED_PLATFORMS: dict[str, frozenset[str]] = {
+    ENTITY_KEY_GRID_POWER: frozenset(),
+    ENTITY_KEY_BATTERY_POWER: frozenset({GROWATT_MODBUS_PLATFORM}),
+}
 
 # growatt_modbus sensors (original_name) that data/inverter_derived_data.py
 # calculates Battery PV charged and PV direct consumption from, when those
