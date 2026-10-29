@@ -81,6 +81,11 @@ Deliberate differences from Node-RED:
   at 10 %, SoC <= 5 never happens, so the ledger would otherwise never be
   reset. Only used for calculating; the inverter's own discharge limit is
   set in the inverter.
+- DIFF (Claus, 29-10-2026): right after a start, a run is skipped until
+  the minimum-SoC select -- and for the first 10 minutes Battery nightly
+  target -- has a real value, instead of calculating with their
+  fallbacks. Otherwise min_soc showed 5 % for a moment at a restart,
+  which released data/battery_hold.py's hold. See _inputs_ready().
 
 Triggers (same as Node-RED, see PwMngtBatteryDataSensor): Battery SoC
 changes, Battery nightly target changes (only 00:01-16:59), target end
@@ -234,6 +239,9 @@ _CHARGE_CURVE_START_MINUTES = 9 * 60
 
 # Triggers.
 _RATE_LIMIT_SECONDS = 5
+# How long after a start a missing Battery nightly target means "not ready
+# yet" rather than "use the fallback" -- see _inputs_ready().
+_STARTUP_GRACE = timedelta(minutes=10)
 _TARGET_TRIGGER_START = (0, 1)    # 00:01
 _TARGET_TRIGGER_END = (16, 59)    # 16:59
 _PERIODIC_HOURS = list(range(6, 24))
@@ -812,6 +820,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             entity_map.get(ENTITY_KEY_BATTERY_GRID_CHARGED_DAY) or None
         )
         self._ledger = BatteryLedger()
+        self._added_at = dt_util.utcnow()
         self._last_run: datetime | None = None
         self._pending_run: Any = None  # cancel callback of a scheduled run
 
@@ -845,9 +854,14 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         if not self._soc_entity_id:
             return
 
+        self._added_at = dt_util.utcnow()
+
         # Any-time triggers.
         watched = [self._soc_entity_id]
         for entity_id in (
+            # Not a Node-RED trigger (its 5 % was fixed): a changed minimum
+            # SoC, or the select becoming ready after a start, re-runs at once.
+            pv_properties.battery_min_soc_entity_id(self.hass, self._entry),
             pv_properties.battery_target_end_time_entity_id(self.hass, self._entry),
             pv_properties.battery_command_entity_id(self.hass, self._entry),
             *self._charger_state_entity_ids(),
@@ -968,6 +982,9 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             # is unavailable/unknown/undefined. No fallback -- skip the run.
             return
 
+        if not self._inputs_ready():
+            return
+
         battery_min_soc = pv_properties.battery_min_soc(self.hass, self._entry)
         inputs = BatteryInputs(
             now=dt_util.now(),
@@ -1022,9 +1039,25 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         self._attr_available = True
         self.async_write_ha_state()
 
+    def _inputs_ready(self) -> bool:
+        """False right after a start, while the minimum-SoC select -- or,
+        for the first _STARTUP_GRACE, Battery nightly target -- has no real
+        value yet. Their fallbacks would publish a false min_soc for a
+        moment (5 % at a restart, Claus 2026-10-29), which released
+        data/battery_hold.py's hold at once. Skipping keeps the state
+        "unknown" until the next trigger. After the grace period a missing
+        target falls back as in Node-RED (e.g. no Solcast at all)."""
+        min_soc_entity_id = pv_properties.battery_min_soc_entity_id(self.hass, self._entry)
+        if self._read_float(min_soc_entity_id, None) is None:
+            return False
+        target_entity_id = pv_properties.battery_nightly_target_entity_id(self.hass, self._entry)
+        if self._read_float(target_entity_id, None) is None:
+            return dt_util.utcnow() - self._added_at >= _STARTUP_GRACE
+        return True
+
     # -- input readers (Node-RED fallback when missing/unknown) ----------
 
-    def _read_float(self, entity_id: str | None, default: float) -> float:
+    def _read_float(self, entity_id: str | None, default: float | None) -> float | None:
         value = read_float_state(self.hass.states.get(entity_id)) if entity_id else None
         return default if value is None else value
 
