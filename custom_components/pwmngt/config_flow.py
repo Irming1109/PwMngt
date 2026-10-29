@@ -584,34 +584,41 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         # Optional segment steps still left to show, in fixed order.
         self._pending_segments: list[str] = []
 
+    def _collected_options(self) -> dict[str, Any]:
+        """The full options dict: what's been collected so far, and for a
+        field not yet touched this session, the existing options. Used both
+        while the wizard runs and when it finishes -- an options flow's
+        async_create_entry() replaces the options wholesale, so a key left
+        out there is lost (the "invert sign" checkboxes were, until
+        2026-10-29)."""
+        return {
+            CONF_SEGMENTS: self._data.get(
+                CONF_SEGMENTS,
+                list(self.config_entry.options.get(CONF_SEGMENTS, [])),
+            ),
+            CONF_ENTITY_MAP: self._data.get(
+                CONF_ENTITY_MAP,
+                dict(self.config_entry.options.get(CONF_ENTITY_MAP, {})),
+            ),
+            CONF_ELECTRICITY_PRICE_SURCHARGE: self._data.get(
+                CONF_ELECTRICITY_PRICE_SURCHARGE,
+                self.config_entry.options.get(CONF_ELECTRICITY_PRICE_SURCHARGE, 0.0),
+            ),
+            **{
+                option: self._data.get(
+                    option, self.config_entry.options.get(option, False)
+                )
+                for option in POWER_SIGN_OPTIONS.values()
+            },
+        }
+
     def _save_progress(self) -> None:
         """Persist what's been collected so far into the config entry's
         options immediately, not only once the wizard finishes -- so
-        leaving it partway through doesn't lose progress. A field not yet
-        touched this session falls back to the existing options.
+        leaving it partway through doesn't lose progress.
         """
         self.hass.config_entries.async_update_entry(
-            self.config_entry,
-            options={
-                CONF_SEGMENTS: self._data.get(
-                    CONF_SEGMENTS,
-                    list(self.config_entry.options.get(CONF_SEGMENTS, [])),
-                ),
-                CONF_ENTITY_MAP: self._data.get(
-                    CONF_ENTITY_MAP,
-                    dict(self.config_entry.options.get(CONF_ENTITY_MAP, {})),
-                ),
-                CONF_ELECTRICITY_PRICE_SURCHARGE: self._data.get(
-                    CONF_ELECTRICITY_PRICE_SURCHARGE,
-                    self.config_entry.options.get(CONF_ELECTRICITY_PRICE_SURCHARGE, 0.0),
-                ),
-                **{
-                    option: self._data.get(
-                        option, self.config_entry.options.get(option, False)
-                    )
-                    for option in POWER_SIGN_OPTIONS.values()
-                },
-            },
+            self.config_entry, options=self._collected_options()
         )
 
     async def _do_update(
@@ -962,7 +969,11 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                         )
                     )
                 elif key in POWER_SIGN_OPTIONS.values():
-                    group_schema_dict[vol.Optional(key)] = selector.BooleanSelector()
+                    # An explicit default, not only a suggested value: a
+                    # checkbox must show its real state, ticked or not.
+                    group_schema_dict[
+                        vol.Optional(key, default=bool(values.get(key)))
+                    ] = selector.BooleanSelector()
                 else:
                     group_schema_dict[vol.Optional(key)] = _entity_picker(
                         self.hass, _FIELD_UNIT_BY_KEY[key]
@@ -1371,16 +1382,9 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         """Write out the collected options and trigger a reload."""
         async_call_later(self.hass, 2, self._do_update)
         title = self.config_entry.data.get(CONF_NAME, self.config_entry.title)
-        data = {
-            CONF_SEGMENTS: self._data.get(CONF_SEGMENTS, []),
-            CONF_ENTITY_MAP: self._data.get(CONF_ENTITY_MAP, {}),
-            CONF_ELECTRICITY_PRICE_SURCHARGE: self._data.get(
-                CONF_ELECTRICITY_PRICE_SURCHARGE, 0.0
-            ),
-        }
         return self.async_create_entry(
             title=title,
-            data=data,
+            data=self._collected_options(),
             description=f"Power Management - {title}",
         )
 
