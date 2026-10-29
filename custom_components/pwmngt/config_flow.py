@@ -467,6 +467,28 @@ def _installed_charger_type_options(hass, options: list[str], current_value: str
     ]
 
 
+def _power_sign_after_submit(
+    shown_entity_id: str | None,
+    shown_inverted: bool,
+    submitted_entity_id: str | None,
+    submitted_inverted: bool,
+    platform_inverted: bool,
+) -> bool:
+    """The "invert sign" checkbox to save for one power field.
+
+    The checkbox is only set from the source's integration when the page
+    renders (a config flow can't react while the user picks), so picking a
+    new entity by hand would otherwise keep the old entity's sign -- e.g.
+    switching from Node-RED's already-flipped battery sensor to growatt_
+    modbus' raw one (Claus, 2026-10-29). So: a new entity with the checkbox
+    left as shown gets its own integration's sign; a checkbox the user
+    changed always wins.
+    """
+    if submitted_entity_id != shown_entity_id and submitted_inverted == shown_inverted:
+        return platform_inverted
+    return submitted_inverted
+
+
 def _installed_inverter_type_options(hass, options: list[str], current_value: str) -> list[str]:
     """Same idea as _installed_charger_type_options() just above, for the
     PV Inverter page's own "type" field -- narrows its static option list
@@ -856,7 +878,21 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             for group_key, _collapsed, _field_keys in _SOLAR_PV_PLANT_GROUPS:
                 flat_input.update(user_input.get(group_key) or {})
 
+            # An unticked checkbox may be left out of the input entirely.
+            submitted_signs = {
+                option: _power_sign_after_submit(
+                    shown_entity_id=values.get(key),
+                    shown_inverted=bool(values.get(option)),
+                    submitted_entity_id=flat_input.get(key),
+                    submitted_inverted=bool(flat_input.get(option)),
+                    platform_inverted=entity_platform(self.hass, flat_input.get(key))
+                    in SIGN_INVERTED_PLATFORMS[key],
+                )
+                for key, option in POWER_SIGN_OPTIONS.items()
+            }
+
             values.update(flat_input)
+            values.update(submitted_signs)
             errors = {
                 key: "required"
                 for key, _unit, required in _SOLAR_PV_PLANT_FIELDS
@@ -882,9 +918,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                 self._data[CONF_ELECTRICITY_PRICE_SURCHARGE] = (
                     flat_input.get(CONF_ELECTRICITY_PRICE_SURCHARGE) or 0.0
                 )
-                # An unticked checkbox may be left out of the input entirely.
-                for option in POWER_SIGN_OPTIONS.values():
-                    self._data[option] = bool(flat_input.get(option))
+                self._data.update(submitted_signs)
                 self._save_progress()
                 return await self._advance()
 
