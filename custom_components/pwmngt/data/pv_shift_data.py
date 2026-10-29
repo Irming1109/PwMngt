@@ -23,17 +23,18 @@ never did. DIFF: this means the 30-minute night-reset timeout can
 actually fire from a flat 0 W reading, not just a lingering 1-99 W one --
 a strict improvement, not a behavior PwMngt depends on elsewhere.
 
-DIFF: the shift history (PvShiftState) isn't persisted across a Home
-Assistant restart, unlike data/balance_data.py's rolling samples --
-pv_big_shifts_last_60min just starts back at 0 and rebuilds over the
-next hour. It's a diagnostic count, not an input to any charge decision,
-so that's an acceptable loss.
+The whole detection state (PvShiftState) survives a Home Assistant
+restart or a reload of PwMngt (as_dict()/from_dict(), stored by
+data/solar_data.py's solar_data sensor) -- like Node-RED, where Claus's
+context is stored in files (Claus, 2026-10-29). Shifts older than 60
+minutes drop out on the next sample, as always.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import Any
 
 _BIG_SHIFT_THRESHOLD_W = 1800.0
 _NIGHT_PRODUCTION_THRESHOLD_W = 100.0
@@ -63,6 +64,63 @@ class PvShiftState:
     fall_count: int = 0
     current_shift: _ShiftRecord | None = None
     low_production_start_time: datetime | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        """JSON-safe form for RestoreEntity (datetimes as ISO strings)."""
+        return {
+            "last_production": self.last_production,
+            "shift_records": [_record_as_dict(record) for record in self.shift_records],
+            "in_low_production": self.in_low_production,
+            "fall_start_production": self.fall_start_production,
+            "fall_count": self.fall_count,
+            "current_shift": (
+                _record_as_dict(self.current_shift) if self.current_shift is not None else None
+            ),
+            "low_production_start_time": _time_as_str(self.low_production_start_time),
+        }
+
+    @classmethod
+    def from_dict(cls, restored: dict[str, Any]) -> "PvShiftState":
+        """Inverse of as_dict(). Field by field, so an unexpected or
+        missing key falls back to the default instead of failing."""
+        current_shift = restored.get("current_shift")
+        return cls(
+            last_production=restored.get("last_production"),
+            shift_records=[
+                _record_from_dict(record) for record in restored.get("shift_records") or []
+            ],
+            in_low_production=bool(restored.get("in_low_production", False)),
+            fall_start_production=restored.get("fall_start_production"),
+            fall_count=int(restored.get("fall_count") or 0),
+            current_shift=_record_from_dict(current_shift) if current_shift else None,
+            low_production_start_time=_time_from_str(restored.get("low_production_start_time")),
+        )
+
+
+def _time_as_str(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
+
+
+def _time_from_str(value: str | None) -> datetime | None:
+    return datetime.fromisoformat(value) if value else None
+
+
+def _record_as_dict(record: _ShiftRecord) -> dict[str, Any]:
+    return {
+        "timestamp": _time_as_str(record.timestamp),
+        "before_fall": record.before_fall,
+        "after_fall": record.after_fall,
+        "after_rise": record.after_rise,
+    }
+
+
+def _record_from_dict(raw: dict[str, Any]) -> _ShiftRecord:
+    return _ShiftRecord(
+        timestamp=_time_from_str(raw["timestamp"]),
+        before_fall=raw["before_fall"],
+        after_fall=raw["after_fall"],
+        after_rise=raw.get("after_rise"),
+    )
 
 
 def step_pv_shift_detection(

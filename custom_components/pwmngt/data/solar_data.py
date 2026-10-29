@@ -95,6 +95,7 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import event
+from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
 from homeassistant.helpers.update_coordinator import (
     CoordinatorEntity,
     DataUpdateCoordinator,
@@ -483,6 +484,16 @@ class PwMngtSolarDataCoordinator(DataUpdateCoordinator[dict[str, float | None]])
             {**(self.data or {}), KEY_PV_BIG_SHIFTS_LAST_60MIN: big_shifts}
         )
 
+    @property
+    def pv_shift_state(self) -> PvShiftState:
+        return self._pv_shift_state
+
+    @callback
+    def restore_pv_shift_state(self, state: PvShiftState) -> None:
+        """Pick up the shift detection where it left off before a restart
+        (see data/pv_shift_data.py). Called by the solar_data sensor."""
+        self._pv_shift_state = state
+
     def _read_night_consumption(self) -> float | None:
         entity_id = pv_properties.consumption_data_entity_id(self.hass, self._entry)
         state = self.hass.states.get(entity_id) if entity_id else None
@@ -518,9 +529,38 @@ class _PwMngtSolarEntity(CoordinatorEntity[PwMngtSolarDataCoordinator], SensorEn
         return True
 
 
-class PwMngtSolarDataSensor(_PwMngtSolarEntity):
+@dataclass
+class PwMngtPvShiftStoredData(ExtraStoredData):
+    """The PV shift detection state across restarts -- see
+    data/pv_shift_data.py."""
+
+    state: PvShiftState
+
+    def as_dict(self) -> dict[str, Any]:
+        return self.state.as_dict()
+
+
+class PwMngtSolarDataSensor(RestoreEntity, _PwMngtSolarEntity):
     """The PV device's solar_data sensor: PwM_SOLAR_DATA_ATTRIBUTES as
-    attributes (None until the first run), DATA_SENSOR_STATE as state."""
+    attributes (None until the first run), DATA_SENSOR_STATE as state.
+    Also stores the coordinator's PV shift detection state, so
+    pv_big_shifts_last_60min survives a restart."""
+
+    @property
+    def extra_restore_state_data(self) -> PwMngtPvShiftStoredData:
+        return PwMngtPvShiftStoredData(self.coordinator.pv_shift_state)
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        restored = await self.async_get_last_extra_data()
+        if restored is None:
+            return
+        try:
+            state = PvShiftState.from_dict(restored.as_dict())
+        except (KeyError, TypeError, ValueError):
+            LOGGER.warning("PwMngt: could not restore the PV shift history -- starting over")
+            return
+        self.coordinator.restore_pv_shift_state(state)
 
     @property
     def native_value(self) -> str:
