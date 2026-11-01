@@ -63,6 +63,13 @@ same "Lader vi ?" gate described above before writing "internal" to
 battery_command -- so it only writes "internal" (actually stopping the
 charge) when a charge_now_* command is active; otherwise nothing more
 happens.
+
+Deliberate difference from Node-RED (issue #15, Claus 2026-11-01): while
+a charge_now_* command is active, the battery's own charge power (the
+Battery power field) is taken out of the measured fuse loads before the
+new level is added. Node-RED counted a running charge twice, so with a
+15 kW Growatt "Charge 75" flipped to "Charge 50" and back at ~30 A on a
+50 A fuse -- every flip a new inverter command.
 """
 
 from __future__ import annotations
@@ -79,7 +86,7 @@ from homeassistant.helpers import event
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 
-from ..const import CONF_ENTITY_MAP, ENTITY_KEY_BATTERY_SOC
+from ..const import CONF_ENTITY_MAP, ENTITY_KEY_BATTERY_POWER, ENTITY_KEY_BATTERY_SOC
 from ..const import (
     ENTITY_KEY_MAIN_FUSE_LOAD_L1,
     ENTITY_KEY_MAIN_FUSE_LOAD_L2,
@@ -150,6 +157,16 @@ class BatteryChargeLevelInputs:
     # battery_charge_status's own hour_<current hour> attribute (Node-
     # RED: battery_charge[`hour${current_hour}`] === true).
     hour_is_cheap: bool
+    # W the battery is charging with right now while a charge_now_*
+    # command is active, else 0. DIFF (issue #15): already part of the
+    # measured fuse loads, so it is taken out before adding the new level.
+    battery_charge_power: float = 0.0
+
+
+def _amps_per_phase(power_w: float) -> float:
+    """Amps per phase for a power spread evenly over three phases at 230 V
+    (Node-RED's "(effekt / 3) / 230")."""
+    return (power_w / 3) / 230
 
 
 def _amps_allowed(load: float, amps_needed_75: float, tariff_fuse_size: float) -> float:
@@ -182,7 +199,7 @@ def calculate_battery_charge_level(inputs: BatteryChargeLevelInputs) -> str | No
         if inputs.battery_max_charge_raw is not None
         else _BATTERY_MAX_CHARGE_FALLBACK
     )
-    amps_needed_full = (battery_max_charge_full / 3) / 230
+    amps_needed_full = _amps_per_phase(battery_max_charge_full)
 
     amps_needed_75 = amps_needed_full * 0.75
     amps_needed_50 = amps_needed_full * 0.50
@@ -191,10 +208,15 @@ def calculate_battery_charge_level(inputs: BatteryChargeLevelInputs) -> str | No
     if inputs.charge_wish != _STATUS_YES_TODAY:
         return None
 
+    # DIFF (issue #15): the measured loads already include the battery's
+    # own charge current. Node-RED added the new level on top of it, so a
+    # running "Charge 75" counted itself twice and flipped to "Charge 50"
+    # and back on every fuse check (unnoticed with a 6 kW Kostal, ~6.5 A
+    # per phase at 75 %; a 15 kW Growatt draws ~16 A).
+    own_amps = _amps_per_phase(max(inputs.battery_charge_power, 0.0))
     amps_allowed = min(
-        _amps_allowed(inputs.fuse_load_l1, amps_needed_75, tariff_fuse_size),
-        _amps_allowed(inputs.fuse_load_l2, amps_needed_75, tariff_fuse_size),
-        _amps_allowed(inputs.fuse_load_l3, amps_needed_75, tariff_fuse_size),
+        _amps_allowed(max(load - own_amps, 0.0), amps_needed_75, tariff_fuse_size)
+        for load in (inputs.fuse_load_l1, inputs.fuse_load_l2, inputs.fuse_load_l3)
     )
 
     battery_soc = (
@@ -259,6 +281,7 @@ class PwMngtBatteryChargeLevelController:
         self._entry = entry
         entity_map = entry.options.get(CONF_ENTITY_MAP, {})
         self._soc_entity_id = entity_map.get(ENTITY_KEY_BATTERY_SOC) or None
+        self._battery_power_entity_id = entity_map.get(ENTITY_KEY_BATTERY_POWER) or None
         # Fixed L1/L2/L3 order -- each may be None ("Not available" in
         # the wizard), read as 0 (see const.py's ENTITY_KEY_MAIN_FUSE_
         # LOAD_L1/L2/L3 docstring).
@@ -414,6 +437,7 @@ class PwMngtBatteryChargeLevelController:
             battery_soc=self._read_soc(),
             battery_target=battery_target,
             hour_is_cheap=self._read_hour_is_cheap(),
+            battery_charge_power=self._read_grid_charge_power(),
         )
         result = calculate_battery_charge_level(inputs)
         if result is None:
@@ -479,6 +503,24 @@ class PwMngtBatteryChargeLevelController:
         entity_id = self._fuse_entity_ids_by_phase[phase_index]
         value = read_float_state(self.hass.states.get(entity_id)) if entity_id else None
         return value if value is not None else 0.0
+
+    def _read_grid_charge_power(self) -> float:
+        """W the battery is charging with while a charge_now_* command is
+        active -- that power comes from the grid and is already in the
+        measured fuse loads. 0 otherwise (a PV charge doesn't load the main
+        fuse) and while Battery power is missing."""
+        if not currently_charging(self._read_battery_command()):
+            return 0.0
+        power = (
+            read_float_state(self.hass.states.get(self._battery_power_entity_id))
+            if self._battery_power_entity_id
+            else None
+        )
+        if power is None:
+            return 0.0
+        # Normalized: positive = discharging, so charging is negative.
+        power *= pv_properties.power_sign(self._entry, ENTITY_KEY_BATTERY_POWER)
+        return max(-power, 0.0)
 
     def _read_battery_max_charge(self) -> float | None:
         entity_id = pv_properties.battery_max_charge_effect_entity_id(self.hass, self._entry)
