@@ -6,7 +6,7 @@
  * and getCardSize(). Background on the pattern:
  * https://developers.home-assistant.io/docs/frontend/custom-ui/custom-card
  *
- * Four card types are defined here:
+ * Five card types are defined here:
  *   - pwm-hub-card:         the "PwM" hub device's charger/PV configuration
  *                           fields.
  *   - pwm-charger-card:     a charger device's configuration fields. Takes
@@ -21,6 +21,11 @@
  *                           "Ladestander konfiguration" split on the
  *                           Konfiguration dashboard, even though both sets
  *                           of entities live on the same hub device).
+ *   - pwm-battery-card:     house battery control -- tonight's charge plan
+ *                           and manual "charge now"/stop/postpone/auto
+ *                           buttons. A port of Claus's Node-RED dashboard
+ *                           card "Hus batteri styring" (issue #16); unlike
+ *                           the config cards it is not field-driven.
  *
  * Each card's field list mirrors the matching Python entity descriptions
  * (select.py / number.py / text.py / sensor.py) as of this writing, in the
@@ -643,6 +648,401 @@ class PwMPvCard extends PwMngtBaseCard {
 }
 customElements.define("pwm-pv-card", PwMPvCard);
 
+/**
+ * Card texts. Entity states are shown through hass.formatEntityState()
+ * (strings.json / translations/*.json), but these sentences are the card's
+ * own -- the frontend only loads an integration's entity translations, so
+ * they live here, picked by the user's HA language (English fallback).
+ */
+const PWM_BATTERY_TEXTS = {
+  en: {
+    title: "House battery control",
+    manual: "Automation and battery hold are off - manual charging only",
+    charging: (pct) => `Battery is charging at ${pct}% power`,
+    autoControls:
+      "The automation controls tonight's charge - a manual choice can be overridden at the next hour or fuse check",
+    status: {
+      yes_today: "Battery charges today in these hours",
+      yes_tomorrow: "Battery charges tomorrow in these hours",
+      no_price: "Battery is not charged tonight, price difference too small",
+      no_surplus: "Battery is not charged tonight, PV surplus tomorrow",
+      no_charge_needed: "Battery is not charged tonight, no charge needed",
+      no_deferred: "Charging postponed one day",
+      not_calculated: "Waiting for electricity prices (after 14)",
+    },
+    manualTitle: "Manual battery control",
+    chargeNow: (pct) => `Charge now ${pct}%`,
+    stop: "Stop charging",
+    postpone: "Postpone charging 1 day",
+    cancelPostpone: "Cancel postponement",
+    disableAuto: "Disable automatic charging",
+    enableAuto: "Enable automatic charging",
+    confirmDisable:
+      "This also turns off the battery hold (min. SoC), so the battery can discharge freely. Continue?",
+    soc: "Battery SoC",
+    missing: "PwMngt battery entities not found - is the Solar PV Plant set up?",
+  },
+  da: {
+    title: "Hus batteri styring",
+    manual: "Automatik og batterilås slået fra - kun manuel ladning",
+    charging: (pct) => `Batteri lader nu med ${pct} % effekt`,
+    autoControls:
+      "Automatikken styrer nattens ladning - et manuelt valg kan blive overskrevet ved næste timeskift eller sikringstjek",
+    status: {
+      yes_today: "Batteri lades i dag i disse timer",
+      yes_tomorrow: "Batteri lades i morgen i disse timer",
+      no_price: "Batteri lades ikke i nat, prisforskel for lav",
+      no_surplus: "Batteri lades ikke i nat, PV-overskud i morgen",
+      no_charge_needed: "Batteri lades ikke i nat, intet ladebehov",
+      no_deferred: "Ladning udskudt 1 dag",
+      not_calculated: "Afventer elpriser (efter 14)",
+    },
+    manualTitle: "Manuel betjening af batteri",
+    chargeNow: (pct) => `Lad nu ${pct} %`,
+    stop: "Afbryd ladning",
+    postpone: "Udskyd ladning 1 dag",
+    cancelPostpone: "Annuller udskydning",
+    disableAuto: "Deaktiver automatisk ladning",
+    enableAuto: "Aktiver automatisk ladning",
+    confirmDisable:
+      "Det slår også batterilåsen (min. SoC) fra, så batteriet kan aflade frit. Fortsæt?",
+    soc: "Batteri SoC",
+    missing: "PwMngt's batteri-entities blev ikke fundet - er Solar PV Plant sat op?",
+  },
+};
+
+// Banner colour per battery_charge_status (data/battery_charge_decision.py).
+const PWM_BATTERY_STATUS_TONE = {
+  yes_today: "ok",
+  yes_tomorrow: "ok",
+  no_price: "bad",
+  no_surplus: "bad",
+  no_charge_needed: "info",
+  no_deferred: "warn",
+  not_calculated: "bad",
+};
+
+const PWM_CHARGE_LEVELS = [25, 50, 75, 100];
+
+const PWM_BATTERY_CARD_STYLE = `
+  ha-card {
+    padding: 16px;
+  }
+  .pwm-banner {
+    padding: 12px;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    color: var(--text-primary-color, #fff);
+    font-weight: 500;
+    text-align: center;
+  }
+  .pwm-banner.ok { background: var(--success-color, #43a047); }
+  .pwm-banner.bad { background: var(--error-color, #db4437); }
+  .pwm-banner.warn { background: var(--warning-color, #ffa600); }
+  .pwm-banner.info { background: var(--info-color, #039be5); }
+  .pwm-note {
+    font-size: 12px;
+    color: var(--secondary-text-color);
+    margin: -2px 0 8px;
+    text-align: center;
+  }
+  .pwm-hours {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 6px;
+    margin-bottom: 12px;
+  }
+  .pwm-hour {
+    padding: 10px 0;
+    border-radius: 8px;
+    text-align: center;
+    font-size: 13px;
+    background: var(--success-color, #43a047);
+    color: var(--text-primary-color, #fff);
+  }
+  .pwm-section-title {
+    font-size: 16px;
+    font-weight: 500;
+    margin: 12px 0 8px;
+    color: var(--primary-text-color);
+  }
+  .pwm-buttons {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 8px;
+  }
+  .pwm-buttons button {
+    font: inherit;
+    font-size: 14px;
+    padding: 12px 8px;
+    border-radius: 8px;
+    border: 1px solid var(--divider-color);
+    background: var(--secondary-background-color);
+    color: var(--primary-text-color);
+    cursor: pointer;
+  }
+  .pwm-buttons button:hover {
+    border-color: var(--primary-color);
+  }
+  .pwm-soc {
+    margin-top: 12px;
+  }
+  .pwm-soc-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 14px;
+    margin-bottom: 4px;
+    color: var(--primary-text-color);
+  }
+  .pwm-soc-bar {
+    height: 10px;
+    border-radius: 5px;
+    background: var(--divider-color);
+    overflow: hidden;
+  }
+  .pwm-soc-fill {
+    height: 100%;
+    background: var(--success-color, #43a047);
+  }
+  .pwm-warning {
+    color: var(--error-color);
+    font-size: 13px;
+  }
+`;
+
+/**
+ * House battery control -- a port of Claus's Node-RED dashboard card "Hus
+ * batteri styring" / "Manuel betjening af batteri" (issue #16):
+ *
+ * | Node-RED                                  | PwMngt (device "pv")            |
+ * |-------------------------------------------|---------------------------------|
+ * | select.pv_batteri_styring                 | select battery_command          |
+ * | select.pv_battery_mode (Auto/Manuel)      | select battery_mode             |
+ * | sensor.pv_battery_charge (+ hour0..23)    | sensor battery_charge_status (+ hour_0..23) |
+ * | button.pv_battery_udskyd                  | button postpone_battery_charge  |
+ * | sensor.batteri_soc                        | sensor battery_soc              |
+ *
+ * Differences from the Node-RED card, agreed with Claus 2026-11-01:
+ * - "Stop charging" is only offered while a charge_now_* command is
+ *   active. Under hold_min_soc/block_charging the hold or the sell decision
+ *   would just set its own command again.
+ * - battery_mode "manual" also pauses the battery hold in PwMngt (Node-RED
+ *   never read pv_battery_mode), so the banner says so and disabling asks
+ *   for confirmation.
+ * - While tonight's charge is planned ("yes_today") the card says that the
+ *   automation can override a manual choice -- data/battery_charge_level.py
+ *   re-decides every hour and on the fuse check, same as Node-RED.
+ * - Shows the two statuses the Node-RED card had no banner for
+ *   (no_charge_needed, no_deferred).
+ */
+class PwMBatteryCard extends HTMLElement {
+  setConfig(config) {
+    this._config = config || {};
+    this._signature = undefined;
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this.shadowRoot) {
+      this.attachShadow({ mode: "open" });
+    }
+    this._resolveEntityIds();
+    const signature = this._stateSignature();
+    if (signature === this._signature) return;
+    this._signature = signature;
+    this._render();
+  }
+
+  getCardSize() {
+    return 8;
+  }
+
+  _texts() {
+    const language = (this._hass.locale && this._hass.locale.language) || this._hass.language || "en";
+    return PWM_BATTERY_TEXTS[String(language).split("-")[0]] || PWM_BATTERY_TEXTS.en;
+  }
+
+  /** Same registry-change caching as PwMngtBaseCard._resolveEntityIds(). */
+  _resolveEntityIds() {
+    if (
+      this._resolvedEntities === this._hass.entities &&
+      this._resolvedDevices === this._hass.devices
+    ) {
+      return;
+    }
+    this._resolvedEntities = this._hass.entities;
+    this._resolvedDevices = this._hass.devices;
+    this._ids = {
+      command: pwmFindEntityId(this._hass, "pv", "select", "battery_command"),
+      mode: pwmFindEntityId(this._hass, "pv", "select", "battery_mode"),
+      status: pwmFindEntityId(this._hass, "pv", "sensor", "battery_charge_status"),
+      postpone: pwmFindEntityId(this._hass, "pv", "button", "postpone_battery_charge"),
+      soc: pwmFindEntityId(this._hass, "pv", "sensor", "battery_soc"),
+    };
+    this._signature = undefined;
+  }
+
+  _state(name) {
+    const entityId = this._ids[name];
+    return entityId ? this._hass.states[entityId] : undefined;
+  }
+
+  /** Only re-render when something the card shows has changed. */
+  _stateSignature() {
+    const parts = ["command", "mode", "status", "soc"].map((name) => {
+      const state = this._state(name);
+      return state ? `${state.state}|${JSON.stringify(state.attributes)}` : "-";
+    });
+    parts.push(this._texts().title);
+    return parts.join("#");
+  }
+
+  _render() {
+    const t = this._texts();
+    const command = this._state("command");
+    const mode = this._state("mode");
+    const status = this._state("status");
+
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+    const style = document.createElement("style");
+    style.textContent = PWM_BATTERY_CARD_STYLE;
+    const card = document.createElement("ha-card");
+    card.header = this._config.title || t.title;
+    const content = document.createElement("div");
+    content.className = "card-content";
+    card.appendChild(content);
+    root.append(style, card);
+
+    if (!command || !mode || !status) {
+      const warning = document.createElement("div");
+      warning.className = "pwm-warning";
+      warning.textContent = t.missing;
+      content.appendChild(warning);
+      return;
+    }
+
+    const isAuto = mode.state === "auto";
+    const chargeMatch = /^charge_now_(\d+)$/.exec(command.state);
+    const chargingPct = chargeMatch ? Number(chargeMatch[1]) : null;
+    const planned = status.state === "yes_today" || status.state === "yes_tomorrow";
+
+    // Banners -- same order and conditions as the Node-RED card.
+    if (!isAuto) {
+      content.appendChild(this._banner("bad", t.manual));
+    } else if (chargingPct === null || !planned) {
+      const text = t.status[status.state];
+      if (text) {
+        content.appendChild(this._banner(PWM_BATTERY_STATUS_TONE[status.state], text));
+      }
+    }
+    if (chargingPct !== null) {
+      content.appendChild(this._banner("ok", t.charging(chargingPct)));
+      if (isAuto && status.state === "yes_today") {
+        const note = document.createElement("div");
+        note.className = "pwm-note";
+        note.textContent = t.autoControls;
+        content.appendChild(note);
+      }
+    }
+
+    // Tonight's cheap hours (battery_charge_status' hour_N attributes).
+    if (isAuto && planned) {
+      const hours = document.createElement("div");
+      hours.className = "pwm-hours";
+      for (let hour = 0; hour < 24; hour++) {
+        if (status.attributes[`hour_${hour}`] !== true) continue;
+        const tile = document.createElement("div");
+        tile.className = "pwm-hour";
+        tile.textContent = `${hour}-${hour + 1}`;
+        hours.appendChild(tile);
+      }
+      if (hours.childElementCount) content.appendChild(hours);
+    }
+
+    // Manual control.
+    const title = document.createElement("div");
+    title.className = "pwm-section-title";
+    title.textContent = t.manualTitle;
+    content.appendChild(title);
+
+    const buttons = document.createElement("div");
+    buttons.className = "pwm-buttons";
+    for (const pct of PWM_CHARGE_LEVELS) {
+      if (pct === chargingPct) continue;
+      buttons.appendChild(this._button(t.chargeNow(pct), () => this._setCommand(`charge_now_${pct}`)));
+    }
+    if (chargingPct !== null) {
+      buttons.appendChild(this._button(t.stop, () => this._setCommand("internal")));
+    }
+    if (this._ids.postpone) {
+      const deferred = status.state === "no_deferred";
+      buttons.appendChild(
+        this._button(deferred ? t.cancelPostpone : t.postpone, () =>
+          this._hass.callService("button", "press", { entity_id: this._ids.postpone })
+        )
+      );
+    }
+    if (isAuto) {
+      buttons.appendChild(
+        this._button(t.disableAuto, () => {
+          if (window.confirm(t.confirmDisable)) this._setMode("manual");
+        })
+      );
+    } else {
+      buttons.appendChild(this._button(t.enableAuto, () => this._setMode("auto")));
+    }
+    content.appendChild(buttons);
+
+    // SoC while charging (Node-RED: the gauge under "Lad nu").
+    const soc = this._state("soc");
+    const socValue = soc ? parseFloat(soc.state) : NaN;
+    if (chargingPct !== null && Number.isFinite(socValue)) {
+      const wrap = document.createElement("div");
+      wrap.className = "pwm-soc";
+      const label = document.createElement("div");
+      label.className = "pwm-soc-label";
+      const name = document.createElement("span");
+      name.textContent = t.soc;
+      const value = document.createElement("span");
+      value.textContent = `${Math.round(socValue)} %`;
+      label.append(name, value);
+      const bar = document.createElement("div");
+      bar.className = "pwm-soc-bar";
+      const fill = document.createElement("div");
+      fill.className = "pwm-soc-fill";
+      fill.style.width = `${Math.min(Math.max(socValue, 0), 100)}%`;
+      bar.appendChild(fill);
+      wrap.append(label, bar);
+      content.appendChild(wrap);
+    }
+  }
+
+  _banner(tone, text) {
+    const banner = document.createElement("div");
+    banner.className = `pwm-banner ${tone || "info"}`;
+    banner.textContent = text;
+    return banner;
+  }
+
+  _button(text, onClick) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = text;
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
+  _setCommand(option) {
+    this._hass.callService("select", "select_option", { entity_id: this._ids.command, option });
+  }
+
+  _setMode(option) {
+    this._hass.callService("select", "select_option", { entity_id: this._ids.mode, option });
+  }
+}
+customElements.define("pwm-battery-card", PwMBatteryCard);
+
 // Register with Home Assistant's card picker so all three card types show
 // up there with a name/description, instead of only being addable by
 // typing their `type:` manually in YAML.
@@ -667,5 +1067,10 @@ window.customCards.push(
     type: "pwm-electricity-card",
     name: "PwM Electricity",
     description: "PwM hub electricity billing/tariff configuration fields.",
+  },
+  {
+    type: "pwm-battery-card",
+    name: "PwM Battery",
+    description: "House battery control: tonight's charge plan and manual charge/stop/postpone.",
   }
 );

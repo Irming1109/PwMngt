@@ -110,6 +110,7 @@ from ..const import (
 from ..devices import pv_device_info
 from ..helpers.state_helper import read_float_state
 from ..properties import hub_properties, pv_properties
+from ..select import signal_set_battery_command
 
 LOGGER = logging.getLogger(__name__)
 
@@ -166,6 +167,13 @@ _BILLING_METHOD_FIXED_PRICE = "Fixed price"
 # the module docstring's note on the initial_state check fix.
 _STATUS_DEFERRED = "no_deferred"
 _STATUS_NOT_CALCULATED = "not_calculated"
+
+# battery_command (select.py) options meaning tonight's grid charge is
+# running -- stopped when the charge is postponed (see _handle_postpone).
+_ACTIVE_CHARGE_COMMANDS = frozenset(
+    {"charge_now_25", "charge_now_50", "charge_now_75", "charge_now_100"}
+)
+_COMMAND_INTERNAL = "internal"  # Old: "Intern".
 
 # Best-effort guess, NOT verified against a live Strømligning install
 # (same caveat as the Growatt entries in const.py's
@@ -492,15 +500,33 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         """The postpone_battery_charge button was pressed -- a toggle,
         same as Node-RED's own "Udskudt ?" node (see module docstring):
         already deferred -> back to "not_calculated"; anything else ->
-        "no_deferred"."""
+        "no_deferred".
+
+        DIFF (issue #18): postponing also stops a running charge_now_*
+        command. Node-RED left it running -- data/battery_charge_level.py
+        only re-decides (and stops) while the status is "yes_today", so
+        nothing would ever stop it."""
         if self._attr_native_value == _STATUS_DEFERRED:
             self._attr_native_value = _STATUS_NOT_CALCULATED
         else:
             self._attr_native_value = _STATUS_DEFERRED
+            self._stop_running_charge()
         self._attr_extra_state_attributes = {
             key: None for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
         }
         self.async_write_ha_state()
+
+    def _stop_running_charge(self) -> None:
+        """Set battery_command to "internal" if a charge_now_* command is
+        running -- same "Lader vi ?" gate as data/battery_charge_level.py,
+        so the sell decision's or the hold's own command is left alone."""
+        entity_id = pv_properties.battery_command_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state not in _ACTIVE_CHARGE_COMMANDS:
+            return
+        async_dispatcher_send(
+            self.hass, signal_set_battery_command(self._entry.entry_id), _COMMAND_INTERNAL
+        )
 
     @callback
     def _handle_midnight(self, _now=None) -> None:
