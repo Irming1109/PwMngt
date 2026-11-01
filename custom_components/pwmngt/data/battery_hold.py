@@ -51,7 +51,10 @@ Deliberate differences from Node-RED (agreed with Claus, issue #12):
   "block_*", "discharge_now_*" all outrank the hold), and the hold only
   ever writes battery_command while it is "internal" or "hold_min_soc".
 - Paused while battery_mode is "manual", like the other battery_command
-  writers (battery_charge_level.py, battery_sell_decision.py).
+  writers (battery_charge_level.py, battery_sell_decision.py). Unlike
+  them it releases its own "hold_min_soc" once when manual starts
+  (Claus, 2026-11-01): left alone, the paused hold published 0 W, so the
+  translator held the battery hard until auto was back.
 - Power in W rather than Growatt-%: W per % depends on the inverter
   model, so the conversion lives in the translator. The deadbands are
   Node-RED's 2 / 1 Growatt-% at its 150 W per %.
@@ -277,12 +280,18 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
     elif inputs.battery_command not in (_COMMAND_INTERNAL, COMMAND_HOLD):
         paused_status = STATUS_PAUSED_OTHER_COMMAND
     if paused_status is not None:
-        st.holding = inputs.battery_command == COMMAND_HOLD
         st.power_w = 0.0
         st.last_switch = 0.0  # May hold at once when the other command ends.
         st.discharge_start = 0.0
         st.waiting = False
         st.held_off_below = False
+        if inputs.battery_mode_manual and inputs.battery_command == COMMAND_HOLD:
+            # Manual means the inverter's own control plus the user's
+            # buttons -- release our own hold rather than freeze it at
+            # 0 W, which would block discharging until auto is back.
+            st.holding = False
+            return BatteryHoldResult(st, _COMMAND_INTERNAL, paused_status, False, None)
+        st.holding = inputs.battery_command == COMMAND_HOLD
         return BatteryHoldResult(
             st, None, paused_status, inputs.battery_command == COMMAND_HOLD, None
         )
