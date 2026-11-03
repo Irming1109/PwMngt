@@ -1,4 +1,272 @@
 {
+  "config": {
+    "step": {
+      "user": {
+        "title": "Power Management",
+        "description": "Opsæt PwMngt.",
+        "data": {
+          "name": "Navn"
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Power Management",
+        "description": "Vælg nedenfor, hvilke valgfrie segmenter der skal slås til. Solar PV Plant er altid med.",
+        "data": {
+          "ev_charging": "EV-ladning",
+          "pool": "Pool",
+          "pv_surplus": "PV-overskud"
+        },
+        "data_description": {
+          "ev_charging": "Styr planlægning og belastning af elbilladere, fx ladning på solcelleoverskud eller billige spotpriser.",
+          "pool": "Styr planlægning af poolpumpe/-varmer, fx at køre pumpen i timer med solcelleoverskud.",
+          "pv_surplus": "Styr hvad der sker med solcelleproduktion, der er tilovers, når batteriet og andre forbrugere er dækket."
+        }
+      },
+      "pv_inverter": {
+        "title": "Solar PV Plant",
+        "description": "Hvilken inverter har du? Når du vælger den, kan PwMngt selv udfylde flere af felterne på næste side.",
+        "data": {
+          "inverter_type": "Inverter"
+        }
+      },
+      "solar_pv_plant": {
+        "title": "Solar PV Plant",
+        "description": "Vælg den entity i din egen Home Assistant, som PwMngt skal spejle for hver værdi nedenfor.{auto_filled_note}{derived_fields_note}",
+        "derived_fields_note": "⚙️ **Growatt Modbus: lad disse felter stå tomme -- PwMngt beregner dem selv:**",
+        "sections": {
+          "battery": {
+            "name": "Batteri",
+            "data": {
+              "battery_soc": "Batteri SoC",
+              "battery_pv_charged": "Batteri ladet fra PV",
+              "battery_pv_discharged": "Batteri afladet",
+              "battery_power": "Batterieffekt",
+              "invert_battery_power": "Vend fortegn på batterieffekt",
+              "battery_grid_charged_day": "Batteri ladet fra nettet (dag)"
+            },
+            "data_description": {
+              "battery_soc": "Den entity, der viser husbatteriets ladetilstand (%), fx inverterens SoC-sensor for batteriet. Kun sensorer med enheden \"%\" vises.",
+              "battery_pv_charged": "Growatt Modbus: lad feltet stå tomt -- PwMngt beregner det selv (Battery Charge Total minus AC Charge Energy Total). Ellers: den entity, der viser den samlede energi ladet ind i batteriet fra solcelleanlægget (kWh), fx fra inverteren. Kun sensorer med enheden \"kWh\" vises.",
+              "battery_pv_discharged": "Den entity, der viser den samlede energi afladet fra batteriet (kWh). Kun sensorer med enheden \"kWh\" vises.",
+              "battery_power": "Den entity, der viser batteriets aktuelle lade-/afladeeffekt (W). Kun sensorer med enheden \"W\" vises.",
+              "invert_battery_power": "Sæt flueben, hvis batterieffekten viser ladning som positiv. PwMngt forventer positiv = afladning. Sættes automatisk for Growatt Modbus.",
+              "battery_grid_charged_day": "Den entity, der viser, hvor meget energi der er ladet ind i batteriet fra nettet i dag (kWh) -- en dagstæller, der nulstilles ved midnat, fx inverterens egen \"ladet fra net i dag\"-sensor. Kun sensorer med enheden \"kWh\" vises. Udfyldes automatisk fra inverteren, hvis mærket understøttes. Bruges til at skelne batteriindhold ladet fra nettet fra indhold ladet fra PV."
+            }
+          },
+          "pv_production": {
+            "name": "PV-produktion",
+            "data": {
+              "pv1_power": "PV1-effekt",
+              "pv2_power": "PV2-effekt (valgfri)",
+              "pv3_power": "PV3-effekt (valgfri)"
+            },
+            "data_description": {
+              "pv1_power": "Den entity, der viser PV-streng 1's aktuelle effekt (W). Kun sensorer med enheden \"W\" vises.",
+              "pv2_power": "Den entity, der viser PV-streng 2's aktuelle effekt (W). Kun sensorer med enheden \"W\" vises. Valgfri -- lad feltet stå tomt, hvis du ikke har en streng 2.",
+              "pv3_power": "Den entity, der viser PV-streng 3's aktuelle effekt (W). Kun sensorer med enheden \"W\" vises. Valgfri -- lad feltet stå tomt, hvis du ikke har en streng 3."
+            }
+          },
+          "grid_consumption": {
+            "name": "Net og forbrug",
+            "data": {
+              "grid_power": "Neteffekt",
+              "invert_grid_power": "Vend fortegn på neteffekt",
+              "pv_direct_consumption": "PV direkte forbrug",
+              "pv_total_consumption": "PV samlet forbrug",
+              "property_consumption_total": "Ejendommens samlede forbrug"
+            },
+            "data_description": {
+              "grid_power": "Den entity, der viser den aktuelle effekt til/fra nettet (W). Kun sensorer med enheden \"W\" vises.",
+              "invert_grid_power": "Sæt flueben, hvis neteffekten viser salg som positiv. PwMngt forventer positiv = køb fra nettet.",
+              "pv_direct_consumption": "Growatt Modbus: lad feltet stå tomt -- PwMngt beregner det selv ud fra husforbrug, PV, netkøb og batteriafladning. Ellers: den entity, der viser den effekt, der lige nu bruges direkte fra PV-produktionen (W) uden om batteriet. Kun sensorer med enheden \"W\" vises.",
+              "pv_total_consumption": "Growatt Modbus: lad feltet stå tomt -- PwMngt summerer selv PV direkte forbrug over tid. Ellers: den entity, der viser det samlede, akkumulerede PV-forbrug (kWh). Kun sensorer med enheden \"kWh\" vises.",
+              "property_consumption_total": "Husets eget akkumulerede forbrug (kWh) -- UDEN batteriets ladning, hverken fra nettet eller PV. Tæller sensoren batteriladningen med, bliver natforbruget og dermed Battery nightly target for højt, og batteriet lades mere for hver nat. Brug inverterens egen tæller for husforbrug -- den udfyldes automatisk for understøttede mærker. Skal være en rå tæller, der kun stiger og aldrig nulstilles, ikke en Daily Utility Meter-hjælper (PwMngt håndterer selv nulstillingen ved midnat). Kun sensorer med enheden \"kWh\" vises."
+            }
+          },
+          "solar_forecast": {
+            "name": "Solprognose",
+            "data": {
+              "pv_forecast_today": "PV-prognose i dag",
+              "pv_forecast_tomorrow": "PV-prognose i morgen"
+            },
+            "data_description": {
+              "pv_forecast_today": "Den entity, der viser dagens forventede PV-produktion for hele anlægget (kWh), fx fra en solprognose-integration. Kun sensorer med enheden \"kWh\" vises. Udfyldes automatisk, hvis Solcast PV Forecast er installeret og entydig -- vælg en anden entity, hvis du ikke vil det.",
+              "pv_forecast_tomorrow": "Den entity, der viser morgendagens forventede PV-produktion for hele anlægget (kWh), fx fra en solprognose-integration. Kun sensorer med enheden \"kWh\" vises. Udfyldes automatisk, hvis Solcast PV Forecast er installeret og entydig -- vælg en anden entity, hvis du ikke vil det."
+            }
+          },
+          "stromligning": {
+            "name": "Strømligning",
+            "data": {
+              "spot_electricity_price": "Elpris (inkl. moms)",
+              "electricity_price_surcharge": "Pristillæg (valgfri)"
+            },
+            "data_description": {
+              "spot_electricity_price": "Den entity, der viser din samlede elpris lige nu inkl. moms og tariffer (kr/kWh) -- ikke den rå spotpris -- fx Strømlignings egen pris-sensor inkl. moms. Kun sensorer med enheden \"kr/kWh\" vises.",
+              "electricity_price_surcharge": "Et fast beløb (kr/kWh inkl. moms), som din elleverandør lægger oven i prisen ovenfor, hvis den valgte pris-entity ikke allerede indeholder det -- fx et fast tillæg pr. kWh. Lægges til prisen overalt, hvor PwMngt regner kroner ud fra den. Lad stå på 0, hvis pris-entity'en allerede viser det, du faktisk betaler."
+            }
+          },
+          "main_fuse": {
+            "name": "Hovedsikring (valgfri)",
+            "data": {
+              "main_fuse_load_l1": "Hovedsikring belastning L1",
+              "main_fuse_load_l2": "Hovedsikring belastning L2",
+              "main_fuse_load_l3": "Hovedsikring belastning L3"
+            },
+            "data_description": {
+              "main_fuse_load_l1": "Den entity, der viser den aktuelle belastning (A) på fase L1 af ejendommens hovedsikring. Kun sensorer med enheden \"A\" vises. Valgfri -- lad feltet stå tomt (\"Ikke tilgængelig\"), hvis du ikke har en fasestrømsmåler; værdien regnes så som 0.",
+              "main_fuse_load_l2": "Den entity, der viser den aktuelle belastning (A) på fase L2 af ejendommens hovedsikring. Kun sensorer med enheden \"A\" vises. Valgfri -- lad feltet stå tomt (\"Ikke tilgængelig\"), hvis du ikke har en fasestrømsmåler; værdien regnes så som 0.",
+              "main_fuse_load_l3": "Den entity, der viser den aktuelle belastning (A) på fase L3 af ejendommens hovedsikring. Kun sensorer med enheden \"A\" vises. Valgfri -- lad feltet stå tomt (\"Ikke tilgængelig\"), hvis du ikke har en fasestrømsmåler; værdien regnes så som 0."
+            }
+          },
+          "sell_override": {
+            "name": "Tving salg (valgfri)",
+            "data": {
+              "sell_force_override": "Tving salg"
+            },
+            "data_description": {
+              "sell_force_override": "En input_boolean, switch eller binary_sensor, som dine egne automationer kan tænde for at tvinge batteriet i salgstilstand med det samme, uanset hvad PwMngt's egen pris-/prognoseberegning ellers ville beslutte. Kun den ene vej -- den kan kun tvinge salg, aldrig forhindre det. Valgfri -- lad feltet stå tomt (\"Ikke tilgængelig\"), hvis du ikke har sådan en automation; så afgøres salg alene af PwMngt's egen beregning."
+            }
+          },
+          "savings_data": {
+            "name": "Besparelser (valgfri)",
+            "data": {
+              "electricity_tax_full_rate": "Elafgift (fuld sats)",
+              "household_consumption_hourly": "Husstandens forbrug (pr. time)",
+              "grid_import_hourly": "Køb fra nettet (pr. time)",
+              "battery_grid_charge_hourly": "Batteri ladet fra nettet (pr. time)",
+              "battery_discharge_hourly": "Batteri afladet til huset (pr. time)"
+            },
+            "data_description": {
+              "electricity_tax_full_rate": "Din egen sensor, der viser den aktuelle fulde elafgift (kr/kWh inkl. moms), fx Strømlignings afgiftssensor. Bruges til at beregne den fiktive \"indkøbspris uden PV\" (hvad du ville betale, hvis hele forbruget skulle købes fra nettet) og besparelsessensorerne nedenfor, sammen med select.<hub>_billing_period og select.<hub>_electricity_tax under fanen Konfiguration, som afgør afgiftsgrænsen og om den nedsatte sats overhovedet gælder. Valgfri -- lad feltet stå tomt (\"Ikke tilgængelig\"), hvis du ikke følger det; så forbliver de sensorer utilgængelige.",
+              "household_consumption_hourly": "Den entity, der viser husstandens samlede forbrug (kWh) som en rå tæller, der kun stiger, ikke en Daily/Hourly Utility Meter-hjælper -- PwMngt udleder selv hver times tal og tåler, at tælleren nulstilles, eller at du senere peger feltet på en ny entity (fx efter udskiftning af inverter). Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
+              "grid_import_hourly": "Den entity, der viser strøm købt fra nettet (kWh) som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
+              "battery_grid_charge_hourly": "Den entity, der viser energi ladet ind i batteriet specifikt fra nettet (kWh) som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
+              "battery_discharge_hourly": "Den entity, der viser energi, batteriet har afladet til huset (kWh), som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en."
+            }
+          },
+          "savings_seed": {
+            "name": "Historiske besparelsesdata fra Node-RED (valgfri)",
+            "data": {
+              "seed_purchase_price_real": "Startværdi: indkøbspris (reel)",
+              "seed_purchase_price_real_without_pv": "Startværdi: indkøbspris uden PV (reel)",
+              "seed_battery_grid_charge_sum": "Startværdi: batteri ladet fra nettet (sum)",
+              "seed_battery_grid_discharge_sum": "Startværdi: batteri afladet fra nettet (sum)"
+            },
+            "data_description": {
+              "seed_purchase_price_real": "Flytter du fra en eksisterende Node-RED-opsætning, der fører den samme løbende sum (kr), så peg på den gamle sensor, så PwMngt's egen sum starter fra dens nuværende værdi i stedet for 0. Tjekkes hver gang wizarden gennemføres, og hæver kun PwMngt's sum op til sensorens værdi -- sænker den aldrig, så wizarden trygt kan køres igen. Lad feltet stå tomt (\"Ikke tilgængelig\") på en ny installation uden historik. \"Besparelse egen produktion\" udledes så automatisk af dette og feltet nedenfor og behøver ikke sin egen startværdi.",
+              "seed_purchase_price_real_without_pv": "Samme idé som ovenfor, for den løbende sum \"indkøbspris uden PV (reel)\".",
+              "seed_battery_grid_charge_sum": "Samme idé som ovenfor, for den løbende sum \"batteri ladet fra nettet\". \"Besparelse batteriladning\" udledes så automatisk af dette og feltet nedenfor og behøver ikke sin egen startværdi.",
+              "seed_battery_grid_discharge_sum": "Samme idé som ovenfor, for den løbende sum \"batteri afladet fra nettet\"."
+            }
+          }
+        },
+        "data": {
+          "battery": "Batteri",
+          "pv_production": "PV-produktion",
+          "grid_consumption": "Net og forbrug",
+          "solar_forecast": "Solprognose",
+          "stromligning": "Strømligning",
+          "sell_force_override": "Tving salg",
+          "battery_soc": "Batteri SoC",
+          "battery_pv_charged": "Batteri ladet fra PV",
+          "battery_pv_discharged": "Batteri afladet",
+          "battery_power": "Batterieffekt",
+          "invert_battery_power": "Vend fortegn på batterieffekt",
+          "pv1_power": "PV1-effekt",
+          "pv2_power": "PV2-effekt (valgfri)",
+          "pv3_power": "PV3-effekt (valgfri)",
+          "pv_direct_consumption": "PV direkte forbrug",
+          "pv_total_consumption": "PV samlet forbrug",
+          "grid_power": "Neteffekt",
+          "invert_grid_power": "Vend fortegn på neteffekt",
+          "pv_forecast_today": "PV-prognose i dag",
+          "pv_forecast_tomorrow": "PV-prognose i morgen",
+          "spot_electricity_price": "Elpris (inkl. moms)",
+          "electricity_price_surcharge": "Pristillæg (valgfri)",
+          "property_consumption_total": "Ejendommens samlede forbrug",
+          "main_fuse_load_l1": "Hovedsikring belastning L1",
+          "main_fuse_load_l2": "Hovedsikring belastning L2",
+          "main_fuse_load_l3": "Hovedsikring belastning L3",
+          "electricity_tax_full_rate": "Elafgift (fuld sats)",
+          "household_consumption_hourly": "Husstandens forbrug (pr. time)",
+          "grid_import_hourly": "Køb fra nettet (pr. time)",
+          "battery_grid_charge_hourly": "Batteri ladet fra nettet (pr. time)",
+          "battery_discharge_hourly": "Batteri afladet til huset (pr. time)",
+          "seed_purchase_price_real": "Startværdi: indkøbspris (reel)",
+          "seed_purchase_price_real_without_pv": "Startværdi: indkøbspris uden PV (reel)",
+          "seed_battery_grid_charge_sum": "Startværdi: batteri ladet fra nettet (sum)",
+          "seed_battery_grid_discharge_sum": "Startværdi: batteri afladet fra nettet (sum)"
+        },
+        "data_description": {
+          "battery_soc": "Den entity, der viser husbatteriets ladetilstand (%), fx inverterens SoC-sensor for batteriet. Kun sensorer med enheden \"%\" vises.",
+          "battery_pv_charged": "Growatt Modbus: lad feltet stå tomt -- PwMngt beregner det selv (Battery Charge Total minus AC Charge Energy Total). Ellers: den entity, der viser den samlede energi ladet ind i batteriet fra solcelleanlægget (kWh), fx fra inverteren. Kun sensorer med enheden \"kWh\" vises.",
+          "battery_pv_discharged": "Den entity, der viser den samlede energi afladet fra batteriet (kWh). Kun sensorer med enheden \"kWh\" vises.",
+          "battery_power": "Den entity, der viser batteriets aktuelle lade-/afladeeffekt (W). Kun sensorer med enheden \"W\" vises.",
+          "invert_battery_power": "Sæt flueben, hvis batterieffekten viser ladning som positiv. PwMngt forventer positiv = afladning. Sættes automatisk for Growatt Modbus.",
+          "pv1_power": "Den entity, der viser PV-streng 1's aktuelle effekt (W). Kun sensorer med enheden \"W\" vises.",
+          "pv2_power": "Den entity, der viser PV-streng 2's aktuelle effekt (W). Kun sensorer med enheden \"W\" vises. Valgfri -- lad feltet stå tomt, hvis du ikke har en streng 2.",
+          "pv3_power": "Den entity, der viser PV-streng 3's aktuelle effekt (W). Kun sensorer med enheden \"W\" vises. Valgfri -- lad feltet stå tomt, hvis du ikke har en streng 3.",
+          "pv_direct_consumption": "Growatt Modbus: lad feltet stå tomt -- PwMngt beregner det selv ud fra husforbrug, PV, netkøb og batteriafladning. Ellers: den entity, der viser den effekt, der lige nu bruges direkte fra PV-produktionen (W) uden om batteriet. Kun sensorer med enheden \"W\" vises.",
+          "pv_total_consumption": "Growatt Modbus: lad feltet stå tomt -- PwMngt summerer selv PV direkte forbrug over tid. Ellers: den entity, der viser det samlede, akkumulerede PV-forbrug (kWh). Kun sensorer med enheden \"kWh\" vises.",
+          "grid_power": "Den entity, der viser den aktuelle effekt til/fra nettet (W). Kun sensorer med enheden \"W\" vises.",
+          "invert_grid_power": "Sæt flueben, hvis neteffekten viser salg som positiv. PwMngt forventer positiv = køb fra nettet.",
+          "pv_forecast_today": "Den entity, der viser dagens forventede PV-produktion for hele anlægget (kWh), fx fra en solprognose-integration. Kun sensorer med enheden \"kWh\" vises. Udfyldes automatisk, hvis Solcast PV Forecast er installeret og entydig -- vælg en anden entity, hvis du ikke vil det.",
+          "pv_forecast_tomorrow": "Den entity, der viser morgendagens forventede PV-produktion for hele anlægget (kWh), fx fra en solprognose-integration. Kun sensorer med enheden \"kWh\" vises. Udfyldes automatisk, hvis Solcast PV Forecast er installeret og entydig -- vælg en anden entity, hvis du ikke vil det.",
+          "spot_electricity_price": "Den entity, der viser din samlede elpris lige nu inkl. moms og tariffer (kr/kWh) -- ikke den rå spotpris -- fx Strømlignings egen pris-sensor inkl. moms. Kun sensorer med enheden \"kr/kWh\" vises.",
+          "electricity_price_surcharge": "Et fast beløb (kr/kWh inkl. moms), som din elleverandør lægger oven i prisen ovenfor, hvis den valgte pris-entity ikke allerede indeholder det -- fx et fast tillæg pr. kWh. Lægges til prisen overalt, hvor PwMngt regner kroner ud fra den. Lad stå på 0, hvis pris-entity'en allerede viser det, du faktisk betaler.",
+          "property_consumption_total": "Husets eget akkumulerede forbrug (kWh) -- UDEN batteriets ladning, hverken fra nettet eller PV. Tæller sensoren batteriladningen med, bliver natforbruget og dermed Battery nightly target for højt, og batteriet lades mere for hver nat. Brug inverterens egen tæller for husforbrug -- den udfyldes automatisk for understøttede mærker. Skal være en rå tæller, der kun stiger og aldrig nulstilles, ikke en Daily Utility Meter-hjælper (PwMngt håndterer selv nulstillingen ved midnat). Kun sensorer med enheden \"kWh\" vises.",
+          "main_fuse_load_l1": "Den entity, der viser den aktuelle belastning (A) på fase L1 af ejendommens hovedsikring. Kun sensorer med enheden \"A\" vises. Valgfri -- lad feltet stå tomt (\"Ikke tilgængelig\"), hvis du ikke har en fasestrømsmåler; værdien regnes så som 0.",
+          "main_fuse_load_l2": "Den entity, der viser den aktuelle belastning (A) på fase L2 af ejendommens hovedsikring. Kun sensorer med enheden \"A\" vises. Valgfri -- lad feltet stå tomt (\"Ikke tilgængelig\"), hvis du ikke har en fasestrømsmåler; værdien regnes så som 0.",
+          "main_fuse_load_l3": "Den entity, der viser den aktuelle belastning (A) på fase L3 af ejendommens hovedsikring. Kun sensorer med enheden \"A\" vises. Valgfri -- lad feltet stå tomt (\"Ikke tilgængelig\"), hvis du ikke har en fasestrømsmåler; værdien regnes så som 0.",
+          "sell_force_override": "En input_boolean, switch eller binary_sensor, som dine egne automationer kan tænde for at tvinge batteriet i salgstilstand med det samme, uanset hvad PwMngt's egen pris-/prognoseberegning ellers ville beslutte. Kun den ene vej -- den kan kun tvinge salg, aldrig forhindre det. Valgfri -- lad feltet stå tomt (\"Ikke tilgængelig\"), hvis du ikke har sådan en automation; så afgøres salg alene af PwMngt's egen beregning.",
+          "electricity_tax_full_rate": "Din egen sensor, der viser den aktuelle fulde elafgift (kr/kWh inkl. moms), fx Strømlignings afgiftssensor. Bruges til at beregne den fiktive \"indkøbspris uden PV\" (hvad du ville betale, hvis hele forbruget skulle købes fra nettet) og besparelsessensorerne nedenfor, sammen med select.<hub>_billing_period og select.<hub>_electricity_tax under fanen Konfiguration, som afgør afgiftsgrænsen og om den nedsatte sats overhovedet gælder. Valgfri -- lad feltet stå tomt (\"Ikke tilgængelig\"), hvis du ikke følger det; så forbliver de sensorer utilgængelige.",
+          "household_consumption_hourly": "Den entity, der viser husstandens samlede forbrug (kWh) som en rå tæller, der kun stiger, ikke en Daily/Hourly Utility Meter-hjælper -- PwMngt udleder selv hver times tal og tåler, at tælleren nulstilles, eller at du senere peger feltet på en ny entity (fx efter udskiftning af inverter). Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
+          "grid_import_hourly": "Den entity, der viser strøm købt fra nettet (kWh) som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
+          "battery_grid_charge_hourly": "Den entity, der viser energi ladet ind i batteriet specifikt fra nettet (kWh) som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
+          "battery_discharge_hourly": "Den entity, der viser energi, batteriet har afladet til huset (kWh), som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
+          "seed_purchase_price_real": "Flytter du fra en eksisterende Node-RED-opsætning, der fører den samme løbende sum (kr), så peg på den gamle sensor, så PwMngt's egen sum starter fra dens nuværende værdi i stedet for 0. Læses kun én gang, ved PwMngt's allerførste besparelsesberegning -- røres aldrig igen bagefter. Lad feltet stå tomt (\"Ikke tilgængelig\") på en ny installation uden historik. \"Besparelse egen produktion\" udledes så automatisk af dette og feltet nedenfor og behøver ikke sin egen startværdi.",
+          "seed_purchase_price_real_without_pv": "Samme idé som ovenfor, for den løbende sum \"indkøbspris uden PV (reel)\".",
+          "seed_battery_grid_charge_sum": "Samme idé som ovenfor, for den løbende sum \"batteri ladet fra nettet\". \"Besparelse batteriladning\" udledes så automatisk af dette og feltet nedenfor og behøver ikke sin egen startværdi.",
+          "seed_battery_grid_discharge_sum": "Samme idé som ovenfor, for den løbende sum \"batteri afladet fra nettet\"."
+        }
+      },
+      "ev_charging": {
+        "title": "EV-ladning",
+        "description": "Vælg hver laders type og, hvis den er installeret, dens fysiske enhed.",
+        "data": {
+          "charger1_type": "Lader 1 type",
+          "charger1_device": "Lader 1 enhed",
+          "charger2_type": "Lader 2 type",
+          "charger2_device": "Lader 2 enhed"
+        }
+      },
+      "ev_charging_consumption": {
+        "title": "EV-ladning",
+        "description": "Vælg hver laders egen sensor for tilført energi (fx Wallbox' \"Added energy\" eller Easee's \"Session Energy\").{auto_filled_note}",
+        "data": {
+          "charger1": "Lader 1 forbrugskilde",
+          "charger2": "Lader 2 forbrugskilde"
+        }
+      },
+      "pool": {
+        "title": "Pool",
+        "description": "Kommer senere -- dette segment har endnu ingen felter at sætte op."
+      },
+      "pv_surplus": {
+        "title": "PV-overskud",
+        "description": "Kommer senere -- dette segment har endnu ingen felter at sætte op."
+      }
+    },
+    "error": {
+      "required": "Feltet skal udfyldes.",
+      "required_in_section": "Et eller flere påkrævede felter ovenfor er stadig tomme.",
+      "duplicate_charger_device": "Denne enhed er allerede valgt til en anden lader."
+    }
+  },
   "entity": {
     "select": {
       "battery_min_soc": {
@@ -71,6 +339,16 @@
           }
         }
       }
+    }
+  },
+  "issues": {
+    "missing_solcast_solar": {
+      "title": "Solcast PV Forecast er ikke installeret",
+      "description": "PwMngt's felter \"PV-prognose i dag\" og \"PV-prognose i morgen\" (Indstillinger -> Solar PV Plant) skal bruge en solprognose-sensor for hele anlægget (kWh), som normalt kommer fra integrationen **Solcast PV Forecast**. Uden den er der intet at vælge i de to påkrævede felter, og Solar PV Plant-wizarden kan ikke gennemføres.\n\nInstallér og opsæt Solcast PV Forecast (via HACS, eller søg direkte efter den under Indstillinger -> Enheder & tjenester -> Tilføj integration), og gå så tilbage til PwMngt's indstillinger for at vælge prognose-sensoren. Advarslen forsvinder af sig selv, når Solcast PV Forecast er installeret."
+    },
+    "missing_stromligning": {
+      "title": "Strømligning er ikke installeret",
+      "description": "PwMngt's felt \"Elpris (inkl. moms)\" (Indstillinger -> Solar PV Plant) skal bruge en pris-sensor (kr/kWh), som normalt kommer fra integrationen **Strømligning**. Uden den er der intet at vælge i det påkrævede felt, og Solar PV Plant-wizarden kan ikke gennemføres.\n\nInstallér og opsæt Strømligning (via HACS, eller søg direkte efter den under Indstillinger -> Enheder & tjenester -> Tilføj integration), og gå så tilbage til PwMngt's indstillinger for at vælge pris-sensoren. Advarslen forsvinder af sig selv, når Strømligning er installeret."
     }
   }
 }

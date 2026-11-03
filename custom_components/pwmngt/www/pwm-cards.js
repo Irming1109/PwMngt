@@ -669,6 +669,7 @@ const PWM_BATTERY_TEXTS = {
       no_charge_needed: "Battery is not charged tonight, no charge needed",
       no_deferred: "Charging postponed one day",
       not_calculated: "Waiting for electricity prices (after 14)",
+      not_calculated_recheck: "Not calculated yet - calculated at the next full hour",
     },
     manualTitle: "Manual battery control",
     chargeNow: (pct) => `Charge now ${pct}%`,
@@ -696,6 +697,7 @@ const PWM_BATTERY_TEXTS = {
       no_charge_needed: "Batteri lades ikke i nat, intet ladebehov",
       no_deferred: "Ladning udskudt 1 dag",
       not_calculated: "Afventer elpriser (efter 14)",
+      not_calculated_recheck: "Ikke beregnet endnu - beregnes ved næste hele time",
     },
     manualTitle: "Manuel betjening af batteri",
     chargeNow: (pct) => `Lad nu ${pct} %`,
@@ -710,6 +712,14 @@ const PWM_BATTERY_TEXTS = {
     missing: "PwMngt's batteri-entities blev ikke fundet - er Solar PV Plant sat op?",
   },
 };
+
+// True 14:00-22:59: "not_calculated" then only waits for the hourly
+// recheck (data/battery_charge_decision.py, on the hour 14:00-23:30), not
+// for tomorrow's prices.
+function pwmBatteryRecheckHours() {
+  const hour = new Date().getHours();
+  return hour >= 14 && hour < 23;
+}
 
 // Banner colour per battery_charge_status (data/battery_charge_decision.py).
 const PWM_BATTERY_STATUS_TONE = {
@@ -893,7 +903,7 @@ class PwMBatteryCard extends HTMLElement {
       const state = this._state(name);
       return state ? `${state.state}|${JSON.stringify(state.attributes)}` : "-";
     });
-    parts.push(this._texts().title);
+    parts.push(this._texts().title, pwmBatteryRecheckHours());
     return parts.join("#");
   }
 
@@ -931,7 +941,11 @@ class PwMBatteryCard extends HTMLElement {
     if (!isAuto) {
       content.appendChild(this._banner("bad", t.manual));
     } else if (chargingPct === null || !planned) {
-      const text = t.status[status.state];
+      const key =
+        status.state === "not_calculated" && pwmBatteryRecheckHours()
+          ? "not_calculated_recheck"
+          : status.state;
+      const text = t.status[key];
       if (text) {
         content.appendChild(this._banner(PWM_BATTERY_STATUS_TONE[status.state], text));
       }
