@@ -79,6 +79,21 @@ right at the limit, otherwise flipped 75 -> 50 -> 75 within one minute
 (two inverter commands, seen twice on Claus's 2026-11-02 night). A
 recheck is scheduled for when the wait ends, so going up doesn't depend
 on the fuse trigger (only fires at >= 20 A) or the next hourly run.
+
+Deliberate difference from Node-RED (issue #22, Claus 2026-11-03): "Skal
+batteri lades" plans its hours as if the battery were empty, so there
+are nearly always more cheap night hours than needed, and the charge ran
+in the first of them -- the target was reached early and the battery
+then sat locked for the rest of the night. Now, at the start of a
+planned night hour (0-5) before the charge has started, the hour is
+skipped (the battery keeps discharging) when the planned night hours
+after it are enough to reach the target from the current SoC, counted
+at a safe power: the lower of 50 % of the max charge power and what the
+fuse allows right now (the charge itself still runs at "Charge 75" when
+the fuse allows it). A charge that has started runs on. Safety net: if
+the target isn't reached when the last planned night hour has passed,
+charging goes on in the following hours, until 06:00 at the latest.
+Planned day hours are left as they are.
 """
 
 from __future__ import annotations
@@ -146,6 +161,17 @@ _FUSE_RATE_LIMIT_SECONDS = 60
 # level, wait this long before going up again -- see module docstring.
 _STEP_UP_HOLD_SECONDS = 10 * 60
 
+# DIFF (issue #22, Claus 2026-11-03): the night plan -- see module
+# docstring. Night = hours 0-5; the safety net stops at 06:00.
+_NIGHT_END_HOUR = 6
+# Share of the max charge power the skip decision counts on, at most --
+# one fuse step below the normal "Charge 75".
+_SAFE_CHARGE_SHARE = 0.50
+# Same margin data/battery_charge_decision.py plans its hours with.
+_CHARGETIME_SAFETY_MARGIN = 1.10
+_NIGHT_SKIP = "skip"
+_NIGHT_EXTEND = "extend"
+
 # Charge levels in order, for "is this a step up or down?". Anything not
 # listed (internal, hold_min_soc, block_*) counts as not charging.
 _CHARGE_LEVEL_RANK = {
@@ -183,6 +209,14 @@ class BatteryChargeLevelInputs:
     # command is active, else 0. DIFF (issue #15): already part of the
     # measured fuse loads, so it is taken out before adding the new level.
     battery_charge_power: float = 0.0
+    # DIFF (issue #22): what the night plan needs. current_hour None turns
+    # it off (plain Node-RED behaviour).
+    current_hour: int | None = None
+    # Every hour_<N> attribute of battery_charge_status that is true.
+    cheap_hours: frozenset[int] = frozenset()
+    battery_size_kwh: float | None = None
+    # A charge_now_* command is active right now.
+    charging_now: bool = False
 
 
 def _amps_per_phase(power_w: float) -> float:
@@ -198,6 +232,48 @@ def _amps_allowed(load: float, amps_needed_75: float, tariff_fuse_size: float) -
         allowed = max(allowed, 0.0)
         return math.floor(allowed)
     return amps_needed_75
+
+
+def _charge_hours_needed(
+    battery_soc: float, battery_target: float, battery_size_kwh: float, power_w: float
+) -> float:
+    """Whole hours to charge from battery_soc up to battery_target at
+    power_w, with the same 10 % margin "Skal batteri lades" plans with.
+    math.inf when power_w is 0 (the fuse allows nothing right now)."""
+    missing_kwh = max(battery_target - battery_soc, 0.0) / 100 * battery_size_kwh
+    if missing_kwh <= 0:
+        return 0
+    if power_w <= 0:
+        return math.inf
+    return math.ceil(missing_kwh * 1000 * _CHARGETIME_SAFETY_MARGIN / power_w)
+
+
+def _night_plan(
+    inputs: BatteryChargeLevelInputs, battery_soc: float, safe_power_w: float
+) -> str | None:
+    """Issue #22 (see module docstring): _NIGHT_SKIP to leave this planned
+    night hour out because the planned night hours after it are enough,
+    _NIGHT_EXTEND to keep charging in an unplanned night hour after the
+    last planned one, or None for the plain Node-RED rule."""
+    hour = inputs.current_hour
+    if hour is None or hour >= _NIGHT_END_HOUR or not inputs.battery_size_kwh:
+        return None
+    planned_night = [h for h in inputs.cheap_hours if h < _NIGHT_END_HOUR]
+    if not planned_night:
+        return None
+    if inputs.hour_is_cheap:
+        if inputs.charging_now:
+            # Once started, a charge runs on -- skipping now would only
+            # add a stop and a start (two inverter commands).
+            return None
+        hours_left_after = sum(1 for h in planned_night if h > hour)
+        needed = _charge_hours_needed(
+            battery_soc, inputs.battery_target, inputs.battery_size_kwh, safe_power_w
+        )
+        return _NIGHT_SKIP if hours_left_after >= needed else None
+    if max(planned_night) < hour:
+        return _NIGHT_EXTEND
+    return None
 
 
 def calculate_battery_charge_level(inputs: BatteryChargeLevelInputs) -> str | None:
@@ -247,7 +323,21 @@ def calculate_battery_charge_level(inputs: BatteryChargeLevelInputs) -> str | No
     if battery_soc >= inputs.battery_target:
         return None
 
-    if not inputs.hour_is_cheap:
+    hour_is_cheap = inputs.hour_is_cheap
+    night_plan = _night_plan(
+        inputs,
+        battery_soc,
+        safe_power_w=min(
+            battery_max_charge_full * _SAFE_CHARGE_SHARE,
+            amps_allowed * 3 * 230,
+        ),
+    )
+    if night_plan == _NIGHT_SKIP:
+        return _COMMAND_INTERNAL
+    if night_plan == _NIGHT_EXTEND:
+        hour_is_cheap = True
+
+    if not hour_is_cheap:
         return _COMMAND_INTERNAL
 
     if amps_allowed >= amps_needed_75:
@@ -465,6 +555,10 @@ class PwMngtBatteryChargeLevelController:
             battery_target=battery_target,
             hour_is_cheap=self._read_hour_is_cheap(),
             battery_charge_power=self._read_grid_charge_power(),
+            current_hour=dt_util.now().hour,
+            cheap_hours=self._read_cheap_hours(),
+            battery_size_kwh=self._read_battery_size(),
+            charging_now=currently_charging(self._read_battery_command()),
         )
         result = calculate_battery_charge_level(inputs)
         if result is None:
@@ -555,6 +649,19 @@ class PwMngtBatteryChargeLevelController:
             return False
         current_hour = dt_util.now().hour
         return state.attributes.get(f"hour_{current_hour}") is True
+
+    def _read_cheap_hours(self) -> frozenset[int]:
+        entity_id = pv_properties.battery_charge_status_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None:
+            return frozenset()
+        return frozenset(
+            hour for hour in range(24) if state.attributes.get(f"hour_{hour}") is True
+        )
+
+    def _read_battery_size(self) -> float | None:
+        entity_id = pv_properties.battery_size_entity_id(self.hass, self._entry)
+        return read_float_state(self.hass.states.get(entity_id)) if entity_id else None
 
     def _read_battery_command(self) -> str | None:
         entity_id = pv_properties.battery_command_entity_id(self.hass, self._entry)
