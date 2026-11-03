@@ -135,17 +135,17 @@
             "name": "Besparelser (valgfri)",
             "data": {
               "electricity_tax_full_rate": "Elafgift (fuld sats)",
-              "household_consumption_hourly": "Husstandens forbrug (pr. time)",
-              "grid_import_hourly": "Køb fra nettet (pr. time)",
-              "battery_grid_charge_hourly": "Batteri ladet fra nettet (pr. time)",
-              "battery_discharge_hourly": "Batteri afladet til huset (pr. time)"
+              "household_consumption_hourly": "Husstandens forbrug (samlet tæller)",
+              "grid_import_hourly": "Køb fra nettet (samlet tæller)",
+              "battery_grid_charge_hourly": "Batteri ladet fra nettet (samlet tæller)",
+              "battery_discharge_hourly": "Batteri afladet (samlet tæller)"
             },
             "data_description": {
               "electricity_tax_full_rate": "Din egen sensor, der viser den aktuelle fulde elafgift (kr/kWh inkl. moms), fx Strømlignings afgiftssensor. Bruges til at beregne den fiktive \"indkøbspris uden PV\" (hvad du ville betale, hvis hele forbruget skulle købes fra nettet) og besparelsessensorerne nedenfor, sammen med select.<hub>_billing_period og select.<hub>_electricity_tax under fanen Konfiguration, som afgør afgiftsgrænsen og om den nedsatte sats overhovedet gælder. Valgfri -- lad feltet stå tomt (\"Ikke tilgængelig\"), hvis du ikke følger det; så forbliver de sensorer utilgængelige.",
               "household_consumption_hourly": "Den entity, der viser husstandens samlede forbrug (kWh) som en rå tæller, der kun stiger, ikke en Daily/Hourly Utility Meter-hjælper -- PwMngt udleder selv hver times tal og tåler, at tælleren nulstilles, eller at du senere peger feltet på en ny entity (fx efter udskiftning af inverter). Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
               "grid_import_hourly": "Den entity, der viser strøm købt fra nettet (kWh) som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
               "battery_grid_charge_hourly": "Den entity, der viser energi ladet ind i batteriet specifikt fra nettet (kWh) som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
-              "battery_discharge_hourly": "Den entity, der viser energi, batteriet har afladet til huset (kWh), som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en."
+              "battery_discharge_hourly": "Den entity, der viser al energi, batteriet har afladet (kWh), som en rå tæller, der kun stiger -- også det, der evt. sælges til nettet. Samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en."
             }
           },
           "savings_seed": {
@@ -192,10 +192,10 @@
           "main_fuse_load_l2": "Hovedsikring belastning L2",
           "main_fuse_load_l3": "Hovedsikring belastning L3",
           "electricity_tax_full_rate": "Elafgift (fuld sats)",
-          "household_consumption_hourly": "Husstandens forbrug (pr. time)",
-          "grid_import_hourly": "Køb fra nettet (pr. time)",
-          "battery_grid_charge_hourly": "Batteri ladet fra nettet (pr. time)",
-          "battery_discharge_hourly": "Batteri afladet til huset (pr. time)",
+          "household_consumption_hourly": "Husstandens forbrug (samlet tæller)",
+          "grid_import_hourly": "Køb fra nettet (samlet tæller)",
+          "battery_grid_charge_hourly": "Batteri ladet fra nettet (samlet tæller)",
+          "battery_discharge_hourly": "Batteri afladet (samlet tæller)",
           "seed_purchase_price_real": "Startværdi: indkøbspris (reel)",
           "seed_purchase_price_real_without_pv": "Startværdi: indkøbspris uden PV (reel)",
           "seed_battery_grid_charge_sum": "Startværdi: batteri ladet fra nettet (sum)",
@@ -227,7 +227,7 @@
           "household_consumption_hourly": "Den entity, der viser husstandens samlede forbrug (kWh) som en rå tæller, der kun stiger, ikke en Daily/Hourly Utility Meter-hjælper -- PwMngt udleder selv hver times tal og tåler, at tælleren nulstilles, eller at du senere peger feltet på en ny entity (fx efter udskiftning af inverter). Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
           "grid_import_hourly": "Den entity, der viser strøm købt fra nettet (kWh) som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
           "battery_grid_charge_hourly": "Den entity, der viser energi ladet ind i batteriet specifikt fra nettet (kWh) som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
-          "battery_discharge_hourly": "Den entity, der viser energi, batteriet har afladet til huset (kWh), som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
+          "battery_discharge_hourly": "Den entity, der viser al energi, batteriet har afladet (kWh), som en rå tæller, der kun stiger -- også det, der evt. sælges til nettet. Samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
           "seed_purchase_price_real": "Flytter du fra en eksisterende Node-RED-opsætning, der fører den samme løbende sum (kr), så peg på den gamle sensor, så PwMngt's egen sum starter fra dens nuværende værdi i stedet for 0. Læses kun én gang, ved PwMngt's allerførste besparelsesberegning -- røres aldrig igen bagefter. Lad feltet stå tomt (\"Ikke tilgængelig\") på en ny installation uden historik. \"Besparelse egen produktion\" udledes så automatisk af dette og feltet nedenfor og behøver ikke sin egen startværdi.",
           "seed_purchase_price_real_without_pv": "Samme idé som ovenfor, for den løbende sum \"indkøbspris uden PV (reel)\".",
           "seed_battery_grid_charge_sum": "Samme idé som ovenfor, for den løbende sum \"batteri ladet fra nettet\". \"Besparelse batteriladning\" udledes så automatisk af dette og feltet nedenfor og behøver ikke sin egen startværdi.",

@@ -135,17 +135,17 @@
             "name": "Savings tracking (optional)",
             "data": {
               "electricity_tax_full_rate": "Electricity tax (full rate)",
-              "household_consumption_hourly": "Household consumption (hourly)",
-              "grid_import_hourly": "Grid import (hourly)",
-              "battery_grid_charge_hourly": "Battery charged from grid (hourly)",
-              "battery_discharge_hourly": "Battery discharge to house (hourly)"
+              "household_consumption_hourly": "Household consumption (total counter)",
+              "grid_import_hourly": "Grid import (total counter)",
+              "battery_grid_charge_hourly": "Battery charged from grid (total counter)",
+              "battery_discharge_hourly": "Battery discharge (total counter)"
             },
             "data_description": {
               "electricity_tax_full_rate": "Your own sensor reporting the current full electricity-tax rate (kr/kWh, incl. VAT), e.g. Strømligning's tax sensor. Used to calculate the fictional \"purchase price without PV\" (what you'd pay if 100% of your consumption had to be bought from the grid) and the savings sensors below, together with select.<hub>_billing_period and select.<hub>_electricity_tax on the Configuration tab, which decide the tax threshold and whether the reduced rate applies at all. Optional -- leave empty (\"Not available\") if you don't track this; those sensors then stay unavailable.",
               "household_consumption_hourly": "The entity that reports your household's total consumption (kWh) as a raw, ever-increasing lifetime counter, not a Daily/Hourly Utility Meter helper -- PwMngt derives each hour's own figure itself, and tolerates the counter resetting or you repointing this field at a new entity later (e.g. after replacing an inverter). Optional -- leave empty if you don't have one.",
               "grid_import_hourly": "The entity that reports electricity imported from the grid (kWh) as a raw, ever-increasing lifetime counter -- same reasoning as the field above. Optional -- leave empty if you don't have one.",
               "battery_grid_charge_hourly": "The entity that reports energy charged into the battery from the grid specifically (kWh) as a raw, ever-increasing lifetime counter -- same reasoning as the field above. Optional -- leave empty if you don't have one.",
-              "battery_discharge_hourly": "The entity that reports energy the battery discharged to the house (kWh) as a raw, ever-increasing lifetime counter -- same reasoning as the field above. Optional -- leave empty if you don't have one."
+              "battery_discharge_hourly": "The entity that reports all energy the battery discharged (kWh) as a raw, ever-increasing lifetime counter -- including any sold to the grid. Same reasoning as the field above. Optional -- leave empty if you don't have one."
             }
           },
           "savings_seed": {
@@ -192,10 +192,10 @@
           "main_fuse_load_l2": "Main fuse load L2",
           "main_fuse_load_l3": "Main fuse load L3",
           "electricity_tax_full_rate": "Electricity tax (full rate)",
-          "household_consumption_hourly": "Household consumption (hourly)",
-          "grid_import_hourly": "Grid import (hourly)",
-          "battery_grid_charge_hourly": "Battery charged from grid (hourly)",
-          "battery_discharge_hourly": "Battery discharge to house (hourly)",
+          "household_consumption_hourly": "Household consumption (total counter)",
+          "grid_import_hourly": "Grid import (total counter)",
+          "battery_grid_charge_hourly": "Battery charged from grid (total counter)",
+          "battery_discharge_hourly": "Battery discharge (total counter)",
           "seed_purchase_price_real": "Seed: purchase price (real)",
           "seed_purchase_price_real_without_pv": "Seed: purchase price without PV (real)",
           "seed_battery_grid_charge_sum": "Seed: battery charged from grid (sum)",
@@ -227,7 +227,7 @@
           "household_consumption_hourly": "The entity that reports your household's total consumption (kWh) as a raw, ever-increasing lifetime counter, not a Daily/Hourly Utility Meter helper -- PwMngt derives each hour's own figure itself, and tolerates the counter resetting or you repointing this field at a new entity later (e.g. after replacing an inverter). Optional -- leave empty if you don't have one.",
           "grid_import_hourly": "The entity that reports electricity imported from the grid (kWh) as a raw, ever-increasing lifetime counter -- same reasoning as the field above. Optional -- leave empty if you don't have one.",
           "battery_grid_charge_hourly": "The entity that reports energy charged into the battery from the grid specifically (kWh) as a raw, ever-increasing lifetime counter -- same reasoning as the field above. Optional -- leave empty if you don't have one.",
-          "battery_discharge_hourly": "The entity that reports energy the battery discharged to the house (kWh) as a raw, ever-increasing lifetime counter -- same reasoning as the field above. Optional -- leave empty if you don't have one.",
+          "battery_discharge_hourly": "The entity that reports all energy the battery discharged (kWh) as a raw, ever-increasing lifetime counter -- including any sold to the grid. Same reasoning as the field above. Optional -- leave empty if you don't have one.",
           "seed_purchase_price_real": "If you're migrating from an existing Node-RED setup tracking this same running total (kr), point this at that old sensor so PwMngt's own total starts from its current value instead of 0. Read only once, on PwMngt's very first savings calculation -- never touched again afterwards. Leave empty (\"Not available\") on a fresh install with no history to carry over. \"Own production savings\" is then derived automatically from this and the field below, instead of needing its own seed.",
           "seed_purchase_price_real_without_pv": "Same idea as above, for the \"purchase price without PV (real)\" running total.",
           "seed_battery_grid_charge_sum": "Same idea as above, for the \"battery charged from grid\" running total. \"Battery charging savings\" is then derived automatically from this and the field below, instead of needing its own seed.",
