@@ -70,6 +70,15 @@ Battery power field) is taken out of the measured fuse loads before the
 new level is added. Node-RED counted a running charge twice, so with a
 15 kW Growatt "Charge 75" flipped to "Charge 50" and back at ~30 A on a
 50 A fuse -- every flip a new inverter command.
+
+Deliberate difference from Node-RED (issue #15, Claus 2026-11-03): a
+lower level forced by the fuse (a step down during a cheap hour) is
+applied at once, but going up again waits until 10 minutes after the
+last such step down. A load spike of a few seconds, or a house load
+right at the limit, otherwise flipped 75 -> 50 -> 75 within one minute
+(two inverter commands, seen twice on Claus's 2026-11-02 night). A
+recheck is scheduled for when the wait ends, so going up doesn't depend
+on the fuse trigger (only fires at >= 20 A) or the next hourly run.
 """
 
 from __future__ import annotations
@@ -132,6 +141,19 @@ _HOURLY_SECOND_DELAY_SECONDS = 30
 # Fuse-overload trigger: at most 1 run/minute (Node-RED: delay node,
 # pauseType "rate", rate 1/minute, drop=true).
 _FUSE_RATE_LIMIT_SECONDS = 60
+
+# DIFF (issue #15, Claus 2026-11-03): after the fuse has forced a lower
+# level, wait this long before going up again -- see module docstring.
+_STEP_UP_HOLD_SECONDS = 10 * 60
+
+# Charge levels in order, for "is this a step up or down?". Anything not
+# listed (internal, hold_min_soc, block_*) counts as not charging.
+_CHARGE_LEVEL_RANK = {
+    "charge_now_25": 1,
+    "charge_now_50": 2,
+    "charge_now_75": 3,
+    "charge_now_100": 4,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -297,6 +319,8 @@ class PwMngtBatteryChargeLevelController:
         self._pending_hourly_run: Any = None
         self._pending_fuse_run: Any = None
         self._last_fuse_run = None
+        self._last_step_down = None
+        self._pending_step_up_recheck: Any = None
 
         if not self._soc_entity_id:
             LOGGER.warning(
@@ -344,6 +368,9 @@ class PwMngtBatteryChargeLevelController:
         if self._pending_fuse_run is not None:
             self._pending_fuse_run()
             self._pending_fuse_run = None
+        if self._pending_step_up_recheck is not None:
+            self._pending_step_up_recheck()
+            self._pending_step_up_recheck = None
 
     # -- triggers ----------------------------------------------------------
 
@@ -442,7 +469,46 @@ class PwMngtBatteryChargeLevelController:
         result = calculate_battery_charge_level(inputs)
         if result is None:
             return
+        if inputs.hour_is_cheap and not self._step_allowed(result):
+            return
         self._apply_result(result)
+
+    def _step_allowed(self, result: str) -> bool:
+        """Issue #15's step-up wait (see module docstring): records a step
+        down during a cheap hour, and holds back a step up until
+        _STEP_UP_HOLD_SECONDS after the last one."""
+        current_rank = _CHARGE_LEVEL_RANK.get(self._read_battery_command() or "", 0)
+        result_rank = _CHARGE_LEVEL_RANK.get(result, 0)
+        now = dt_util.utcnow()
+        if result_rank < current_rank:
+            self._last_step_down = now
+            self._schedule_step_up_recheck(_STEP_UP_HOLD_SECONDS)
+            return True
+        if result_rank > current_rank and self._last_step_down is not None:
+            remaining = (
+                self._last_step_down + timedelta(seconds=_STEP_UP_HOLD_SECONDS) - now
+            ).total_seconds()
+            if remaining > 0:
+                LOGGER.debug(
+                    "PwMngt: holding back %s for %.0f s after a fuse step down",
+                    result,
+                    remaining,
+                )
+                self._schedule_step_up_recheck(remaining)
+                return False
+        return True
+
+    def _schedule_step_up_recheck(self, delay_seconds: float) -> None:
+        if self._pending_step_up_recheck is not None:
+            self._pending_step_up_recheck()
+        self._pending_step_up_recheck = event.async_call_later(
+            self.hass, delay_seconds + 1, self._handle_step_up_recheck
+        )
+
+    @callback
+    def _handle_step_up_recheck(self, _now) -> None:
+        self._pending_step_up_recheck = None
+        self._run_charge_level()
 
     def _maybe_target_reached(self) -> None:
         if pv_properties.is_battery_mode_manual(self.hass, self._entry):
