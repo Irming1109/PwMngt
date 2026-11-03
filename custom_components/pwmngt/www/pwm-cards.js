@@ -659,8 +659,11 @@ const PWM_BATTERY_TEXTS = {
     title: "House battery control",
     manual: "Automation and battery hold are off - manual charging only",
     charging: (pct) => `Battery is charging at ${pct}% power`,
-    autoControls:
-      "The automation controls tonight's charge - a manual choice can be overridden at the next hour or fuse check",
+    autoControls: "Tonight's charge is controlled by the automation",
+    manualCharging: (pct) => `Manual charge at ${pct}% power`,
+    manualRuns: "Runs until 100% SoC or until stopped",
+    reducedByFuse: (pct) => `Reduced from ${pct}% because of the main fuse - goes up again when there is room`,
+    pausedByFuse: (pct) => `Manual charge ${pct}% paused because of the main fuse`,
     status: {
       yes_today: "Battery charges today in these hours",
       yes_tomorrow: "Battery charges tomorrow in these hours",
@@ -687,8 +690,11 @@ const PWM_BATTERY_TEXTS = {
     title: "Hus batteri styring",
     manual: "Automatik og batterilås slået fra - kun manuel ladning",
     charging: (pct) => `Batteri lader nu med ${pct} % effekt`,
-    autoControls:
-      "Automatikken styrer nattens ladning - et manuelt valg kan blive overskrevet ved næste timeskift eller sikringstjek",
+    autoControls: "Nattens ladning styres af automatikken",
+    manualCharging: (pct) => `Manuel ladning med ${pct} % effekt`,
+    manualRuns: "Kører til 100 % SoC, eller til den afbrydes",
+    reducedByFuse: (pct) => `Sænket fra ${pct} % pga. hovedsikring - går op igen, når der er plads`,
+    pausedByFuse: (pct) => `Manuel ladning ${pct} % sat på pause pga. hovedsikring`,
     status: {
       yes_today: "Batteri lades i dag i disse timer",
       yes_tomorrow: "Batteri lades i morgen i disse timer",
@@ -839,9 +845,10 @@ const PWM_BATTERY_CARD_STYLE = `
  * - battery_mode "manual" also pauses the battery hold in PwMngt (Node-RED
  *   never read pv_battery_mode), so the banner says so and disabling asks
  *   for confirmation.
- * - While tonight's charge is planned ("yes_today") the card says that the
- *   automation can override a manual choice -- data/battery_charge_level.py
- *   re-decides every hour and on the fuse check, same as Node-RED.
+ * - A "Charge now" from the card is a manual charge (issue #17): the
+ *   automation can't override it, only the main fuse can lower or pause it
+ *   (battery_command's manual_charge attribute holds the chosen level), and
+ *   the card says so. It runs until 100 % SoC or "Stop charging".
  * - Shows the two statuses the Node-RED card had no banner for
  *   (no_charge_needed, no_deferred).
  */
@@ -935,6 +942,8 @@ class PwMBatteryCard extends HTMLElement {
     const isAuto = mode.state === "auto";
     const chargeMatch = /^charge_now_(\d+)$/.exec(command.state);
     const chargingPct = chargeMatch ? Number(chargeMatch[1]) : null;
+    const manualMatch = /^charge_now_(\d+)$/.exec(command.attributes.manual_charge || "");
+    const manualPct = manualMatch ? Number(manualMatch[1]) : null;
     const planned = status.state === "yes_today" || status.state === "yes_tomorrow";
 
     // Banners -- same order and conditions as the Node-RED card.
@@ -950,13 +959,19 @@ class PwMBatteryCard extends HTMLElement {
         content.appendChild(this._banner(PWM_BATTERY_STATUS_TONE[status.state], text));
       }
     }
-    if (chargingPct !== null) {
+    if (manualPct !== null) {
+      if (chargingPct === null) {
+        content.appendChild(this._banner("warn", t.pausedByFuse(manualPct)));
+      } else {
+        content.appendChild(this._banner("ok", t.manualCharging(chargingPct)));
+      }
+      content.appendChild(
+        this._note(chargingPct !== null && chargingPct < manualPct ? t.reducedByFuse(manualPct) : t.manualRuns)
+      );
+    } else if (chargingPct !== null) {
       content.appendChild(this._banner("ok", t.charging(chargingPct)));
       if (isAuto && status.state === "yes_today") {
-        const note = document.createElement("div");
-        note.className = "pwm-note";
-        note.textContent = t.autoControls;
-        content.appendChild(note);
+        content.appendChild(this._note(t.autoControls));
       }
     }
 
@@ -983,10 +998,10 @@ class PwMBatteryCard extends HTMLElement {
     const buttons = document.createElement("div");
     buttons.className = "pwm-buttons";
     for (const pct of PWM_CHARGE_LEVELS) {
-      if (pct === chargingPct) continue;
+      if (pct === (manualPct !== null ? manualPct : chargingPct)) continue;
       buttons.appendChild(this._button(t.chargeNow(pct), () => this._setCommand(`charge_now_${pct}`)));
     }
-    if (chargingPct !== null) {
+    if (chargingPct !== null || manualPct !== null) {
       buttons.appendChild(this._button(t.stop, () => this._setCommand("internal")));
     }
     if (this._ids.postpone) {
@@ -1011,7 +1026,7 @@ class PwMBatteryCard extends HTMLElement {
     // SoC while charging (Node-RED: the gauge under "Lad nu").
     const soc = this._state("soc");
     const socValue = soc ? parseFloat(soc.state) : NaN;
-    if (chargingPct !== null && Number.isFinite(socValue)) {
+    if ((chargingPct !== null || manualPct !== null) && Number.isFinite(socValue)) {
       const wrap = document.createElement("div");
       wrap.className = "pwm-soc";
       const label = document.createElement("div");
@@ -1037,6 +1052,13 @@ class PwMBatteryCard extends HTMLElement {
     banner.className = `pwm-banner ${tone || "info"}`;
     banner.textContent = text;
     return banner;
+  }
+
+  _note(text) {
+    const note = document.createElement("div");
+    note.className = "pwm-note";
+    note.textContent = text;
+    return note;
   }
 
   _button(text, onClick) {

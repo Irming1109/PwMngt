@@ -94,6 +94,22 @@ the fuse allows it). A charge that has started runs on. Safety net: if
 the target isn't reached when the last planned night hour has passed,
 charging goes on in the following hours, until 06:00 at the latest.
 Planned day hours are left as they are.
+
+New in PwMngt (issue #17, Claus 2026-11-03 -- Node-RED had the same gap,
+"Bestem ladeeffekt" only ran on "Ja (i dag)"): a manual "Charge now".
+Picking a charge_now_* level by hand (the battery card) starts it; the
+battery_command select keeps the level in its manual_charge attribute
+(restored across a restart) and, while it is set, ignores every command
+from the automation -- night charge, sell decision, battery hold,
+postpone. It ends only when the user picks another command ("Stop
+charging"), when the SoC reaches 100 %, or when the battery has shown no
+charge power for 5 minutes while a level was set (the inverter stopped at
+its own max SoC; not counted while the fuse holds it at "internal" or in
+the first 2 minutes after a new command). Meanwhile the fuse check always
+runs, also while battery_mode is "manual" -- it can't be turned off: the
+same fuse rule as above, stepping down at once (to "internal" when not
+even 25 % fits) and back up towards the chosen level 10 minutes after the
+last step down. Checked every 30 s, plus the fuse trigger.
 """
 
 from __future__ import annotations
@@ -118,7 +134,12 @@ from ..const import (
 )
 from ..helpers.state_helper import read_float_state
 from ..properties import hub_properties, pv_properties
-from ..select import signal_set_battery_command
+from ..select import (
+    ATTR_MANUAL_CHARGE,
+    CHARGE_NOW_OPTIONS,
+    signal_manual_charge,
+    signal_set_battery_command,
+)
 from .battery_charge_decision import signal_battery_charge_target_reached
 
 LOGGER = logging.getLogger(__name__)
@@ -141,9 +162,7 @@ _STATUS_YES_TODAY = "yes_today"
 # battery_command (select.py) options that mean "actively charging from
 # the grid right now" -- the "Lader vi ?" gate's own check. Old: "Lad nu
 # - 25/50/75/100% effekt".
-_ACTIVE_CHARGE_COMMANDS = frozenset(
-    {"charge_now_25", "charge_now_50", "charge_now_75", "charge_now_100"}
-)
+_ACTIVE_CHARGE_COMMANDS = CHARGE_NOW_OPTIONS
 _COMMAND_INTERNAL = "internal"  # Old: "Intern".
 
 # Hourly trigger: two chained fixed 30 s delays (Node-RED: two "delay"
@@ -171,6 +190,22 @@ _SAFE_CHARGE_SHARE = 0.50
 _CHARGETIME_SAFETY_MARGIN = 1.10
 _NIGHT_SKIP = "skip"
 _NIGHT_EXTEND = "extend"
+
+# DIFF (issue #17, Claus 2026-11-03): a manual charge -- see module
+# docstring. Checked this often while one runs (step up, stop checks); the
+# fuse trigger still steps down at once.
+_MANUAL_CHECK_SECONDS = 30
+_MANUAL_FULL_SOC = 100.0
+# No charge power for this long while a level is set: the inverter has
+# stopped on its own max SoC -- end the manual charge.
+_MANUAL_IDLE_STOP_SECONDS = 5 * 60
+# Don't count the idle time right after a new command: Growatt waits up to
+# 30 s per control register before it takes a new one.
+_MANUAL_START_GRACE_SECONDS = 2 * 60
+# Below this charge power (W) the battery counts as not charging.
+_MANUAL_CHARGING_MIN_W = 100.0
+# Manual levels, highest first, for stepping down from the chosen one.
+_MANUAL_LEVELS = (100, 75, 50, 25)
 
 # Charge levels in order, for "is this a step up or down?". Anything not
 # listed (internal, hold_min_soc, block_*) counts as not charging.
@@ -349,6 +384,49 @@ def calculate_battery_charge_level(inputs: BatteryChargeLevelInputs) -> str | No
     return _COMMAND_INTERNAL
 
 
+@dataclass
+class ManualChargeLevelInputs:
+    """What one manual-charge fuse check reads (issue #17)."""
+
+    # The level the user picked, e.g. "charge_now_100".
+    requested: str
+    tariff_fuse_size_raw: float | None
+    fuse_load_l1: float
+    fuse_load_l2: float
+    fuse_load_l3: float
+    battery_max_charge_raw: float | None
+    # W the battery charges with right now (see BatteryChargeLevelInputs).
+    battery_charge_power: float = 0.0
+
+
+def calculate_manual_charge_level(inputs: ManualChargeLevelInputs) -> str | None:
+    """The highest level, at most the requested one, that the main fuse
+    allows right now -- same fuse rule as "Bestem ladeeffekt" (tariff fuse
+    * 0.85, the battery's own charge current taken out first, issue #15).
+    "internal" when not even 25 % fits; None when the tariff fuse size is
+    missing (no change, same as calculate_battery_charge_level())."""
+    if inputs.tariff_fuse_size_raw is None:
+        return None
+    tariff_fuse_size = inputs.tariff_fuse_size_raw * _TARIFF_FUSE_MARGIN
+    battery_max_charge_full = (
+        inputs.battery_max_charge_raw
+        if inputs.battery_max_charge_raw is not None
+        else _BATTERY_MAX_CHARGE_FALLBACK
+    )
+    own_amps = _amps_per_phase(max(inputs.battery_charge_power, 0.0))
+    headroom = min(
+        tariff_fuse_size - max(load - own_amps, 0.0)
+        for load in (inputs.fuse_load_l1, inputs.fuse_load_l2, inputs.fuse_load_l3)
+    )
+    requested_pct = int(inputs.requested.rsplit("_", 1)[1])  # "charge_now_100" -> 100
+    for pct in _MANUAL_LEVELS:
+        if pct > requested_pct:
+            continue
+        if _amps_per_phase(battery_max_charge_full * pct / 100) <= headroom:
+            return f"charge_now_{pct}"
+    return _COMMAND_INTERNAL
+
+
 def battery_target_reached(
     battery_soc: float | None, battery_target: float, charge_wish: str
 ) -> bool:
@@ -411,6 +489,9 @@ class PwMngtBatteryChargeLevelController:
         self._last_fuse_run = None
         self._last_step_down = None
         self._pending_step_up_recheck: Any = None
+        # Issue #17: when the battery stopped showing charge power during
+        # a manual charge (None while it charges).
+        self._manual_idle_since = None
 
         if not self._soc_entity_id:
             LOGGER.warning(
@@ -446,6 +527,13 @@ class PwMngtBatteryChargeLevelController:
                     self.hass, [self._soc_entity_id], self._handle_soc_trigger
                 )
             )
+        self._unsubscribers.append(
+            event.async_track_time_interval(
+                self.hass,
+                self._handle_manual_interval,
+                timedelta(seconds=_MANUAL_CHECK_SECONDS),
+            )
+        )
 
     @callback
     def async_stop(self) -> None:
@@ -498,7 +586,7 @@ class PwMngtBatteryChargeLevelController:
             return
         if not currently_charging(self._read_battery_command()):
             return
-        if self._read_charge_status() != _STATUS_YES_TODAY:
+        if self._read_manual_charge() is None and self._read_charge_status() != _STATUS_YES_TODAY:
             return
         self._schedule_rate_limited_run()
 
@@ -530,11 +618,29 @@ class PwMngtBatteryChargeLevelController:
         new_state = state_event.data.get("new_state")
         if old_state is not None and new_state is not None and old_state.state == new_state.state:
             return
+        manual_charge = self._read_manual_charge()
+        if manual_charge is not None:
+            self._run_manual_charge(manual_charge)
         self._maybe_target_reached()
+
+    @callback
+    def _handle_manual_interval(self, _now) -> None:
+        manual_charge = self._read_manual_charge()
+        if manual_charge is not None:
+            self._run_manual_charge(manual_charge)
+        else:
+            self._manual_idle_since = None
 
     # -- runs ----------------------------------------------------------------
 
     def _run_charge_level(self) -> None:
+        manual_charge = self._read_manual_charge()
+        if manual_charge is not None:
+            # Issue #17: a manual charge replaces the automatic level --
+            # also while battery_mode is "manual" (the fuse check can't be
+            # turned off).
+            self._run_manual_charge(manual_charge)
+            return
         if pv_properties.is_battery_mode_manual(self.hass, self._entry):
             # select.battery_mode (select.py) is "manual" -- see module
             # docstring. battery_command is left exactly as it is.
@@ -566,6 +672,75 @@ class PwMngtBatteryChargeLevelController:
         if inputs.hour_is_cheap and not self._step_allowed(result):
             return
         self._apply_result(result)
+
+    def _run_manual_charge(self, requested: str) -> None:
+        """Issue #17 (see module docstring): stop when full or the battery
+        has stopped charging on its own, otherwise hold the requested
+        level as far as the main fuse allows."""
+        soc = self._read_soc()
+        if soc is not None and soc >= _MANUAL_FULL_SOC:
+            self._end_manual_charge("SoC reached 100 %")
+            return
+        if self._manual_charge_idle_too_long():
+            self._end_manual_charge("no charge power for 5 minutes")
+            return
+        result = calculate_manual_charge_level(
+            ManualChargeLevelInputs(
+                requested=requested,
+                tariff_fuse_size_raw=self._read_tariff_fuse_size(),
+                fuse_load_l1=self._read_fuse_load(0),
+                fuse_load_l2=self._read_fuse_load(1),
+                fuse_load_l3=self._read_fuse_load(2),
+                battery_max_charge_raw=self._read_battery_max_charge(),
+                battery_charge_power=self._read_grid_charge_power(),
+            )
+        )
+        if result is None or result == self._read_battery_command():
+            return
+        if not self._step_allowed(result):
+            return
+        async_dispatcher_send(
+            self.hass, signal_manual_charge(self._entry.entry_id), result
+        )
+
+    def _manual_charge_idle_too_long(self) -> bool:
+        """True once a charge level has been set for a while and the
+        battery has shown no charge power for _MANUAL_IDLE_STOP_SECONDS --
+        the inverter has stopped at its own max SoC. Not counted while the
+        fuse holds the charge at "internal", nor right after a new command."""
+        now = dt_util.utcnow()
+        entity_id = pv_properties.battery_command_entity_id(self.hass, self._entry)
+        command = self.hass.states.get(entity_id) if entity_id else None
+        if (
+            command is None
+            or not currently_charging(command.state)
+            or (now - command.last_changed).total_seconds() < _MANUAL_START_GRACE_SECONDS
+            or self._battery_is_charging()
+        ):
+            self._manual_idle_since = None
+            return False
+        if self._manual_idle_since is None:
+            self._manual_idle_since = now
+        return (now - self._manual_idle_since).total_seconds() >= _MANUAL_IDLE_STOP_SECONDS
+
+    def _battery_is_charging(self) -> bool:
+        """True while Battery power shows charging -- and while it is
+        missing, so an unavailable sensor never ends a manual charge."""
+        power = (
+            read_float_state(self.hass.states.get(self._battery_power_entity_id))
+            if self._battery_power_entity_id
+            else None
+        )
+        if power is None:
+            return True
+        # Normalized: positive = discharging, so charging is negative.
+        power *= pv_properties.power_sign(self._entry, ENTITY_KEY_BATTERY_POWER)
+        return -power >= _MANUAL_CHARGING_MIN_W
+
+    def _end_manual_charge(self, reason: str) -> None:
+        LOGGER.info("PwMngt: manual battery charge ended -- %s", reason)
+        self._manual_idle_since = None
+        async_dispatcher_send(self.hass, signal_manual_charge(self._entry.entry_id), None)
 
     def _step_allowed(self, result: str) -> bool:
         """Issue #15's step-up wait (see module docstring): records a step
@@ -667,6 +842,13 @@ class PwMngtBatteryChargeLevelController:
         entity_id = pv_properties.battery_command_entity_id(self.hass, self._entry)
         state = self.hass.states.get(entity_id) if entity_id else None
         return state.state if state is not None else None
+
+    def _read_manual_charge(self) -> str | None:
+        """The level of a running manual charge (issue #17), or None."""
+        entity_id = pv_properties.battery_command_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        value = state.attributes.get(ATTR_MANUAL_CHARGE) if state is not None else None
+        return value if value in CHARGE_NOW_OPTIONS else None
 
     def _read_tariff_fuse_size(self) -> float | None:
         entity_id = hub_properties.tariff_fuse_size_entity_id(self.hass, self._entry)

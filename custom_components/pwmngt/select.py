@@ -38,6 +38,27 @@ def signal_set_battery_command(entry_id: str) -> str:
     directly). Payload: the option to select."""
     return f"{DOMAIN}_{entry_id}_set_battery_command"
 
+
+def signal_manual_charge(entry_id: str) -> str:
+    """Dispatcher signal data/battery_charge_level.py sends while a manual
+    "Charge now" runs (issue #17): payload is the level to set (the fuse
+    check's step down/up, "internal" while paused), or None to end the
+    manual charge (back to "internal")."""
+    return f"{DOMAIN}_{entry_id}_manual_charge"
+
+
+# battery_command options that charge the battery from the grid. Picked by
+# the user (the battery card's "Charge now" buttons), one of these starts
+# a manual charge -- see PwMngtSelect.async_select_option().
+CHARGE_NOW_OPTIONS = frozenset(
+    {"charge_now_25", "charge_now_50", "charge_now_75", "charge_now_100"}
+)
+
+# battery_command attribute holding the level of a running manual charge
+# (None when there is none). Read by data/battery_charge_level.py and the
+# battery card (www/pwm-cards.js).
+ATTR_MANUAL_CHARGE = "manual_charge"
+
 # Shown once, under the main "PwM" hub device's "Configuration" tab --
 # not tied to a specific charger.
 PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
@@ -489,6 +510,15 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
             self._attr_device_info = charger_device_info(entry, charger)
         self._attr_current_option = description.default_option
         self._entry_id = entry.entry_id
+        self._is_battery_command = description.key == "battery_command"
+        # Issue #17: level of a running manual charge (battery_command only).
+        self._manual_charge: str | None = None
+
+    @property
+    def extra_state_attributes(self) -> dict | None:
+        if not self._is_battery_command:
+            return None
+        return {ATTR_MANUAL_CHARGE: self._manual_charge}
 
     async def async_added_to_hass(self) -> None:
         """Restore the last chosen option -- see the class docstring for
@@ -498,7 +528,11 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
         if last_state is not None and last_state.state in self.entity_description.options:
             self._attr_current_option = last_state.state
 
-        if self.entity_description.key == "battery_command":
+        if self._is_battery_command:
+            if last_state is not None:
+                manual_charge = last_state.attributes.get(ATTR_MANUAL_CHARGE)
+                if manual_charge in CHARGE_NOW_OPTIONS:
+                    self._manual_charge = manual_charge
             # data/battery_charge_level.py ("Bestem ladeeffekt" and the
             # "SOC >= target" gate) sets this one programmatically.
             self.async_on_remove(
@@ -508,19 +542,51 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
                     self._handle_set_option,
                 )
             )
+            self.async_on_remove(
+                async_dispatcher_connect(
+                    self.hass,
+                    signal_manual_charge(self._entry_id),
+                    self._handle_manual_charge,
+                )
+            )
 
     @callback
     def _handle_set_option(self, option: str) -> None:
         if option not in self.entity_description.options:
             LOGGER.warning("%s: ignoring unknown option '%s'", self.entity_id, option)
             return
+        if self._manual_charge is not None:
+            # Issue #17 (Claus, 2026-11-03): a manual charge has priority
+            # over the automation (night charge, sell decision, battery
+            # hold, postpone) -- it only ends when stopped by hand or full.
+            LOGGER.debug(
+                "%s: manual charge running -- ignoring '%s' from the automation",
+                self.entity_id,
+                option,
+            )
+            return
+        self._attr_current_option = option
+        self.async_write_ha_state()
+
+    @callback
+    def _handle_manual_charge(self, option: str | None) -> None:
+        if self._manual_charge is None:
+            return
+        if option is None:
+            self._manual_charge = None
+            option = "internal"
+        elif option not in self.entity_description.options:
+            LOGGER.warning("%s: ignoring unknown option '%s'", self.entity_id, option)
+            return
         self._attr_current_option = option
         self.async_write_ha_state()
 
     async def async_select_option(self, option: str) -> None:
-        """Store the chosen option locally. Functionality is not implemented yet."""
-        LOGGER.info(
-            "%s set to '%s' (no functionality implemented yet)", self.entity_id, option
-        )
+        """Store the chosen option locally. On battery_command, a
+        charge_now_* picked by the user starts a manual charge and any
+        other option ends it (issue #17)."""
+        LOGGER.info("%s set to '%s'", self.entity_id, option)
+        if self._is_battery_command:
+            self._manual_charge = option if option in CHARGE_NOW_OPTIONS else None
         self._attr_current_option = option
         self.async_write_ha_state()
