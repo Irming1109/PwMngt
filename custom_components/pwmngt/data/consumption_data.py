@@ -37,10 +37,16 @@ Old Node-RED functions: "Beregn 8-16 & 6-9 & 17-06" (context list
 list "Døgn_forbrug_liste"), and the car-charger correction built from
 "Billader_status_kl_8"/"_16" (read off sensor.forbrug_billadere, a daily
 utility_meter on charger 1 only -- PwMngt sums every configured charger).
+
+Deliberate difference from Node-RED (Claus, 2026-11-03): every average
+except car_charger_consumption is a trimmed mean -- the highest and
+lowest days are dropped first, so one counter glitch can't skew it (see
+_average()).
 """
 
 import asyncio
 import logging
+import math
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -137,6 +143,12 @@ _MAX_HISTORY_DAYS = 30
 # A single day's real household consumption above this is implausible --
 # see _is_plausible_day(). Kasper's own call on where to draw the line.
 _MAX_PLAUSIBLE_FULL_DAY_KWH = 250
+
+# Trimmed averages (see _average()): drop this share of the days at each
+# end -- one day at 7 days of history, two at 14, three at 21-30 -- but
+# only with at least _TRIM_MIN_VALUES days, else a plain mean.
+_TRIM_SHARE = 0.10
+_TRIM_MIN_VALUES = 5
 
 # 00:15 local -- see the module docstring's "When it runs".
 _DAILY_RUN_HOUR = 0
@@ -266,14 +278,39 @@ def _is_plausible_day(values: dict[str, float]) -> bool:
     return values["full_day"] <= _MAX_PLAUSIBLE_FULL_DAY_KWH
 
 
+def _trimmed(values: list[float]) -> list[float]:
+    """values without the highest and lowest _TRIM_SHARE of them (at
+    least one at each end) -- see _average(). Unchanged below
+    _TRIM_MIN_VALUES values, where too little would be left."""
+    if len(values) < _TRIM_MIN_VALUES:
+        return values
+    cut = math.ceil(len(values) * _TRIM_SHARE)
+    return sorted(values)[cut:-cut]
+
+
 def _average(
-    history: list[dict[str, Any]], field_name: str, period_days: int, newest: date
+    history: list[dict[str, Any]],
+    field_name: str,
+    period_days: int,
+    newest: date,
+    trim: bool = True,
 ) -> float | None:
     """Mean of one field over the entries dated within the last
     period_days calendar days up to newest (yesterday) -- a missing day
     just shrinks the divisor, same "use what's there" rule Node-RED had.
     Entries whose field is None (e.g. car_charger for a day a charger
-    source had no data) are left out. None if nothing's left."""
+    source had no data) are left out. None if nothing's left.
+
+    DIFF (Claus, 2026-11-03): a trimmed mean -- the highest and lowest
+    days are dropped first (see _trimmed()). A counter glitch that stays
+    under _MAX_PLAUSIBLE_FULL_DAY_KWH otherwise skews the average for the
+    whole period: on 2026-11-02 Growatt's Load Energy Total counted the
+    battery's night charge (~13 kWh/h, 00-04), and that one night lifted
+    nighttime_average -- and so Battery nightly target -- from ~29 to 38
+    kWh. A real change (a cold spell) still moves the trimmed mean from
+    its second day on. trim=False for a value that is spiky by nature
+    (car_charger: mostly 0, a few charging days), where dropping the
+    highest day would hide real consumption."""
     cutoff = newest - timedelta(days=max(1, period_days) - 1)
     values = [
         entry[field_name]
@@ -281,6 +318,8 @@ def _average(
         if entry.get(field_name) is not None
         and date.fromisoformat(entry["date"]) >= cutoff
     ]
+    if trim:
+        values = _trimmed(values)
     if not values:
         return None
     return round(sum(values) / len(values), 2)
@@ -298,7 +337,9 @@ def calculate_daytime_averages(
         "daytime_average": _average(history, "daytime", period_days, newest),
         "daytime_average_adjusted": _average(history, "daytime_adjusted", period_days, newest),
         "nighttime_average": _average(history, "nighttime", period_days, newest),
-        "car_charger_consumption": _average(history, "car_charger", period_days, newest),
+        "car_charger_consumption": _average(
+            history, "car_charger", period_days, newest, trim=False
+        ),
     }
 
 
