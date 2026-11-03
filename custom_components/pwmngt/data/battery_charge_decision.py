@@ -30,6 +30,10 @@ trigger (different tab, different purpose -- that one re-runs "Bestem
 ladeeffekt", not "Skal batteri lades"), even though both happen to use
 the same Node-RED cron pattern and a fixed 30 s first delay.
 
+Day end at 16:55 (issue #2, Node-RED: inject "16:55" on the same tab):
+a "yes_today" still standing then goes back to "not_calculated" and a
+running grid charge is stopped -- see _handle_day_end().
+
 Deliberate differences from Node-RED (each marked "DIFF" below):
 - The "Udskyd ladning" (postpone) button (button.py's
   postpone_battery_charge, Old: button.pv_battery_udskyd) ported as a
@@ -187,6 +191,8 @@ _STROMLIGNING_TOMORROW_TRANSLATION_KEY = "tomorrow_available_vat"
 _EVENING_WINDOW_START = (18, 0)
 _EVENING_WINDOW_END = (23, 30)
 _DAILY_TRIGGER_HOUR = 23  # Node-RED: inject "Kl 23", cron "00 23 * * *".
+# Node-RED: inject "16:55", cron "55 16 * * *" -- see _handle_day_end().
+_DAY_END_HOUR_MINUTE = (16, 55)
 # (no periodic poll -- every trigger below is a real Node-RED wire)
 # Don't recompute while forecast production tomorrow is below this, or
 # while the status is already one of _SKIP_RECOMPUTE_STATUSES. Old: the
@@ -418,6 +424,15 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
                 self.hass, self._handle_midnight, hour=0, minute=0, second=0
             )
         )
+        self.async_on_remove(
+            event.async_track_time_change(
+                self.hass,
+                self._handle_day_end,
+                hour=_DAY_END_HOUR_MINUTE[0],
+                minute=_DAY_END_HOUR_MINUTE[1],
+                second=0,
+            )
+        )
         # Hourly nudge -- see module docstring. Node-RED: inject "Time",
         # cron "0 0-23 * * *".
         self.async_on_remove(
@@ -567,6 +582,25 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
                 key: None for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
             }
             self.async_write_ha_state()
+
+    @callback
+    def _handle_day_end(self, _now=None) -> None:
+        """16:55 (Node-RED: inject "16:55" -> "Ja (i dag)" ->
+        ha-sensor "Ikke beregnet" -> "Lader vi ?" -> "Intern", tab
+        "Batteri styring NY"): today's planned hours (0-16) are over, so a
+        "yes_today" that is still standing -- the target wasn't reached --
+        goes back to "not_calculated" for the evening's recompute, and a
+        grid charge still running is stopped. A manual "Charge now" (issue
+        #17) runs on: select.py ignores the automation's "internal" then.
+        Not gated by battery_mode, same as _handle_midnight()."""
+        if self._attr_native_value != "yes_today":
+            return
+        self._attr_native_value = _STATUS_NOT_CALCULATED
+        self._attr_extra_state_attributes = {
+            key: None for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
+        }
+        self.async_write_ha_state()
+        self._stop_running_charge()
 
     @callback
     def _handle_target_reached(self) -> None:
