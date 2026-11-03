@@ -25,7 +25,10 @@ evening/night, i.e.
 converted to % of the battery, + the battery's minimum SoC, kept within
 minimum SoC-95. "Night consumption"
 is consumption_data's nighttime_average (Node-RED:
-sensor.spidstimer_nat_17_06_snit). It stays a sensor of its own (not an
+sensor.spidstimer_nat_17_06_snit) -- DIFF (Claus, 2026-11-03): its
+nighttime_average_adjusted, without the car chargers' consumption in the
+same hours, since the battery is never meant to cover a car charge (plain
+nighttime_average while the adjusted one has no data). It stays a sensor of its own (not an
 attribute): it's a key control value other parts react to (see
 data/battery_data.py) and worth graphing.
 
@@ -495,9 +498,16 @@ class PwMngtSolarDataCoordinator(DataUpdateCoordinator[dict[str, float | None]])
         self._pv_shift_state = state
 
     def _read_night_consumption(self) -> float | None:
+        """consumption_data's nighttime_average_adjusted (without the car
+        chargers), falling back to the plain nighttime_average while the
+        adjusted one has no data -- see the module docstring."""
         entity_id = pv_properties.consumption_data_entity_id(self.hass, self._entry)
         state = self.hass.states.get(entity_id) if entity_id else None
-        value = state.attributes.get("nighttime_average") if state else None
+        if state is None:
+            return None
+        value = state.attributes.get("nighttime_average_adjusted")
+        if value is None:
+            value = state.attributes.get("nighttime_average")
         try:
             return None if value is None else float(value)
         except (TypeError, ValueError):

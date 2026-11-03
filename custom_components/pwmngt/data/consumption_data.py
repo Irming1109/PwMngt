@@ -38,10 +38,15 @@ list "Døgn_forbrug_liste"), and the car-charger correction built from
 "Billader_status_kl_8"/"_16" (read off sensor.forbrug_billadere, a daily
 utility_meter on charger 1 only -- PwMngt sums every configured charger).
 
-Deliberate difference from Node-RED (Claus, 2026-11-03): every average
-except car_charger_consumption is a trimmed mean -- the highest and
-lowest days are dropped first, so one counter glitch can't skew it (see
-_average()).
+Deliberate differences from Node-RED (Claus, 2026-11-03):
+- Every average except car_charger_consumption is a trimmed mean -- the
+  highest and lowest days are dropped first, so one odd day can't skew
+  it (see _average()).
+- nighttime_average_adjusted: the night (17-24 + 00-06) without the car
+  chargers' consumption, like daytime_average_adjusted for 08-16.
+  Node-RED only corrected the daytime, so a night car charge raised
+  Battery nightly target -- but the battery is never meant to cover a
+  car charge.
 """
 
 import asyncio
@@ -103,6 +108,11 @@ PwM_CONSUMPTION_DATA_ATTRIBUTES: list[str] = [
     # continuous night. Kept exactly as Node-RED defined it (Kasper,
     # 2026-09-28). Old: sensor.spidstimer_nat_17_06_snit.
     "nighttime_average",
+    # The same night, minus the chargers' own consumption in it. DIFF
+    # (Claus, 2026-11-03): Node-RED only corrected the daytime -- but the
+    # battery is never meant to cover a car charge, so Battery nightly
+    # target (data/solar_data.py) reads this one.
+    "nighttime_average_adjusted",
     # 00-24. Old: sensor.dogn_snit.
     "full_day_average",
     # 08-16 -- not implemented yet (no Pool segment).
@@ -143,6 +153,10 @@ _MAX_HISTORY_DAYS = 30
 # A single day's real household consumption above this is implausible --
 # see _is_plausible_day(). Kasper's own call on where to draw the line.
 _MAX_PLAUSIBLE_FULL_DAY_KWH = 250
+
+# Part of the source signature, so a change in what each history entry
+# holds rebuilds the histories from Recorder once. v2: nighttime_adjusted.
+_HISTORY_FORMAT = "v2"
 
 # Trimmed averages (see _average()): drop this share of the days at each
 # end -- one day at 7 days of history, two at 14, three at 21-30 -- but
@@ -302,12 +316,12 @@ def _average(
     source had no data) are left out. None if nothing's left.
 
     DIFF (Claus, 2026-11-03): a trimmed mean -- the highest and lowest
-    days are dropped first (see _trimmed()). A counter glitch that stays
-    under _MAX_PLAUSIBLE_FULL_DAY_KWH otherwise skews the average for the
-    whole period: on 2026-11-02 Growatt's Load Energy Total counted the
-    battery's night charge (~13 kWh/h, 00-04), and that one night lifted
-    nighttime_average -- and so Battery nightly target -- from ~29 to 38
-    kWh. A real change (a cold spell) still moves the trimmed mean from
+    days are dropped first (see _trimmed()). One odd day that stays under
+    _MAX_PLAUSIBLE_FULL_DAY_KWH otherwise skews the average for the whole
+    period: on 2026-11-02 a 44 kWh car charge at 00-04 lifted
+    nighttime_average from ~29 to 38 kWh (nighttime_average_adjusted now
+    takes the chargers out, but a counter glitch would do the same). A
+    real change (a cold spell) still moves the trimmed mean from
     its second day on. trim=False for a value that is spiky by nature
     (car_charger: mostly 0, a few charging days), where dropping the
     highest day would hide real consumption."""
@@ -328,7 +342,7 @@ def _average(
 def calculate_daytime_averages(
     history: list[dict[str, Any]], period_days: int, newest: date
 ) -> dict[str, float | None]:
-    """The 7 averages the daytime history supplies. Old Node-RED context
+    """The 8 averages the daytime history supplies. Old Node-RED context
     list: "Dagtime_forbrug_liste"."""
     return {
         "early_morning_average": _average(history, "early_morning", period_days, newest),
@@ -337,6 +351,9 @@ def calculate_daytime_averages(
         "daytime_average": _average(history, "daytime", period_days, newest),
         "daytime_average_adjusted": _average(history, "daytime_adjusted", period_days, newest),
         "nighttime_average": _average(history, "nighttime", period_days, newest),
+        "nighttime_average_adjusted": _average(
+            history, "nighttime_adjusted", period_days, newest
+        ),
         "car_charger_consumption": _average(
             history, "car_charger", period_days, newest, trim=False
         ),
@@ -357,6 +374,27 @@ def calculate_full_day_average(
     return _average(history, "full_day", period_days, newest)
 
 
+def _charger_consumption(
+    series: dict[str, dict[int, float]],
+    charger_entity_ids: list[str],
+    timestamps: dict[int, int],
+    periods: tuple[tuple[int, int], ...],
+) -> float | None:
+    """Every configured charger's consumption summed over periods (pairs
+    of _BOUNDARY_HOURS hours). 0.0 with no charger configured; None if a
+    charger has no value at a boundary or implausibly went down."""
+    total = 0.0
+    for entity_id in charger_entity_ids:
+        charger_series = series.get(entity_id, {})
+        for start, end in periods:
+            at_start = charger_series.get(timestamps[start])
+            at_end = charger_series.get(timestamps[end])
+            if at_start is None or at_end is None or at_end < at_start:
+                return None
+            total += at_end - at_start
+    return total
+
+
 def build_day(
     day: date,
     series: dict[str, dict[int, float]],
@@ -370,7 +408,8 @@ def build_day(
     car_charger is 0.0 with no charger configured, and None if a
     configured charger has no data for 08/16 that day (or implausibly
     went down) -- daytime_adjusted is then None too, and that day is
-    left out of those two averages only (see _average())."""
+    left out of those two averages only (see _average()). The same goes
+    for nighttime_adjusted with the chargers' 17-24 and 00-06 values."""
     timestamps = {
         hour: int(moment.timestamp()) for hour, moment in day_boundaries(day).items()
     }
@@ -391,19 +430,19 @@ def build_day(
         )
         return None
 
-    car_charger: float | None = 0.0
-    for entity_id in charger_entity_ids:
-        charger_series = series.get(entity_id, {})
-        at_8 = charger_series.get(timestamps[8])
-        at_16 = charger_series.get(timestamps[16])
-        if at_8 is None or at_16 is None or at_16 < at_8:
-            car_charger = None
-            break
-        car_charger += at_16 - at_8
+    car_charger = _charger_consumption(series, charger_entity_ids, timestamps, ((8, 16),))
+    car_charger_night = _charger_consumption(
+        series, charger_entity_ids, timestamps, ((17, 24), (0, 6))
+    )
 
     values["car_charger"] = round(car_charger, 2) if car_charger is not None else None
     values["daytime_adjusted"] = (
         round(values["daytime"] - car_charger, 2) if car_charger is not None else None
+    )
+    values["nighttime_adjusted"] = (
+        round(max(values["nighttime"] - car_charger_night, 0.0), 2)
+        if car_charger_night is not None
+        else None
     )
     values["date"] = day.isoformat()
     return values
@@ -592,7 +631,9 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
                 return
             charger_entity_ids = self._charger_entity_ids()
 
-            signature = "|".join([property_entity_id, *sorted(charger_entity_ids)])
+            signature = "|".join(
+                [_HISTORY_FORMAT, property_entity_id, *sorted(charger_entity_ids)]
+            )
             if signature != self._source_signature:
                 if self._source_signature is not None:
                     LOGGER.info(
@@ -677,6 +718,7 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
                 "daytime": values["daytime"],
                 "daytime_adjusted": values["daytime_adjusted"],
                 "nighttime": values["nighttime"],
+                "nighttime_adjusted": values["nighttime_adjusted"],
                 "car_charger": values["car_charger"],
             }
         )
