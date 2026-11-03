@@ -11,6 +11,7 @@ from homeassistant.helpers import selector
 
 from homeassistant.data_entry_flow import SectionConfig, section
 from homeassistant.helpers.event import async_call_later
+from homeassistant.helpers.translation import async_get_translations
 
 from . import async_setup_entry, async_unload_entry
 from .data.inverter_derived_data import derivable_entity_map_keys
@@ -433,6 +434,31 @@ def _auto_filled_note(labels: list[str]) -> str:
     if not labels:
         return ""
     return "\n\n✅ **Auto-filled:** " + ", ".join(labels) + "."
+
+
+async def _derived_fields_note(hass, derivable_keys: set[str]) -> str:
+    """The {derived_fields_note} for the Solar PV Plant page: a bold
+    heading and a list of the fields PwMngt calculates itself on this
+    install (Growatt Modbus, data/inverter_derived_data.py) -- the
+    "leave empty" advice in each field's own help text was easy to miss
+    (Claus, 2026-11-03). The heading comes from strings.json
+    (options.step.solar_pv_plant.derived_fields_note) like any other
+    user-facing text; "" when nothing is derivable, e.g. on Kostal."""
+    if not derivable_keys:
+        return ""
+    translations = await async_get_translations(
+        hass, hass.config.language, "options", [DOMAIN]
+    )
+    prefix = f"component.{DOMAIN}.options.step.solar_pv_plant."
+    heading = translations.get(prefix + "derived_fields_note")
+    if not heading:
+        return ""
+    labels = [
+        _AUTO_DETECT_LABELS.get(key, key)
+        for key, _unit, _required in _SOLAR_PV_PLANT_FIELDS
+        if key in derivable_keys
+    ]
+    return "\n\n" + heading + "\n" + "".join(f"\n- {label}" for label in labels)
 
 
 def _installed_charger_type_options(hass, options: list[str], current_value: str) -> list[str]:
@@ -994,7 +1020,8 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             data_schema=schema,
             errors=errors,
             description_placeholders={
-                "auto_filled_note": _auto_filled_note(auto_filled_labels)
+                "auto_filled_note": _auto_filled_note(auto_filled_labels),
+                "derived_fields_note": await _derived_fields_note(self.hass, derivable_keys),
             },
         )
 
