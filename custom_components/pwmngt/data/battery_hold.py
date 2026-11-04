@@ -39,11 +39,14 @@ as the hold, so a sudden PV drop can let the battery export a little for
 up to the cooldown before the power follows.
 
 Car charging (issue #33, new in PwMngt -- the battery must never cover a
-car charge, Claus 2026-11-04): while a charger charges a car at night
-(17-06, charger_properties.car_charging()) and SoC is above the limit, the
-hold is on with Battery hold power = House Consumption minus the car's
-charging power -- the battery covers the house, the grid the car. At or
-below the limit the normal rules apply. The minimum switch time also
+car charge, any time of day, Claus 2026-11-04): while a charger charges a
+car (charger_properties.car_charging()) and SoC is above the limit, the
+hold is on with Battery hold power = max(House Consumption minus the car,
+PV minus the loss margin) -- PV goes to the house and the car, the battery
+covers at most the house's own deficit, the grid the rest. Behind today's
+charge curve (battery_data's behind_charge_curve) the PV surplus charges
+the battery first: the power is the house without the car. At or below
+the limit the normal rules apply. The minimum switch time also
 applies here, so a car charge costs at most the hold's usual two EEPROM
 writes; following the car's power only moves the remote power. A charger
 without a power sensor: the battery idles (0 W). A Kostal can't be steered
@@ -184,9 +187,6 @@ _DEADBAND_UP_W = 300  # DEADBAND_OP: 2 Growatt-% at 150 W per %.
 _DEADBAND_DOWN_W = 150  # DEADBAND_NED: 1 % -- quicker, to avoid discharging.
 _HYSTERESIS = 5  # HYSTERESE: points above the limit before releasing.
 _MIN_SWITCH_SECONDS = 10 * 60  # MIN_SKIFT_MS: spares the inverter's EEPROM.
-# Issue #33: the night a car charge must not drain the battery (17-06).
-_CAR_COVER_START_HOUR = 17
-_CAR_COVER_END_HOUR = 6
 _DISCHARGE_W = 100  # AFLAD_W: discharging above this counts as "drawing".
 _DISCHARGE_SECONDS = 3 * 60  # AFLAD_TID_MS: at the limit, this long in a row.
 # New (issue #14): with this many big PV shifts in the last hour (clouds),
@@ -221,6 +221,8 @@ STATUS_NORMAL_OPERATION = "normal_operation"
 STATUS_BLOCKING_CHARGE = "blocking_charge"
 STATUS_BLOCKING_CHARGE_AT_LIMIT = "blocking_charge_at_limit"
 STATUS_COVERING_HOUSE_CAR_CHARGING = "covering_house_car_charging"
+STATUS_CAR_CHARGING_PV_TO_CAR = "car_charging_pv_to_car"
+STATUS_CAR_CHARGING_PV_TO_BATTERY = "car_charging_pv_to_battery"
 
 PwM_BATTERY_HOLD_SENSORS: list[SensorEntityDescription] = [
     # New in PwMngt -- Node-RED wrote this straight to
@@ -289,10 +291,13 @@ class BatteryHoldInputs:
     now: float  # Epoch seconds.
     winter: bool
     pv_big_shifts: int = 0  # solar_data's pv_big_shifts_last_60min.
-    # Issue #33: a car is charging at night (17-06), and with how much (W;
-    # None = unknown, the charger has no power sensor).
+    # Issue #33: a car is charging, and with how much (W; None = unknown,
+    # the charger has no power sensor).
     car_charging: bool = False
     car_power_w: float | None = None
+    # battery_data's behind_charge_curve: the PV surplus goes to the
+    # battery first while a car charges.
+    behind_charge_curve: bool = False
 
 
 @dataclass
@@ -357,13 +362,30 @@ def _start_power(st: BatteryHoldState, target: float, now: float) -> float:
     return target
 
 
-def _car_target(house_power: float, car_power_w: float | None) -> float:
-    """Issue #33: while a car charges, the battery covers the house without
-    the car -- House Consumption includes the charger, so take it out and
-    let the grid cover the car. Unknown car power: the battery idles."""
-    if car_power_w is None:
-        return 0.0
-    return max(0.0, house_power - car_power_w)
+def _car_target(st: BatteryHoldState, inputs: BatteryHoldInputs, starting: bool) -> tuple[float, str]:
+    """Issue #33: the power (W) and status while a car charges -- the
+    battery never covers the car (Claus, 2026-11-04).
+
+    House Consumption includes the charger, so the house alone is house
+    minus the car (unknown car power: 0, the battery idles). PV goes to
+    the house and the car first: the inverter puts out all of it (minus
+    the DC/AC loss margin of "Bloker ladning", issue #30), the battery
+    covers at most the house's own deficit, the grid the rest of the car.
+    Behind today's charge curve the surplus charges the battery instead,
+    so the evening target is still reached, and the grid covers the car."""
+    house_power, pv_power = inputs.house_power, inputs.pv_power
+    house_only = (
+        max(0.0, house_power - inputs.car_power_w) if inputs.car_power_w is not None else 0.0
+    )
+    if pv_power <= 0:
+        return house_only, STATUS_COVERING_HOUSE_CAR_CHARGING
+    if inputs.behind_charge_curve:
+        return house_only, STATUS_CAR_CHARGING_PV_TO_BATTERY
+    # Battery power only says something about the loss while PV alone sets
+    # the target (see _block_margin()).
+    feedback = pv_power - _MARGIN_W > house_only and not starting
+    pv_out = max(0.0, pv_power - _block_margin(st, inputs, feedback))
+    return max(house_only, pv_out), STATUS_CAR_CHARGING_PV_TO_CAR
 
 
 def _hold_target(soc: float, limit: float, pv_power: float, house_power: float) -> tuple[float, str]:
@@ -486,8 +508,8 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
     switch_ok = now - st.last_switch >= _MIN_SWITCH_SECONDS
     should_hold = active
     status = None
-    # Issue #33: a car charging at night above the limit -- hold, so the
-    # battery covers the house only (_car_target()). At or below the limit
+    # Issue #33: a car charging above the limit -- hold, so the battery
+    # never covers the car (_car_target()). At or below the limit
     # the normal rules apply. Starting and stopping keep the minimum switch
     # time: they are the hold's only EEPROM writes.
     car_cover = inputs.car_charging and soc > limit
@@ -550,7 +572,7 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
         st.holding = True
         st.last_switch = now
         if car_cover:
-            target = _car_target(house_power, inputs.car_power_w)
+            target, _ = _car_target(st, inputs, starting=True)
         else:
             target, _ = _hold_target(soc, limit, pv_power, house_power)
         return BatteryHoldResult(
@@ -569,7 +591,7 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
 
     # The power while the hold is active.
     if car_cover:
-        target, status = _car_target(house_power, inputs.car_power_w), STATUS_COVERING_HOUSE_CAR_CHARGING
+        target, status = _car_target(st, inputs, starting=started_by_other)
     else:
         target, hold_status = _hold_target(soc, limit, pv_power, house_power)
         if soc > limit:
@@ -725,14 +747,16 @@ class PwMngtBatteryHoldSensor(RestoreEntity, SensorEntity):
         )
 
     def _read_car_charging(self) -> dict[str, Any]:
-        """Issue #33: car_charging/car_power_w for BatteryHoldInputs --
-        only at night (17-06), when a car charge must not drain the
-        battery; during the day a car charges on PV surplus."""
-        hour = dt_util.now().hour
-        if not (hour >= _CAR_COVER_START_HOUR or hour < _CAR_COVER_END_HOUR):
-            return {"car_charging": False, "car_power_w": None}
+        """Issue #33: car_charging/car_power_w/behind_charge_curve for
+        BatteryHoldInputs."""
         car = charger_properties.car_charging(self.hass, self._entry)
-        return {"car_charging": car.charging, "car_power_w": car.power_w}
+        entity_id = pv_properties.battery_data_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        return {
+            "car_charging": car.charging,
+            "car_power_w": car.power_w,
+            "behind_charge_curve": bool(state and state.attributes.get("behind_charge_curve")),
+        }
 
     def _read_pv_big_shifts(self) -> int:
         """solar_data's pv_big_shifts_last_60min -- 0 (the normal wait)

@@ -87,8 +87,8 @@ Deliberate differences from Node-RED:
   which released data/battery_hold.py's hold. See _inputs_ready().
 
 - DIFF (issue #33, Claus 2026-11-04): Node-RED's "Aktiv - manuel" charger
-  rule (min_soc = SoC) also applies while any charger charges a car at
-  night (17-06), found from the chargers' own power sensors
+  rule (min_soc = SoC) also applies while any charger charges a car,
+  any time of day, found from the chargers' own power sensors
   (properties/charger_properties.py) -- PwMngt's charger State sensors
   aren't set by anything yet. Not on a Growatt: there data/battery_hold.py
   lets the battery cover the house without the car instead.
@@ -199,9 +199,6 @@ _DEFAULT_PRICE = 1.5
 # Charger state (sensor.py, PwM_CHARGER_SENSORS "state") that stops the
 # house battery from discharging. Old: "Aktiv - manuel".
 _CHARGER_STATE_ACTIVE_MANUAL = "Active - manual"
-# Issue #33: the night a car charge must not drain the battery (17-06).
-_CAR_LOCK_START_HOUR = 17
-_CAR_LOCK_END_HOUR = 6
 # Battery command (select.py, "battery_command") that pauses charging.
 # Old: "Bloker ladning". Node-RED also checked "Bloker batteri", which
 # PwMngt doesn't offer (removed, issue #29).
@@ -297,9 +294,9 @@ class BatteryInputs:
     # skips the whole run otherwise, same as Node-RED's top-of-function guard.
     grid_charged_day: float
     charger_states: list[str] = field(default_factory=list)
-    # Issue #33: a car is charging at night (17-06) on an inverter whose
-    # power PwMngt can't steer (Kostal) -- hold the SoC, so the battery
-    # doesn't cover the car. A Growatt covers the house only instead
+    # Issue #33: a car is charging, on an inverter whose power PwMngt
+    # can't steer (Kostal) -- hold the SoC, so the battery never covers
+    # the car (any time of day; PV still charges the battery). A Growatt covers the house only instead
     # (data/battery_hold.py), so this stays False there.
     car_charging_lock: bool = False
     # The SoC the battery is discharged to (pv_properties.battery_min_soc(),
@@ -525,11 +522,13 @@ def _target_floor(
 
 def calculate_battery_data(
     inputs: BatteryInputs, previous: BatteryLedger
-) -> tuple[int, BatteryLedger, str]:
+) -> tuple[int, BatteryLedger, str, bool]:
     """One run of Node-RED's "Min_SOC beregning".
 
-    Returns (min_soc, the new ledger, forced_charge "on"/"off"). Pure --
-    testable on its own.
+    Returns (min_soc, the new ledger, forced_charge "on"/"off", and whether
+    the SoC is behind today's charge curve -- issue #33: a car charging
+    then leaves the PV surplus to the battery). Pure -- testable on its
+    own.
     """
     # DIFF: Node-RED's fixed 5 everywhere below.
     empty_soc = inputs.battery_min_soc
@@ -671,9 +670,11 @@ def calculate_battery_data(
     grid_charge_planned_today = inputs.charge_status == _CHARGE_STATUS_YES_TODAY
 
     min_soc: float = empty_soc
+    behind_charge_curve = False
     if not vinter:
         # February - October.
         wanted = wanted_charge_now(now_minutes, target, end_minutes, curve_start_minutes, curve_start_soc)
+        behind_charge_curve = soc < target and soc < wanted and 9 <= hour <= 16 and before_target_end
 
         # 06-08: use the battery in the morning.
         if 6 <= hour <= 8:
@@ -788,7 +789,7 @@ def calculate_battery_data(
         target_floor_date=target_floor_date,
         target_floor=target_floor,
     )
-    return min_soc_rounded, ledger, forced_charge
+    return min_soc_rounded, ledger, forced_charge, behind_charge_curve
 
 
 # ---------------------------------------------------------------------------
@@ -972,9 +973,6 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         # mustn't pull in at module load.
         from .battery_hold import battery_hold_supported
 
-        hour = dt_util.now().hour
-        if not (hour >= _CAR_LOCK_START_HOUR or hour < _CAR_LOCK_END_HOUR):
-            return False
         if battery_hold_supported(self.hass):
             return False
         return charger_properties.car_charging(self.hass, self._entry).charging
@@ -1073,7 +1071,9 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             car_charging_lock=self._car_charging_lock(),
         )
 
-        min_soc, ledger, forced_charge = calculate_battery_data(inputs, self._ledger)
+        min_soc, ledger, forced_charge, behind_charge_curve = calculate_battery_data(
+            inputs, self._ledger
+        )
         self._ledger = ledger
 
         self._attr_native_value = min_soc
@@ -1083,6 +1083,8 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             "soc_cells": [round(v, 4) for v in ledger.soc_cells],
             "soc_count": len(ledger.soc_cells),
             "forced_charge": forced_charge,
+            # Issue #33 -- read by data/battery_hold.py.
+            "behind_charge_curve": behind_charge_curve,
             "avg_cheapest_hours": ledger.avg_cheapest_hours,
             "soc_previous": ledger.soc_previous,
             "grid_charge_previous": ledger.grid_charge_previous,
