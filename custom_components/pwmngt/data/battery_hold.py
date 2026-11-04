@@ -25,10 +25,12 @@ the charge_now_* commands:
 "Bloker ladning" (issue #28, new in PwMngt -- Claus's Kostal blocks
 charging through relays, a Growatt has no such input, and its VPP Charge
 Cutoff SOC only accepts 70-100 %): while battery_command is
-"block_charging", Battery hold power is max(house, PV) -- PV covers the
-house, the surplus is exported, the battery doesn't charge, and a house
-above PV is covered by the battery as usual. At or below battery_data's
-minimum SoC it is PV alone: the battery idles. Same deadband and cooldown
+"block_charging", Battery hold power is max(house, PV - margin) -- PV
+covers the house, the surplus is exported, the battery doesn't charge
+(beyond a little, issue #30: the margin covers the inverter's DC/AC loss,
+which would otherwise come out of the battery), and a house above PV is
+covered by the battery as usual. At or below battery_data's minimum SoC
+it is PV - margin alone: the battery idles. Same deadband and cooldown
 as the hold, so a sudden PV drop can let the battery export a little for
 up to the cooldown before the power follows.
 
@@ -300,13 +302,19 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
             st.blocking = True
             st.power_w = None
             st.last_write = now  # The start writes the power too.
+        # PV total is the strings' DC power, the remote power the inverter's
+        # AC output: asked for exactly PV, it takes its conversion loss
+        # from the battery (~200 W at 5.9 kW, Claus 2026-11-04, issue
+        # #30). The hold's own margin covers that -- the battery may then
+        # charge a little, but never exports.
+        pv_out = max(0.0, pv_power - _MARGIN_W)
         if soc <= limit:
             # At or below the minimum SoC: PV out only, the battery idles.
-            target, status = pv_power, STATUS_BLOCKING_CHARGE_AT_LIMIT
+            target, status = pv_out, STATUS_BLOCKING_CHARGE_AT_LIMIT
         else:
             # PV covers the house, the surplus is exported; a house above
             # PV is covered by the battery as usual.
-            target, status = max(house_power, pv_power), STATUS_BLOCKING_CHARGE
+            target, status = max(house_power, pv_out), STATUS_BLOCKING_CHARGE
         return BatteryHoldResult(st, None, status, True, _publish_power(st, target, now))
     if st.blocking:
         st.blocking = False
