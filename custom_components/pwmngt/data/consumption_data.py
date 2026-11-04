@@ -65,7 +65,6 @@ from homeassistant.helpers import event, restore_state
 from homeassistant.util import dt as dt_util
 
 from ..const import (
-    CHARGER_TYPE_NOT_INSTALLED,
     CONF_ENTITY_MAP,
     DOMAIN,
     ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL,
@@ -74,7 +73,7 @@ from ..devices import CHARGERS, pv_device_info
 from ..helpers.history_helper import fetch_state_changes_since
 from ..helpers.state_helper import read_float_state
 from ..helpers.statistics_helper import fetch_hourly_sums
-from ..properties import pv_properties
+from ..properties import charger_properties, pv_properties
 from . import DATA_SENSOR_STATE
 
 LOGGER = logging.getLogger(__name__)
@@ -595,26 +594,9 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
         ) or None
 
     def _charger_entity_ids(self) -> list[str]:
-        """Each installed charger's consumption_source_entity (text.py),
-        skipping a charger whose type is "Not installed" or whose field is
-        empty. Looked up via the entity registry, never by entity_id
-        string."""
-        registry = er.async_get(self.hass)
-        entity_ids: list[str] = []
-        for charger in CHARGERS:
-            prefix = f"{self._entry.entry_id}_{charger['id']}"
-            type_entity_id = registry.async_get_entity_id("select", DOMAIN, f"{prefix}_type")
-            type_state = self.hass.states.get(type_entity_id) if type_entity_id else None
-            if type_state is not None and type_state.state == CHARGER_TYPE_NOT_INSTALLED:
-                continue
-            text_entity_id = registry.async_get_entity_id(
-                "text", DOMAIN, f"{prefix}_consumption_source_entity"
-            )
-            text_state = self.hass.states.get(text_entity_id) if text_entity_id else None
-            if text_state is None or text_state.state in ("", "unknown", "unavailable"):
-                continue
-            entity_ids.append(text_state.state)
-        return entity_ids
+        """Each installed charger's consumption source -- see
+        charger_properties.consumption_source_entity_ids()."""
+        return charger_properties.consumption_source_entity_ids(self.hass, self._entry)
 
     async def _async_fill_missing_days(self) -> None:
         """Add every day of the last _MAX_HISTORY_DAYS (ending yesterday)

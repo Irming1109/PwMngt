@@ -38,6 +38,17 @@ it is PV - margin alone: the battery idles. Same deadband and cooldown
 as the hold, so a sudden PV drop can let the battery export a little for
 up to the cooldown before the power follows.
 
+Car charging (issue #33, new in PwMngt -- the battery must never cover a
+car charge, Claus 2026-11-04): while a charger charges a car at night
+(17-06, charger_properties.car_charging()) and SoC is above the limit, the
+hold is on with Battery hold power = House Consumption minus the car's
+charging power -- the battery covers the house, the grid the car. At or
+below the limit the normal rules apply. The minimum switch time also
+applies here, so a car charge costs at most the hold's usual two EEPROM
+writes; following the car's power only moves the remote power. A charger
+without a power sensor: the battery idles (0 W). A Kostal can't be steered
+like this -- data/battery_data.py holds its SoC instead.
+
 Only created on an install with growatt_modbus' "House Consumption" sensor
 (battery_hold_supported()) -- an inverter that holds its minimum SoC
 itself (e.g. Kostal) gets battery_data written to it instead (issue #1).
@@ -130,7 +141,7 @@ from ..const import (
 from ..devices import pv_device_info
 from ..helpers.entity_registry_helper import find_entity_by_name
 from ..helpers.state_helper import read_float_state
-from ..properties import pv_properties
+from ..properties import charger_properties, pv_properties
 from ..select import signal_set_battery_command
 from .solar_data import KEY_PV_BIG_SHIFTS_LAST_60MIN
 
@@ -173,6 +184,9 @@ _DEADBAND_UP_W = 300  # DEADBAND_OP: 2 Growatt-% at 150 W per %.
 _DEADBAND_DOWN_W = 150  # DEADBAND_NED: 1 % -- quicker, to avoid discharging.
 _HYSTERESIS = 5  # HYSTERESE: points above the limit before releasing.
 _MIN_SWITCH_SECONDS = 10 * 60  # MIN_SKIFT_MS: spares the inverter's EEPROM.
+# Issue #33: the night a car charge must not drain the battery (17-06).
+_CAR_COVER_START_HOUR = 17
+_CAR_COVER_END_HOUR = 6
 _DISCHARGE_W = 100  # AFLAD_W: discharging above this counts as "drawing".
 _DISCHARGE_SECONDS = 3 * 60  # AFLAD_TID_MS: at the limit, this long in a row.
 # New (issue #14): with this many big PV shifts in the last hour (clouds),
@@ -206,6 +220,7 @@ STATUS_HOLDING_AT_LIMIT = "holding_at_limit"
 STATUS_NORMAL_OPERATION = "normal_operation"
 STATUS_BLOCKING_CHARGE = "blocking_charge"
 STATUS_BLOCKING_CHARGE_AT_LIMIT = "blocking_charge_at_limit"
+STATUS_COVERING_HOUSE_CAR_CHARGING = "covering_house_car_charging"
 
 PwM_BATTERY_HOLD_SENSORS: list[SensorEntityDescription] = [
     # New in PwMngt -- Node-RED wrote this straight to
@@ -274,6 +289,10 @@ class BatteryHoldInputs:
     now: float  # Epoch seconds.
     winter: bool
     pv_big_shifts: int = 0  # solar_data's pv_big_shifts_last_60min.
+    # Issue #33: a car is charging at night (17-06), and with how much (W;
+    # None = unknown, the charger has no power sensor).
+    car_charging: bool = False
+    car_power_w: float | None = None
 
 
 @dataclass
@@ -336,6 +355,15 @@ def _start_power(st: BatteryHoldState, target: float, now: float) -> float:
     st.power_w = target
     st.last_write = now
     return target
+
+
+def _car_target(house_power: float, car_power_w: float | None) -> float:
+    """Issue #33: while a car charges, the battery covers the house without
+    the car -- House Consumption includes the charger, so take it out and
+    let the grid cover the car. Unknown car power: the battery idles."""
+    if car_power_w is None:
+        return 0.0
+    return max(0.0, house_power - car_power_w)
 
 
 def _hold_target(soc: float, limit: float, pv_power: float, house_power: float) -> tuple[float, str]:
@@ -458,8 +486,20 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
     switch_ok = now - st.last_switch >= _MIN_SWITCH_SECONDS
     should_hold = active
     status = None
+    # Issue #33: a car charging at night above the limit -- hold, so the
+    # battery covers the house only (_car_target()). At or below the limit
+    # the normal rules apply. Starting and stopping keep the minimum switch
+    # time: they are the hold's only EEPROM writes.
+    car_cover = inputs.car_charging and soc > limit
 
-    if (limit < _WINTER_MIN_LIMIT) if inputs.winter else (limit <= _FLOOR_LIMIT):
+    if car_cover:
+        if active:
+            should_hold = True
+        elif switch_ok:
+            should_hold = True
+        else:
+            status = STATUS_WAITING_MIN_SWITCH_TIME
+    elif (limit < _WINTER_MIN_LIMIT) if inputs.winter else (limit <= _FLOOR_LIMIT):
         # No (relevant) limit: always normal operation, at once.
         should_hold = False
         status = (
@@ -509,7 +549,10 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
         st.held_off_below = False
         st.holding = True
         st.last_switch = now
-        target, _ = _hold_target(soc, limit, pv_power, house_power)
+        if car_cover:
+            target = _car_target(house_power, inputs.car_power_w)
+        else:
+            target, _ = _hold_target(soc, limit, pv_power, house_power)
         return BatteryHoldResult(
             st, COMMAND_HOLD, STATUS_HOLD_STARTED, True, _start_power(st, target, now)
         )
@@ -525,11 +568,14 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
         return BatteryHoldResult(st, None, status or STATUS_NORMAL_OPERATION, active, None)
 
     # The power while the hold is active.
-    target, hold_status = _hold_target(soc, limit, pv_power, house_power)
-    if soc > limit:
-        status = status or hold_status
+    if car_cover:
+        target, status = _car_target(house_power, inputs.car_power_w), STATUS_COVERING_HOUSE_CAR_CHARGING
     else:
-        status = hold_status
+        target, hold_status = _hold_target(soc, limit, pv_power, house_power)
+        if soc > limit:
+            status = status or hold_status
+        else:
+            status = hold_status
     publish = _start_power if started_by_other else _publish_power
     return BatteryHoldResult(st, None, status, active, publish(st, target, now))
 
@@ -617,6 +663,8 @@ class PwMngtBatteryHoldSensor(RestoreEntity, SensorEntity):
                 pv_properties.battery_data_entity_id(self.hass, self._entry),
                 pv_properties.battery_command_entity_id(self.hass, self._entry),
                 pv_properties.battery_mode_entity_id(self.hass, self._entry),
+                # Issue #33: follow the car's charging power.
+                *charger_properties.car_charging_entity_ids(self.hass, self._entry),
             )
             if entity_id
         ]
@@ -673,7 +721,18 @@ class PwMngtBatteryHoldSensor(RestoreEntity, SensorEntity):
             now=dt_util.utcnow().timestamp(),
             winter=dt_util.now().month in _WINTER_MONTHS,
             pv_big_shifts=self._read_pv_big_shifts(),
+            **self._read_car_charging(),
         )
+
+    def _read_car_charging(self) -> dict[str, Any]:
+        """Issue #33: car_charging/car_power_w for BatteryHoldInputs --
+        only at night (17-06), when a car charge must not drain the
+        battery; during the day a car charges on PV surplus."""
+        hour = dt_util.now().hour
+        if not (hour >= _CAR_COVER_START_HOUR or hour < _CAR_COVER_END_HOUR):
+            return {"car_charging": False, "car_power_w": None}
+        car = charger_properties.car_charging(self.hass, self._entry)
+        return {"car_charging": car.charging, "car_power_w": car.power_w}
 
     def _read_pv_big_shifts(self) -> int:
         """solar_data's pv_big_shifts_last_60min -- 0 (the normal wait)

@@ -75,6 +75,14 @@ CHARGER_CONSUMPTION_SOURCE_TRANSLATION_KEYS: dict[str, tuple[str, str]] = {
     "Easee": ("easee", "session_energy"),
 }
 
+# Issue #33: a charger's live charging power, found on the same device as
+# its consumption source above -- (platform, translation_key), never the
+# entity_id. Easee reports kW, Wallbox W; the unit is read from the sensor.
+CHARGER_POWER_TRANSLATION_KEYS: dict[str, str] = {
+    "easee": "power",
+    "wallbox": "charging_power",
+}
+
 # ---------------------------------------------------------------------------
 # Inverter brand integrations. Same idea as CHARGER_TYPE_INTEGRATION_DOMAINS
 # above, for the Solar PV Plant flow's own "Inverter" field
