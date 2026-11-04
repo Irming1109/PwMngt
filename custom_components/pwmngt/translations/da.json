@@ -331,7 +331,9 @@
               "catching_up": "Indhenter grænsen - al PV i batteriet",
               "hard_hold_low_pv": "Hård lås, lav PV",
               "holding_at_limit": "Lås ved grænsen",
-              "normal_operation": "Frigivet (normal drift)"
+              "normal_operation": "Frigivet (normal drift)",
+              "blocking_charge": "Bloker ladning - PV ud, batteriet lader ikke",
+              "blocking_charge_at_limit": "Bloker ladning ved grænsen - batteriet i ro"
             }
           },
           "target_power": {

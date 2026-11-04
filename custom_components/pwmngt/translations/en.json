@@ -341,7 +341,9 @@
               "catching_up": "Catching up - all PV into the battery",
               "hard_hold_low_pv": "Hard hold, low PV",
               "holding_at_limit": "Holding at the limit",
-              "normal_operation": "Released (normal operation)"
+              "normal_operation": "Released (normal operation)",
+              "blocking_charge": "Blocking charge - PV exported, battery not charging",
+              "blocking_charge_at_limit": "Blocking charge at the limit - battery idle"
             }
           },
           "target_power": {

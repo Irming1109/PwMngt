@@ -14,12 +14,23 @@ Node-RED called growatt_modbus.set_battery_mode and number.set_value on
 the remote power, this module only writes its own entities. Claus's own
 Node-RED translates them, the same way his "Lad nu - Growatt" translates
 the charge_now_* commands:
-- battery_command changes TO "hold_min_soc": set_battery_mode "discharge".
-- battery_command changes FROM "hold_min_soc": set_battery_mode "release"
-  and remote power 0.
-- Battery hold power changes to a number while battery_command is
-  "hold_min_soc": remote power = -round(W / W per Growatt-%). The state is
-  "unknown" from the moment the hold starts until its first power write.
+- battery_command changes TO "hold_min_soc" or "block_charging":
+  set_battery_mode "discharge".
+- battery_command changes FROM those two to anything else:
+  set_battery_mode "release" and remote power 0. Between the two: nothing.
+- Battery hold power changes to a number while battery_command is one of
+  them: remote power = -round(W / W per Growatt-%). The state is "unknown"
+  from the moment either starts until its first power write.
+
+"Bloker ladning" (issue #28, new in PwMngt -- Claus's Kostal blocks
+charging through relays, a Growatt has no such input, and its VPP Charge
+Cutoff SOC only accepts 70-100 %): while battery_command is
+"block_charging", Battery hold power is max(house, PV) -- PV covers the
+house, the surplus is exported, the battery doesn't charge, and a house
+above PV is covered by the battery as usual. At or below battery_data's
+minimum SoC it is PV alone: the battery idles. Same deadband and cooldown
+as the hold, so a sudden PV drop can let the battery export a little for
+up to the cooldown before the power follows.
 
 Only created on an install with growatt_modbus' "House Consumption" sensor
 (battery_hold_supported()) -- an inverter that holds its minimum SoC
@@ -120,7 +131,11 @@ from .solar_data import KEY_PV_BIG_SHIFTS_LAST_60MIN
 LOGGER = logging.getLogger(__name__)
 
 COMMAND_HOLD = "hold_min_soc"  # New in PwMngt -- no Node-RED option.
+COMMAND_BLOCK_CHARGING = "block_charging"  # Old: "Bloker ladning".
 _COMMAND_INTERNAL = "internal"  # Old: "Intern".
+# The commands Battery hold power carries a power for -- the translator
+# runs both through the inverter's remote control (issue #28).
+_POWER_COMMANDS = frozenset({COMMAND_HOLD, COMMAND_BLOCK_CHARGING})
 
 # Node-RED's settings, same names translated.
 _FLOOR_LIMIT = 10  # BUND: Growatt's lowest cutoff -- a limit at or below means no hold.
@@ -165,6 +180,8 @@ STATUS_CATCHING_UP = "catching_up"
 STATUS_HARD_HOLD_LOW_PV = "hard_hold_low_pv"
 STATUS_HOLDING_AT_LIMIT = "holding_at_limit"
 STATUS_NORMAL_OPERATION = "normal_operation"
+STATUS_BLOCKING_CHARGE = "blocking_charge"
+STATUS_BLOCKING_CHARGE_AT_LIMIT = "blocking_charge_at_limit"
 
 PwM_BATTERY_HOLD_SENSORS: list[SensorEntityDescription] = [
     # New in PwMngt -- Node-RED wrote this straight to
@@ -212,6 +229,9 @@ class BatteryHoldState:
     # A wait ended without a hold (the discharge stopped) with SoC below
     # the limit: no hold unless the discharge starts again (issue #14).
     held_off_below: bool = False
+    # Whether battery_command was "block_charging" after the last run
+    # (issue #28) -- to force the first power write when it starts.
+    blocking: bool = False
 
 
 @dataclass
@@ -237,6 +257,22 @@ class BatteryHoldResult:
     target_power_w: float | None  # Before deadband/cooldown.
 
 
+def _publish_power(st: BatteryHoldState, target: float, now: float) -> float:
+    """Move st.power_w (the published power) towards target, behind the
+    deadband and the cooldown. Returns the rounded target."""
+    target = float(round(target))
+    # Deadband: quick when the output goes DOWN (towards 0), slower UP.
+    if st.power_w is None:
+        due = True
+    else:
+        difference = target - st.power_w
+        due = abs(difference) >= (_DEADBAND_DOWN_W if difference < 0 else _DEADBAND_UP_W)
+    if due and now - st.last_write >= _COOLDOWN_SECONDS:
+        st.power_w = target
+        st.last_write = now
+    return target
+
+
 def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -> BatteryHoldResult:
     """One run of '"Lås" batteri - growatt' -- see the module docstring
     for what differs from Node-RED."""
@@ -244,12 +280,37 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
     if any(value is None for value in numbers) or not inputs.battery_command:
         # Node-RED: "Ugyldigt input - intet ændret".
         return BatteryHoldResult(
-            state, None, STATUS_INVALID_INPUT, inputs.battery_command == COMMAND_HOLD, None
+            state, None, STATUS_INVALID_INPUT, inputs.battery_command in _POWER_COMMANDS, None
         )
 
     limit, soc, pv_power, house_power = inputs.limit, inputs.soc, inputs.pv_power, inputs.house_power
     now = inputs.now
     st = replace(state)
+
+    if inputs.battery_command == COMMAND_BLOCK_CHARGING:
+        # Issue #28: "Bloker ladning" through the same remote control as
+        # the hold -- a command like "Lad nu", so it applies in manual
+        # mode too. The hold's own bookkeeping starts over afterwards.
+        st.holding = False
+        st.discharge_start = 0.0
+        st.waiting = False
+        st.held_off_below = False
+        st.last_switch = 0.0  # May hold at once when the block ends.
+        if not st.blocking:
+            st.blocking = True
+            st.power_w = None
+            st.last_write = now  # The start writes the power too.
+        if soc <= limit:
+            # At or below the minimum SoC: PV out only, the battery idles.
+            target, status = pv_power, STATUS_BLOCKING_CHARGE_AT_LIMIT
+        else:
+            # PV covers the house, the surplus is exported; a house above
+            # PV is covered by the battery as usual.
+            target, status = max(house_power, pv_power), STATUS_BLOCKING_CHARGE
+        return BatteryHoldResult(st, None, status, True, _publish_power(st, target, now))
+    if st.blocking:
+        st.blocking = False
+        st.power_w = 0.0
 
     # How long has the battery been discharging in a row?
     discharging = inputs.battery_power > _DISCHARGE_W
@@ -390,19 +451,8 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
         # At the limit: PV covers the house as far as it reaches, minus a margin.
         target = max(0.0, min(house_power, pv_power - _MARGIN_W))
         status = STATUS_HOLDING_AT_LIMIT
-    target = float(round(target))
 
-    # Deadband: quick when the output goes DOWN (towards 0), slower UP.
-    if st.power_w is None:
-        due = True
-    else:
-        difference = target - st.power_w
-        due = abs(difference) >= (_DEADBAND_DOWN_W if difference < 0 else _DEADBAND_UP_W)
-    if due and now - st.last_write >= _COOLDOWN_SECONDS:
-        st.power_w = target
-        st.last_write = now
-
-    return BatteryHoldResult(st, None, status, active, target)
+    return BatteryHoldResult(st, None, status, active, _publish_power(st, target, now))
 
 
 # ---------------------------------------------------------------------------
@@ -433,6 +483,7 @@ class PwMngtBatteryHoldStoredData(ExtraStoredData):
                 discharge_start=float(restored.get("discharge_start") or 0.0),
                 waiting=bool(restored.get("waiting", False)),
                 held_off_below=bool(restored.get("held_off_below", False)),
+                blocking=bool(restored.get("blocking", False)),
             )
         )
 
