@@ -29,7 +29,10 @@ Cutoff SOC only accepts 70-100 %): while battery_command is
 "block_charging", Battery hold power is max(house, PV - margin) -- PV
 covers the house, the surplus is exported, the battery doesn't charge
 (beyond a little, issue #30: the margin covers the inverter's DC/AC loss,
-which would otherwise come out of the battery), and a house above PV is
+which would otherwise come out of the battery -- it starts at 8 % of PV,
+at least 300 W, and is corrected from Battery power towards a ~100 W
+charge, half the error per minute; only the power target moves, so no
+EEPROM writes are added), and a house above PV is
 covered by the battery as usual. At or below battery_data's minimum SoC
 it is PV - margin alone: the battery idles. Same deadband and cooldown
 as the hold, so a sudden PV drop can let the battery export a little for
@@ -145,6 +148,24 @@ _FLOOR_LIMIT = 10  # BUND: Growatt's lowest cutoff -- a limit at or below means 
 _WINTER_MIN_LIMIT = 20  # VINTER_MIN: Nov-Jan, hold only from a limit of 20 %.
 _WINTER_MONTHS = (11, 12, 1)
 _MARGIN_W = 300  # MARGIN_W: safety margin at the limit (clouds).
+# Issue #30: under "Bloker ladning" the margin also covers the inverter's
+# DC/AC loss, which grows with PV -- measured 2026-11-04 on Claus's WIT:
+# ~3 % at 5.9 kW, ~4.6 % at 6.5 kW, ~7.8 % at 8.7 kW. The margin starts at
+# this share of PV (at least _MARGIN_W) and is then corrected from the
+# battery's own power -- see _block_margin().
+_BLOCK_LOSS_SHARE = 0.08
+# The correction aims for a small charge (W, negative = charging) and
+# leaves it alone in this band -- the hold's own deadbands, so it doesn't
+# add power writes for noise.
+_BLOCK_AIM_W = -100.0
+_BLOCK_BAND_W = (-300.0, 50.0)
+# Only correct when the last power write has had time to show in Battery
+# power (Growatt: ~20 s updates, up to ~45 s after a command), and at most
+# this often. Half the error per step, so the slow loop doesn't swing.
+_BLOCK_SETTLE_SECONDS = 60
+_BLOCK_GAIN = 0.5
+# The correction's range, as a share of PV on top of _BLOCK_LOSS_SHARE.
+_BLOCK_CORRECTION_RANGE = (-_BLOCK_LOSS_SHARE, 0.07)
 _LOW_PV_W = 1000  # LAV_PV_W: below this, a hard hold at 0 W (never discharges).
 _FULL_SOC = 98  # FULD_SOC: above this, PV surplus may go to the grid.
 _COOLDOWN_SECONDS = 30  # COOLDOWN_MS: the growatt_modbus lock per register.
@@ -235,6 +256,10 @@ class BatteryHoldState:
     # Whether battery_command was "block_charging" after the last run
     # (issue #28) -- to force the first power write when it starts.
     blocking: bool = False
+    # Issue #30: the learned correction of the block's loss margin (share
+    # of PV), kept between blocks, and when it was last changed.
+    block_correction: float = 0.0
+    last_block_correction: float = 0.0
 
 
 @dataclass
@@ -258,6 +283,33 @@ class BatteryHoldResult:
     status: str
     active: bool
     target_power_w: float | None  # Before deadband/cooldown.
+
+
+def _block_margin(st: BatteryHoldState, inputs: BatteryHoldInputs, feedback: bool) -> float:
+    """The loss margin (W) under "Bloker ladning" (issue #30): the larger of
+    _MARGIN_W and (_BLOCK_LOSS_SHARE + the learned correction) of PV.
+
+    With feedback, once the last power write has settled, the correction
+    moves half-way towards a small charge (_BLOCK_AIM_W) when Battery power
+    is outside _BLOCK_BAND_W: discharging means the margin is too small,
+    charging more than ~300 W that it is too large. It only changes the
+    power target, so it never adds an EEPROM write (only set_battery_mode
+    is stored) and the deadbands still limit the power writes."""
+    pv_power = inputs.pv_power or 0.0
+    now = inputs.now
+    if (
+        feedback
+        and pv_power > 0
+        and inputs.battery_power is not None
+        and now - st.last_write >= _BLOCK_SETTLE_SECONDS
+        and now - st.last_block_correction >= _BLOCK_SETTLE_SECONDS
+        and not _BLOCK_BAND_W[0] <= inputs.battery_power <= _BLOCK_BAND_W[1]
+    ):
+        step_w = (inputs.battery_power - _BLOCK_AIM_W) * _BLOCK_GAIN
+        low, high = _BLOCK_CORRECTION_RANGE
+        st.block_correction = min(max(st.block_correction + step_w / pv_power, low), high)
+        st.last_block_correction = now
+    return max(_MARGIN_W, pv_power * (_BLOCK_LOSS_SHARE + st.block_correction))
 
 
 def _publish_power(st: BatteryHoldState, target: float, now: float) -> float:
@@ -329,10 +381,14 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
         st.blocking = True
         # PV total is the strings' DC power, the remote power the inverter's
         # AC output: asked for exactly PV, it takes its conversion loss
-        # from the battery (~200 W at 5.9 kW, Claus 2026-11-04, issue
-        # #30). The hold's own margin covers that -- the battery may then
+        # from the battery (~200 W at 5.9 kW, ~375 W at 8.7 kW, Claus
+        # 2026-11-04, issue #30). The margin covers it: the battery may then
         # charge a little, but never exports.
-        pv_out = max(0.0, pv_power - _MARGIN_W)
+        # Battery power only says something about the loss while the
+        # target is PV alone -- with a house above PV the battery is meant
+        # to discharge.
+        feedback = (soc <= limit or house_power <= pv_power) and not starting
+        pv_out = max(0.0, pv_power - _block_margin(st, inputs, feedback))
         if soc <= limit:
             # At or below the minimum SoC: PV out only, the battery idles.
             target, status = pv_out, STATUS_BLOCKING_CHARGE_AT_LIMIT
@@ -507,6 +563,8 @@ class PwMngtBatteryHoldStoredData(ExtraStoredData):
                 waiting=bool(restored.get("waiting", False)),
                 held_off_below=bool(restored.get("held_off_below", False)),
                 blocking=bool(restored.get("blocking", False)),
+                block_correction=float(restored.get("block_correction") or 0.0),
+                last_block_correction=float(restored.get("last_block_correction") or 0.0),
             )
         )
 
