@@ -242,6 +242,8 @@ _RATE_LIMIT_SECONDS = 5
 # How long after a start a missing Battery nightly target means "not ready
 # yet" rather than "use the fallback" -- see _inputs_ready().
 _STARTUP_GRACE = timedelta(minutes=10)
+# How soon a run skipped by _inputs_ready() is tried again.
+_NOT_READY_RETRY_SECONDS = 10
 _TARGET_TRIGGER_START = (0, 1)    # 00:01
 _TARGET_TRIGGER_END = (16, 59)    # 16:59
 _PERIODIC_HOURS = list(range(6, 24))
@@ -970,6 +972,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         if soc is None:
             # Node-RED: return null if sensor.batteri_soc is
             # unavailable/unknown/undefined. No fallback -- skip the run.
+            self._retry_soon(startup_only=True)
             return
 
         grid_charged_day = (
@@ -980,9 +983,12 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         if grid_charged_day is None:
             # Node-RED: return null if sensor.batteri_ladet_fra_grid_pr_dag
             # is unavailable/unknown/undefined. No fallback -- skip the run.
+            if self._grid_charged_entity_id:
+                self._retry_soon(startup_only=True)
             return
 
         if not self._inputs_ready():
+            self._retry_soon()
             return
 
         battery_min_soc = pv_properties.battery_min_soc(self.hass, self._entry)
@@ -1039,14 +1045,31 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         self._attr_available = True
         self.async_write_ha_state()
 
+    def _retry_soon(self, startup_only: bool = False) -> None:
+        """Run again in _NOT_READY_RETRY_SECONDS instead of waiting for the
+        next trigger -- at night, with SoC standing still, that could be
+        the next quarter of an hour, with battery_data "unknown" and the
+        hold without a limit all the while (issue #25). Other triggers in
+        between merge into that run, as with the rate limit.
+        startup_only: an input Node-RED also just waits for (SoC, grid
+        charged today) -- retried only during _STARTUP_GRACE, when it's
+        most likely just not loaded yet, not for as long as it's down."""
+        if self._pending_run is not None:
+            return
+        if startup_only and dt_util.utcnow() - self._added_at >= _STARTUP_GRACE:
+            return
+        self._pending_run = event.async_call_later(
+            self.hass, _NOT_READY_RETRY_SECONDS, self._handle_pending_run
+        )
+
     def _inputs_ready(self) -> bool:
         """False right after a start, while the minimum-SoC select -- or,
         for the first _STARTUP_GRACE, Battery nightly target -- has no real
         value yet. Their fallbacks would publish a false min_soc for a
         moment (5 % at a restart, Claus 2026-10-29), which released
         data/battery_hold.py's hold at once. Skipping keeps the state
-        "unknown" until the next trigger. After the grace period a missing
-        target falls back as in Node-RED (e.g. no Solcast at all)."""
+        "unknown" until a retry (_retry_soon()) finds them ready. After the grace period a missing target falls back as in
+        Node-RED (e.g. no Solcast at all)."""
         min_soc_entity_id = pv_properties.battery_min_soc_entity_id(self.hass, self._entry)
         if self._read_float(min_soc_entity_id, None) is None:
             return False
