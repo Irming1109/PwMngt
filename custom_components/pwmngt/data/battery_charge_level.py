@@ -213,7 +213,7 @@ _MANUAL_CHARGING_MIN_W = 100.0
 _MANUAL_LEVELS = (100, 75, 50, 25)
 
 # Charge levels in order, for "is this a step up or down?". Anything not
-# listed (internal, hold_min_soc, block_*) counts as not charging.
+# listed (internal, hold_min_soc, block_charging) counts as not charging.
 _CHARGE_LEVEL_RANK = {
     "charge_now_25": 1,
     "charge_now_50": 2,

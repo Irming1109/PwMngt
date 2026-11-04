@@ -59,7 +59,7 @@ Deliberate differences from Node-RED (agreed with Claus, issue #12):
   user) takes over -- the translator releases as soon as battery_command
   leaves "hold_min_soc", whoever changes it. Node-RED paused only for
   "Lad nu"; here every other command pauses it ("charge_now_*",
-  "block_*", "discharge_now_*" all outrank the hold), and the hold only
+  "block_charging", "discharge_now_*" all outrank the hold), and the hold only
   ever writes battery_command while it is "internal" or "hold_min_soc".
 - Paused while battery_mode is "manual", like the other battery_command
   writers (battery_charge_level.py, battery_sell_decision.py). Unlike

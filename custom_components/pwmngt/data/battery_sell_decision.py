@@ -77,10 +77,9 @@ export, not guessed):
   immediately, no delay (Node-RED: "Lejere prioriteres on/off" output 2)
   -- so a release isn't stuck waiting for the next scheduled tick.
 - The override boolean turning *on* -> NOT a run of the full decision --
-  Node-RED wires this straight to its own small "force block_charging
-  unless already block_battery" check instead (see
-  _handle_override_turned_on below), independent of whatever the price/
-  forecast calculation would currently say.
+  Node-RED wires this straight to its own small "force block_charging"
+  check instead (see _handle_override_turned_on below), independent of
+  whatever the price/forecast calculation would currently say.
 - (Node-RED also has a bare inject with no crontab and once=false --
   never fires on its own, a manual debug button; not ported, same
   treatment other unported manual-only Node-RED nodes get elsewhere.)
@@ -140,9 +139,7 @@ _CHARGETIME_SAFETY_MARGIN = 1.10
 _DEFAULT_TARGET_END_TIME = "16:45"      # Node-RED: batteri_target_sluttid || "16:45".
 
 _COMMAND_INTERNAL = "internal"           # Old: "Intern".
-_COMMAND_BLOCK_BATTERY = "block_battery"  # Old: "Bloker batteri".
 _COMMAND_BLOCK_CHARGING = "block_charging"  # Old: "Bloker ladning".
-_BLOCKED_COMMANDS = frozenset({_COMMAND_BLOCK_BATTERY, _COMMAND_BLOCK_CHARGING})
 # battery_command options meaning tonight's grid charge
 # (data/battery_charge_level.py) is actively running -- Node-RED's own
 # top guard returns null outright while any of these is set.
@@ -355,7 +352,7 @@ def calculate_battery_sell_decision(inputs: BatterySellInputs) -> str | None:
     if sell_basis:
         if (
             inputs.spotprice_ex_vat <= _PRICE_FLOOR
-            and inputs.battery_command in _BLOCKED_COMMANDS
+            and inputs.battery_command == _COMMAND_BLOCK_CHARGING
         ):
             # Node-RED: this branch only ever set prioriter_stuehus here
             # (del 3, excluded) -- would_sell stays False.
@@ -365,11 +362,11 @@ def calculate_battery_sell_decision(inputs: BatterySellInputs) -> str | None:
     # else: Node-RED's own else-branch only had the excluded HOEJPRIS_
     # GENVEJ shortcut -- would_sell stays False.
 
-    if would_sell and inputs.battery_command not in _BLOCKED_COMMANDS:
+    if would_sell and inputs.battery_command != _COMMAND_BLOCK_CHARGING:
         return _COMMAND_BLOCK_CHARGING
     if (
         not would_sell
-        and inputs.battery_command in _BLOCKED_COMMANDS
+        and inputs.battery_command == _COMMAND_BLOCK_CHARGING
         and not inputs.override_active
         and inputs.hour >= _WINDOW_START_HOUR
     ):
@@ -520,16 +517,13 @@ class PwMngtBatterySellDecisionController:
     @callback
     def _handle_override_turned_on(self) -> None:
         """Node-RED: "Lejere prioriteres on/off" output 1 -> "Batteri
-        status" (get) -> "Aktivt?" (switch, payload != "Bloker batteri")
-        -> "Batteri => Bloker ladning". Forces selling mode immediately,
-        independent of the price/forecast calculation -- see const.py's
-        own docstring on ENTITY_KEY_SELL_FORCE_OVERRIDE for why this is
-        one-way-only."""
-        if self._read_battery_command() == _COMMAND_BLOCK_BATTERY:
-            # Node-RED's own switch excludes only this one state -- it
-            # still re-sends "block_charging" even when already
-            # "block_charging" (harmless).
-            return
+        status" (get) -> "Aktivt?" (switch) -> "Batteri => Bloker
+        ladning". Forces selling mode immediately, independent of the
+        price/forecast calculation -- see const.py's own docstring on
+        ENTITY_KEY_SELL_FORCE_OVERRIDE for why this is one-way-only.
+        Node-RED's switch skipped a "Bloker batteri" command; PwMngt has no
+        such command (removed, issue #29), so it always sends -- also when
+        already "block_charging" (harmless)."""
         self._send_battery_command(_COMMAND_BLOCK_CHARGING)
 
     # -- runs ----------------------------------------------------------------

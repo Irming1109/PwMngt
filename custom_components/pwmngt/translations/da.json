@@ -281,7 +281,6 @@
       "battery_command": {
         "state": {
           "internal": "Intern",
-          "block_battery": "Bloker batteri",
           "block_charging": "Bloker ladning",
           "charge_now_25": "Lad nu - 25% effekt",
           "charge_now_50": "Lad nu - 50% effekt",

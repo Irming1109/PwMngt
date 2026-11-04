@@ -291,7 +291,6 @@
       "battery_command": {
         "state": {
           "internal": "Internal",
-          "block_battery": "Block battery",
           "block_charging": "Block charging",
           "charge_now_25": "Charge now - 25% power",
           "charge_now_50": "Charge now - 50% power",

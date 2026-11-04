@@ -42,8 +42,7 @@ New in this export (not present in the previously-ported version):
   cells within that margin are free to use. This replaces the old
   all-or-nothing "protect every grid cell at night" rule.
 - A "restart plan": if the battery command blocks charging
-  ("block_charging") or blocks the battery outright ("block_battery")
-  during 06:00-16:59, that moment (today's date, time of day, SoC) is
+  ("block_charging") during 06:00-16:59, that moment (today's date, time of day, SoC) is
   remembered. While that plan is still "active" (same calendar day,
   recorded after 09:00), the charge curve (wanted_charge_now) restarts
   from that point instead of from 09:00/minimum SoC -- so resuming after a
@@ -193,10 +192,10 @@ _DEFAULT_PRICE = 1.5
 # Charger state (sensor.py, PwM_CHARGER_SENSORS "state") that stops the
 # house battery from discharging. Old: "Aktiv - manuel".
 _CHARGER_STATE_ACTIVE_MANUAL = "Active - manual"
-# Battery commands (select.py, "battery_command") that pause charging.
-# Old: "Bloker ladning" / "Bloker batteri".
+# Battery command (select.py, "battery_command") that pauses charging.
+# Old: "Bloker ladning". Node-RED also checked "Bloker batteri", which
+# PwMngt doesn't offer (removed, issue #29).
 _COMMAND_BLOCK_CHARGING = "block_charging"
-_COMMAND_BLOCK_BATTERY = "block_battery"
 # Battery commands (select.py, "battery_command") that mean "actively
 # charging from the grid right now" -- same set as
 # data/battery_charge_level.py's own _ACTIVE_CHARGE_COMMANDS (duplicated
@@ -636,7 +635,7 @@ def calculate_battery_data(
         cells = []
 
     # ---- Restart plan (see _restart_plan()) ---------------------------
-    blocked = inputs.battery_command in (_COMMAND_BLOCK_CHARGING, _COMMAND_BLOCK_BATTERY)
+    blocked = inputs.battery_command == _COMMAND_BLOCK_CHARGING
     today = inputs.now.strftime("%Y-%m-%d")
     plan_date, plan_start_minutes, plan_start_soc = _restart_plan(
         previous, today, blocked, hour, now_minutes, soc

@@ -318,10 +318,12 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
     # grid charge) and data/battery_sell_decision.py ("block_charging"/
     # "internal", daytime selling) and data/battery_hold.py ("hold_min_
     # soc"/"internal", Growatt only) -- and read by data/battery_data.py
-    # (its "block_charging"/"block_battery" restart-plan check). Options
-    # are translation keys; the display text (English/Danish) lives in
-    # strings.json / translations/*.json under entity.select.battery_
-    # command.state.
+    # (its "block_charging" restart-plan check). Options are translation
+    # keys; the display text (English/Danish) lives in strings.json /
+    # translations/*.json under entity.select.battery_command.state.
+    # Node-RED's "Bloker batteri" isn't offered -- nothing sets it any
+    # more (Claus, 2026-11-04, issue #29); a restored "block_battery"
+    # isn't an option, so the select starts on "internal".
     PwMngtSelectEntityDescription(
         key="battery_command",
         name="Battery command",
@@ -329,7 +331,6 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         entity_category=EntityCategory.DIAGNOSTIC,
         options=[
             "internal",          # Old: "Intern"
-            "block_battery",     # Old: "Bloker batteri"
             "block_charging",    # Old: "Bloker ladning"
             "charge_now_25",     # Old: "Lad nu - 25% effekt"
             "charge_now_50",     # Old: "Lad nu - 50% effekt"
