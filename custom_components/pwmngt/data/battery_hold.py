@@ -19,8 +19,9 @@ the charge_now_* commands:
 - battery_command changes FROM those two to anything else:
   set_battery_mode "release" and remote power 0. Between the two: nothing.
 - Battery hold power changes to a number while battery_command is one of
-  them: remote power = -round(W / W per Growatt-%). The state is "unknown"
-  from the moment either starts until its first power write.
+  them: remote power = -round(W / W per Growatt-%). Battery hold power
+  has its target already when either starts (issue #31) -- written before
+  the command, so the translator starts with it rather than at 1 %.
 
 "Bloker ladning" (issue #28, new in PwMngt -- Claus's Kostal blocks
 charging through relays, a Growatt has no such input, and its VPP Charge
@@ -275,6 +276,32 @@ def _publish_power(st: BatteryHoldState, target: float, now: float) -> float:
     return target
 
 
+def _start_power(st: BatteryHoldState, target: float, now: float) -> float:
+    """Publish target at once when the hold or the block starts (issue
+    #31): the start writes the inverter's remote power anyway, so the lock
+    starts now -- later changes wait out the cooldown as usual."""
+    target = float(round(target))
+    st.power_w = target
+    st.last_write = now
+    return target
+
+
+def _hold_target(soc: float, limit: float, pv_power: float, house_power: float) -> tuple[float, str]:
+    """The power (W) and status while the hold is active."""
+    if soc > limit:
+        # Within the hysteresis: the battery may discharge down to the limit.
+        target = max(house_power, pv_power) if soc >= _FULL_SOC else house_power
+        return target, STATUS_ABOVE_LIMIT
+    if soc < limit:
+        # Below the limit: all PV into the battery, the grid covers the house.
+        return 0.0, STATUS_CATCHING_UP
+    if pv_power < _LOW_PV_W:
+        # At the limit with little PV: hard hold.
+        return 0.0, STATUS_HARD_HOLD_LOW_PV
+    # At the limit: PV covers the house as far as it reaches, minus a margin.
+    return max(0.0, min(house_power, pv_power - _MARGIN_W)), STATUS_HOLDING_AT_LIMIT
+
+
 def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -> BatteryHoldResult:
     """One run of '"Lås" batteri - growatt' -- see the module docstring
     for what differs from Node-RED."""
@@ -298,10 +325,8 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
         st.waiting = False
         st.held_off_below = False
         st.last_switch = 0.0  # May hold at once when the block ends.
-        if not st.blocking:
-            st.blocking = True
-            st.power_w = None
-            st.last_write = now  # The start writes the power too.
+        starting = not st.blocking
+        st.blocking = True
         # PV total is the strings' DC power, the remote power the inverter's
         # AC output: asked for exactly PV, it takes its conversion loss
         # from the battery (~200 W at 5.9 kW, Claus 2026-11-04, issue
@@ -315,7 +340,8 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
             # PV covers the house, the surplus is exported; a house above
             # PV is covered by the battery as usual.
             target, status = max(house_power, pv_out), STATUS_BLOCKING_CHARGE
-        return BatteryHoldResult(st, None, status, True, _publish_power(st, target, now))
+        publish = _start_power if starting else _publish_power
+        return BatteryHoldResult(st, None, status, True, publish(st, target, now))
     if st.blocking:
         st.blocking = False
         st.power_w = 0.0
@@ -366,10 +392,9 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
         )
 
     active = inputs.battery_command == COMMAND_HOLD
-    if active and not st.holding:
-        # Set by someone else (e.g. by hand): force the first power write.
-        st.power_w = None
-    elif not active:
+    # Set by someone else (e.g. by hand): its target at once, like our own start.
+    started_by_other = active and not st.holding
+    if not active:
         st.power_w = 0.0
 
     # Should the hold be active? Only once SoC has reached the limit --
@@ -427,10 +452,11 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
         st.waiting = False
         st.held_off_below = False
         st.holding = True
-        st.power_w = None
-        st.last_write = now  # The start writes the power too -- respect the lock.
         st.last_switch = now
-        return BatteryHoldResult(st, COMMAND_HOLD, STATUS_HOLD_STARTED, True, None)
+        target, _ = _hold_target(soc, limit, pv_power, house_power)
+        return BatteryHoldResult(
+            st, COMMAND_HOLD, STATUS_HOLD_STARTED, True, _start_power(st, target, now)
+        )
     if not should_hold and active:
         st.holding = False
         st.power_w = 0.0
@@ -443,24 +469,13 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
         return BatteryHoldResult(st, None, status or STATUS_NORMAL_OPERATION, active, None)
 
     # The power while the hold is active.
+    target, hold_status = _hold_target(soc, limit, pv_power, house_power)
     if soc > limit:
-        # Within the hysteresis: the battery may discharge down to the limit.
-        target = max(house_power, pv_power) if soc >= _FULL_SOC else house_power
-        status = status or STATUS_ABOVE_LIMIT
-    elif soc < limit:
-        # Below the limit: all PV into the battery, the grid covers the house.
-        target = 0.0
-        status = STATUS_CATCHING_UP
-    elif pv_power < _LOW_PV_W:
-        # At the limit with little PV: hard hold.
-        target = 0.0
-        status = STATUS_HARD_HOLD_LOW_PV
+        status = status or hold_status
     else:
-        # At the limit: PV covers the house as far as it reaches, minus a margin.
-        target = max(0.0, min(house_power, pv_power - _MARGIN_W))
-        status = STATUS_HOLDING_AT_LIMIT
-
-    return BatteryHoldResult(st, None, status, active, _publish_power(st, target, now))
+        status = hold_status
+    publish = _start_power if started_by_other else _publish_power
+    return BatteryHoldResult(st, None, status, active, publish(st, target, now))
 
 
 # ---------------------------------------------------------------------------
