@@ -202,6 +202,11 @@ _MANUAL_IDLE_STOP_SECONDS = 5 * 60
 # Don't count the idle time right after a new command: Growatt waits up to
 # 30 s per control register before it takes a new one.
 _MANUAL_START_GRACE_SECONDS = 2 * 60
+# Issue #27: Growatt's battery power lags the phase currents, so right
+# after a charge level is set the charge current is in the fuse loads but
+# not yet in Battery power. For this long the fuse check counts the
+# commanded charge power instead, when that is the larger.
+_CHARGE_START_GRACE_SECONDS = 60
 # Below this charge power (W) the battery counts as not charging.
 _MANUAL_CHARGING_MIN_W = 100.0
 # Manual levels, highest first, for stepping down from the chosen one.
@@ -864,18 +869,37 @@ class PwMngtBatteryChargeLevelController:
         active -- that power comes from the grid and is already in the
         measured fuse loads. 0 otherwise (a PV charge doesn't load the main
         fuse) and while Battery power is missing."""
-        if not currently_charging(self._read_battery_command()):
+        entity_id = pv_properties.battery_command_entity_id(self.hass, self._entry)
+        command = self.hass.states.get(entity_id) if entity_id else None
+        if command is None or not currently_charging(command.state):
             return 0.0
         power = (
             read_float_state(self.hass.states.get(self._battery_power_entity_id))
             if self._battery_power_entity_id
             else None
         )
-        if power is None:
+        measured = 0.0
+        if power is not None:
+            # Normalized: positive = discharging, so charging is negative.
+            power *= pv_properties.power_sign(self._entry, ENTITY_KEY_BATTERY_POWER)
+            measured = max(-power, 0.0)
+        since_set = (dt_util.utcnow() - command.last_changed).total_seconds()
+        if since_set < _CHARGE_START_GRACE_SECONDS:
+            # Issue #27 -- see _CHARGE_START_GRACE_SECONDS.
+            return max(measured, self._commanded_charge_power(command.state))
+        return measured
+
+    def _commanded_charge_power(self, command: str) -> float:
+        """W a charge_now_<level> command asks for: level % of Battery max
+        charge effect (the same base "Lad nu" uses on the inverter)."""
+        try:
+            level = float(command.rsplit("_", 1)[1])
+        except (IndexError, ValueError):
             return 0.0
-        # Normalized: positive = discharging, so charging is negative.
-        power *= pv_properties.power_sign(self._entry, ENTITY_KEY_BATTERY_POWER)
-        return max(-power, 0.0)
+        max_charge = self._read_battery_max_charge()
+        if max_charge is None:
+            max_charge = _BATTERY_MAX_CHARGE_FALLBACK
+        return max_charge * level / 100
 
     def _read_battery_max_charge(self) -> float | None:
         entity_id = pv_properties.battery_max_charge_effect_entity_id(self.hass, self._entry)
