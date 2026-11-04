@@ -1092,6 +1092,348 @@ class PwMBatteryCard extends HTMLElement {
 }
 pwmDefine("pwm-battery-card", PwMBatteryCard);
 
+/** Battery ring card texts -- same language pick as PWM_BATTERY_TEXTS. */
+const PWM_RING_TEXTS = {
+  en: {
+    title: "Battery",
+    charging: (kw) => `▲ ${kw} kW charging`,
+    discharging: (kw) => `▼ ${kw} kW discharging`,
+    idle: "idle",
+    pv: (pct) => `☀ PV ${pct}%`,
+    grid: (pct) => `⚡ Grid ${pct}%`,
+    min: (pct) => `🔒 Min ${pct}%`,
+    target: (pct) => `🎯 Target ${pct}%`,
+    toFull: (time) => `⏱ full in ${time}`,
+    toMin: (time) => `⏱ min in ${time}`,
+    command: {
+      internal: "Internal control",
+      block_charging: "Charging blocked",
+      hold_min_soc: "Battery hold active",
+      charge: (pct) => `Charging ${pct}%`,
+      manual: " (manual)",
+      manualPaused: "Manual charge - paused (main fuse)",
+      discharge: (pct) => `Discharging ${pct}%`,
+    },
+    hold: {
+      holding_at_limit: "held at min",
+      hard_hold_low_pv: "held (low PV)",
+      above_limit: "above the limit",
+      waiting_discharge: "waiting",
+      at_limit: "at the limit",
+      catching_up: "below the limit",
+      normal_operation: "normal operation",
+      blocking_charge: "charging blocked",
+      blocking_charge_at_limit: "blocked at min",
+      paused_other_command: "paused",
+      released_no_limit: "released",
+    },
+    missing: "PwMngt battery entities not found - is the Solar PV Plant set up?",
+  },
+  da: {
+    title: "Batteri",
+    charging: (kw) => `▲ ${kw} kW lader`,
+    discharging: (kw) => `▼ ${kw} kW aflader`,
+    idle: "hviler",
+    pv: (pct) => `☀ PV ${pct} %`,
+    grid: (pct) => `⚡ Net ${pct} %`,
+    min: (pct) => `🔒 Min ${pct} %`,
+    target: (pct) => `🎯 Target ${pct} %`,
+    toFull: (time) => `⏱ fuld om ${time}`,
+    toMin: (time) => `⏱ min om ${time}`,
+    command: {
+      internal: "Intern styring",
+      block_charging: "Ladning blokeret",
+      hold_min_soc: "Batterilås aktiv",
+      charge: (pct) => `Lader ${pct} %`,
+      manual: " (manuel)",
+      manualPaused: "Manuel ladning - pause (hovedsikring)",
+      discharge: (pct) => `Aflader ${pct} %`,
+    },
+    hold: {
+      holding_at_limit: "låst ved min",
+      hard_hold_low_pv: "låst (lav PV)",
+      above_limit: "over grænsen",
+      waiting_discharge: "afventer",
+      at_limit: "ved grænsen",
+      catching_up: "under grænsen",
+      normal_operation: "normal drift",
+      blocking_charge: "ladning blokeret",
+      blocking_charge_at_limit: "blokeret ved min",
+      paused_other_command: "pause",
+      released_no_limit: "frigivet",
+    },
+    missing: "PwMngt's batteri-entities blev ikke fundet - er Solar PV Plant sat op?",
+  },
+};
+
+const PWM_RING_CARD_STYLE = `
+  ha-card {
+    padding: 12px 12px 16px;
+    border-radius: var(--ha-card-border-radius, 18px);
+    background:
+      radial-gradient(circle at 50% 35%, rgba(255, 180, 0, 0.10), transparent 60%),
+      var(--ha-card-background, var(--card-background-color));
+  }
+  svg { width: 100%; max-width: 260px; display: block; margin: auto; }
+  .live { animation: pwm-pulse 2.4s ease-in-out infinite; }
+  @keyframes pwm-pulse { 0%, 100% { opacity: 0.75; } 50% { opacity: 1; } }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 4px; }
+  .chip { padding: 4px 10px; border-radius: 999px; font-size: 12px; white-space: nowrap;
+    color: var(--primary-text-color); background: var(--secondary-background-color); }
+  .chip.pv { background: rgba(255, 179, 0, 0.18); }
+  .chip.grid { background: rgba(30, 136, 229, 0.18); }
+  .chip.min { background: rgba(229, 57, 53, 0.15); }
+  .chip.target { background: rgba(102, 187, 106, 0.18); }
+  .status { margin-top: 8px; text-align: center; font-size: 12px; color: var(--secondary-text-color); }
+  .pwm-warning { color: var(--error-color); font-size: 13px; }
+`;
+
+// The ring is 270 degrees, open at the bottom.
+const PWM_RING_RADIUS = 80;
+const PWM_RING_CIRCUMFERENCE = 2 * Math.PI * PWM_RING_RADIUS;
+const PWM_RING_ARC = PWM_RING_CIRCUMFERENCE * 0.75;
+// Below this (W) the battery counts as idle.
+const PWM_RING_IDLE_W = 50;
+
+/**
+ * Battery ring (issue #32): SoC split into the share charged from PV and
+ * from the grid (battery_data's soc_pv/soc_grid), the minimum SoC and
+ * tonight's target as marks, the battery's power, and what PwMngt is
+ * doing with the battery. Finds its entities itself on the PwM PV device,
+ * like the other PwM cards -- no configuration needed.
+ */
+class PwMBatteryRingCard extends HTMLElement {
+  setConfig(config) {
+    this._config = config || {};
+    this._signature = undefined;
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this.shadowRoot) {
+      this.attachShadow({ mode: "open" });
+    }
+    this._resolveEntityIds();
+    const signature = this._stateSignature();
+    if (signature === this._signature) return;
+    this._signature = signature;
+    this._render();
+  }
+
+  getCardSize() {
+    return 5;
+  }
+
+  _texts() {
+    const language = (this._hass.locale && this._hass.locale.language) || this._hass.language || "en";
+    return PWM_RING_TEXTS[String(language).split("-")[0]] || PWM_RING_TEXTS.en;
+  }
+
+  /** Same registry-change caching as PwMngtBaseCard._resolveEntityIds(). */
+  _resolveEntityIds() {
+    if (
+      this._resolvedEntities === this._hass.entities &&
+      this._resolvedDevices === this._hass.devices
+    ) {
+      return;
+    }
+    this._resolvedEntities = this._hass.entities;
+    this._resolvedDevices = this._hass.devices;
+    this._ids = {
+      soc: pwmFindEntityId(this._hass, "pv", "sensor", "battery_soc"),
+      power: pwmFindEntityId(this._hass, "pv", "sensor", "battery_power"),
+      data: pwmFindEntityId(this._hass, "pv", "sensor", "battery_data"),
+      target: pwmFindEntityId(this._hass, "pv", "sensor", "battery_nightly_target"),
+      size: pwmFindEntityId(this._hass, "pv", "select", "battery_size"),
+      command: pwmFindEntityId(this._hass, "pv", "select", "battery_command"),
+      hold: pwmFindEntityId(this._hass, "pv", "sensor", "battery_hold_power"),
+    };
+    this._signature = undefined;
+  }
+
+  _state(name) {
+    const entityId = this._ids[name];
+    return entityId ? this._hass.states[entityId] : undefined;
+  }
+
+  /** A state (or one attribute of it) as a number, NaN when missing. */
+  _number(name, attribute) {
+    const state = this._state(name);
+    if (!state) return NaN;
+    const raw = attribute ? state.attributes[attribute] : state.state;
+    return raw === null || raw === undefined || raw === "" ? NaN : Number(raw);
+  }
+
+  _stateSignature() {
+    const parts = Object.keys(this._ids).map((name) => {
+      const state = this._state(name);
+      return state ? `${state.state}|${JSON.stringify(state.attributes)}` : "-";
+    });
+    parts.push(this._texts().title);
+    return parts.join("#");
+  }
+
+  _render() {
+    const t = this._texts();
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+    const style = document.createElement("style");
+    style.textContent = PWM_RING_CARD_STYLE;
+    const card = document.createElement("ha-card");
+    if (this._config.title) card.header = this._config.title;
+    root.append(style, card);
+
+    const socState = this._state("soc");
+    if (!socState) {
+      const warning = document.createElement("div");
+      warning.className = "pwm-warning";
+      warning.textContent = t.missing;
+      card.appendChild(warning);
+      return;
+    }
+
+    const soc = Math.max(0, Math.min(100, Number(socState.state) || 0));
+    const pv = this._number("data", "soc_pv");
+    const grid = this._number("data", "soc_grid");
+    const minSoc = this._number("data");
+    const target = this._number("target");
+    const size = this._number("size");
+    // Normalized by PwMngt (pv_properties.power_sign()): + = discharging.
+    const power = this._number("power") || 0;
+
+    card.appendChild(this._ring(t, soc, pv, grid, minSoc, target, size, power));
+    card.appendChild(this._chips(t, soc, pv, grid, minSoc, target, size, power));
+    const status = this._statusText(t);
+    if (status) {
+      const line = document.createElement("div");
+      line.className = "status";
+      line.textContent = status;
+      card.appendChild(line);
+    }
+  }
+
+  _ring(t, soc, pv, grid, minSoc, target, size, power) {
+    const charging = power < -PWM_RING_IDLE_W;
+    const discharging = power > PWM_RING_IDLE_W;
+    const pvShare = Number.isFinite(pv) ? pv : 0;
+    const gridShare = Number.isFinite(grid) ? grid : 0;
+    // battery_data's floor below its counted cells has no source.
+    const reserve = Math.max(0, soc - pvShare - gridShare);
+    const live = charging || discharging ? "live" : "";
+    const kw = pwmFormatKw(Math.abs(power));
+    const powerColor = charging ? "#43a047" : discharging ? "#fb8c00" : "var(--secondary-text-color)";
+    const powerText = charging ? t.charging(kw) : discharging ? t.discharging(kw) : t.idle;
+    const kwh = Number.isFinite(size) ? `${pwmFormatDecimal((soc * size) / 100)} kWh` : "";
+
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `
+      <svg viewBox="0 0 200 175">
+        ${pwmRingSegment(0, 100, "var(--divider-color)", "", "round")}
+        ${pwmRingSegment(0, reserve, "#78909c")}
+        ${pwmRingSegment(reserve, reserve + gridShare, "#1e88e5", live)}
+        ${pwmRingSegment(reserve + gridShare, soc, "#ffb300", live)}
+        ${pwmRingTick(minSoc, "#e53935", false)}
+        ${pwmRingTick(target, "#66bb6a", true)}
+        <text x="100" y="92" text-anchor="middle" font-size="40" font-weight="600"
+          fill="var(--primary-text-color)">${Math.round(soc)}<tspan font-size="20">%</tspan></text>
+        <text x="100" y="114" text-anchor="middle" font-size="12" fill="var(--secondary-text-color)">${kwh}</text>
+        <text x="100" y="138" text-anchor="middle" font-size="14" font-weight="500" fill="${powerColor}">${powerText}</text>
+        <text x="100" y="170" text-anchor="middle" font-size="13" fill="var(--secondary-text-color)">${this._config.name || t.title}</text>
+      </svg>`;
+    return wrap;
+  }
+
+  _chips(t, soc, pv, grid, minSoc, target, size, power) {
+    const chips = document.createElement("div");
+    chips.className = "chips";
+    const add = (cls, text) => {
+      const chip = document.createElement("span");
+      chip.className = `chip ${cls}`;
+      chip.textContent = text;
+      chips.appendChild(chip);
+    };
+    if (Number.isFinite(pv)) add("pv", t.pv(pv));
+    if (Number.isFinite(grid)) add("grid", t.grid(grid));
+    if (Number.isFinite(minSoc)) add("min", t.min(minSoc));
+    if (Number.isFinite(target)) add("target", t.target(target));
+    if (Number.isFinite(size) && size > 0) {
+      if (power < -PWM_RING_IDLE_W) {
+        const time = pwmFormatHours((((100 - soc) / 100) * size * 1000) / -power);
+        if (time) add("", t.toFull(time));
+      } else if (power > PWM_RING_IDLE_W && Number.isFinite(minSoc)) {
+        const time = pwmFormatHours((((soc - minSoc) / 100) * size * 1000) / power);
+        if (time) add("", t.toMin(time));
+      }
+    }
+    return chips;
+  }
+
+  _statusText(t) {
+    const command = this._state("command");
+    if (!command) return "";
+    const manual = command.attributes.manual_charge;
+    const charge = /^charge_now_(\d+)$/.exec(command.state);
+    const discharge = /^discharge_now_(\d+)$/.exec(command.state);
+    let text;
+    if (charge) text = t.command.charge(charge[1]) + (manual ? t.command.manual : "");
+    else if (manual) text = t.command.manualPaused;
+    else if (discharge) text = t.command.discharge(discharge[1]);
+    else text = t.command[command.state] || command.state;
+
+    // Battery hold power exists on a Growatt only (data/battery_hold.py).
+    const hold = this._state("hold");
+    if (hold) {
+      const holdText = t.hold[hold.attributes.status];
+      if (holdText) text += ` · ${holdText}`;
+      const watts = Number(hold.state);
+      if (Number.isFinite(watts) && watts > 0) text += ` · ${Math.round(watts)} W`;
+    }
+    return text;
+  }
+}
+pwmDefine("pwm-battery-ring-card", PwMBatteryRingCard);
+
+/** One coloured stretch of the battery ring, from..to in % of SoC. Butt
+ * ends by default, so neighbouring stretches meet without overlapping. */
+function pwmRingSegment(from, to, color, cls, linecap = "butt") {
+  from = Math.max(0, from);
+  to = Math.min(100, to);
+  if (to <= from) return "";
+  const length = (PWM_RING_ARC * (to - from)) / 100;
+  const start = (PWM_RING_ARC * from) / 100;
+  return `<circle cx="100" cy="100" r="${PWM_RING_RADIUS}" fill="none" stroke="${color}"
+    stroke-width="14" stroke-linecap="${linecap}" class="${cls || ""}"
+    stroke-dasharray="${length} ${PWM_RING_CIRCUMFERENCE}" stroke-dashoffset="${-start}"
+    transform="rotate(135 100 100)"/>`;
+}
+
+/** A mark across the ring at value % (min SoC, target). */
+function pwmRingTick(value, color, dashed) {
+  if (!Number.isFinite(value)) return "";
+  const angle = ((135 + (270 * Math.min(Math.max(value, 0), 100)) / 100) * Math.PI) / 180;
+  const point = (radius) => [100 + radius * Math.cos(angle), 100 + radius * Math.sin(angle)];
+  const [x1, y1] = point(66);
+  const [x2, y2] = point(94);
+  return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}"
+    stroke-width="3" stroke-linecap="round"${dashed ? ' stroke-dasharray="3 3"' : ""}/>`;
+}
+
+/** 1 decimal with a decimal comma, as the rest of the cards' Danish texts. */
+function pwmFormatDecimal(value) {
+  return value.toFixed(1).replace(".", ",");
+}
+
+function pwmFormatKw(watts) {
+  return pwmFormatDecimal(watts / 1000);
+}
+
+/** Hours as h:mm, or null when it isn't a useful estimate (0 or > 48 h). */
+function pwmFormatHours(hours) {
+  if (!Number.isFinite(hours) || hours <= 0 || hours > 48) return null;
+  const minutes = Math.round(hours * 60);
+  return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
 // Register with Home Assistant's card picker so all three card types show
 // up there with a name/description, instead of only being addable by
 // typing their `type:` manually in YAML.
@@ -1121,6 +1463,11 @@ const PWM_CUSTOM_CARDS = [
     type: "pwm-battery-card",
     name: "PwM Battery",
     description: "House battery control: tonight's charge plan and manual charge/stop/postpone.",
+  },
+  {
+    type: "pwm-battery-ring-card",
+    name: "PwM Battery ring",
+    description: "Battery SoC as a ring: PV/grid share, min SoC, target, power and status.",
   }
 ];
 // Skip the ones already listed -- this file may run twice (see pwmDefine()).
