@@ -687,6 +687,12 @@ const PWM_BATTERY_TEXTS = {
       not_calculated: "Waiting for electricity prices (after 14)",
       not_calculated_recheck: "Not calculated yet - calculated at the next full hour",
     },
+    skippedHours: "Red = skipped by the automation - the later hours are enough to reach the target",
+    extendedHours: "Dashed = charged after the plan, the target wasn't reached in the planned hours",
+    unusedHours: "Grey = not used, the target was already reached",
+    lastChargeDone: (time, target) =>
+      `Tonight's charge finished at ${time}${target !== null ? ` - target ${target}% reached` : ""}`,
+    lastChargeStopped: (time) => `Tonight's charge stopped at ${time} - the target wasn't reached`,
     manualTitle: "Manual battery control",
     chargeNow: (pct) => `Charge now ${pct}%`,
     stop: "Stop charging",
@@ -718,6 +724,12 @@ const PWM_BATTERY_TEXTS = {
       not_calculated: "Afventer elpriser (efter 14)",
       not_calculated_recheck: "Ikke beregnet endnu - beregnes ved næste hele time",
     },
+    skippedHours: "Rød = sprunget over af automatikken - de senere timer er nok til at nå target",
+    extendedHours: "Stiplet = ladet efter planen, target blev ikke nået i de planlagte timer",
+    unusedHours: "Grå = ikke brugt, target var allerede nået",
+    lastChargeDone: (time, target) =>
+      `Nattens ladning færdig kl. ${time}${target !== null ? ` - target ${target} % nået` : ""}`,
+    lastChargeStopped: (time) => `Nattens ladning stoppet kl. ${time} - target blev ikke nået`,
     manualTitle: "Manuel betjening af batteri",
     chargeNow: (pct) => `Lad nu ${pct} %`,
     stop: "Afbryd ladning",
@@ -788,6 +800,16 @@ const PWM_BATTERY_CARD_STYLE = `
     font-size: 13px;
     background: var(--success-color, #43a047);
     color: var(--text-primary-color, #fff);
+  }
+  .pwm-hour.skipped {
+    background: var(--error-color, #db4437);
+  }
+  .pwm-hour.unused {
+    background: var(--disabled-color, #9e9e9e);
+  }
+  .pwm-hour.extended {
+    outline: 2px dashed var(--text-primary-color, #fff);
+    outline-offset: -4px;
   }
   .pwm-section-title {
     font-size: 16px;
@@ -988,18 +1010,45 @@ class PwMBatteryCard extends HTMLElement {
       }
     }
 
-    // Tonight's cheap hours (battery_charge_status' hour_N attributes).
+    // Tonight's cheap hours (battery_charge_status' hour_N attributes),
+    // plus the night plan's marks (issue #24): a skipped planned hour is
+    // red, an unplanned hour charged in after the plan is added.
     if (isAuto && planned) {
-      const hours = document.createElement("div");
-      hours.className = "pwm-hours";
+      const plannedHours = [];
       for (let hour = 0; hour < 24; hour++) {
-        if (status.attributes[`hour_${hour}`] !== true) continue;
-        const tile = document.createElement("div");
-        tile.className = "pwm-hour";
-        tile.textContent = `${hour}-${hour + 1}`;
-        hours.appendChild(tile);
+        if (status.attributes[`hour_${hour}`] === true) plannedHours.push(hour);
       }
-      if (hours.childElementCount) content.appendChild(hours);
+      this._hourTiles(
+        content,
+        t,
+        plannedHours,
+        status.attributes.skipped_hours || [],
+        status.attributes.extended_hours || [],
+        null
+      );
+    }
+
+    // How tonight's plan ended, until a new decision is made (issue #24).
+    const lastCharge = status.attributes.last_charge;
+    if (isAuto && !planned && lastCharge && lastCharge.finished) {
+      const finished = new Date(lastCharge.finished);
+      const time = `${String(finished.getHours()).padStart(2, "0")}:${String(
+        finished.getMinutes()).padStart(2, "0")}`;
+      const target = Number.isFinite(Number(lastCharge.target)) && lastCharge.target !== null
+        ? Math.round(Number(lastCharge.target)) : null;
+      content.appendChild(
+        lastCharge.target_reached
+          ? this._banner("ok", t.lastChargeDone(time, target))
+          : this._banner("warn", t.lastChargeStopped(time))
+      );
+      this._hourTiles(
+        content,
+        t,
+        lastCharge.hours || [],
+        lastCharge.skipped_hours || [],
+        lastCharge.extended_hours || [],
+        lastCharge.target_reached ? finished.getHours() : null
+      );
     }
 
     // Manual control.
@@ -1065,6 +1114,34 @@ class PwMBatteryCard extends HTMLElement {
     banner.className = `pwm-banner ${tone || "info"}`;
     banner.textContent = text;
     return banner;
+  }
+
+  /**
+   * The plan's hour tiles: green planned, red skipped by the night plan
+   * (issue #22), dashed when charged after the plan, grey when the target
+   * was already reached before the hour (unusedAfter = the hour it was).
+   */
+  _hourTiles(content, t, plannedHours, skipped, extended, unusedAfter) {
+    const hours = document.createElement("div");
+    hours.className = "pwm-hours";
+    let anyUnused = false;
+    for (let hour = 0; hour < 24; hour++) {
+      const isPlanned = plannedHours.includes(hour);
+      if (!isPlanned && !extended.includes(hour)) continue;
+      const unused =
+        isPlanned && unusedAfter !== null && hour > unusedAfter && hour < 17 && !skipped.includes(hour);
+      anyUnused = anyUnused || unused;
+      const tile = document.createElement("div");
+      tile.className = `pwm-hour${skipped.includes(hour) ? " skipped" : ""}${
+        !isPlanned ? " extended" : ""}${unused ? " unused" : ""}`;
+      tile.textContent = `${hour}-${hour + 1}`;
+      hours.appendChild(tile);
+    }
+    if (!hours.childElementCount) return;
+    content.appendChild(hours);
+    if (skipped.length) content.appendChild(this._note(t.skippedHours));
+    if (extended.length) content.appendChild(this._note(t.extendedHours));
+    if (anyUnused) content.appendChild(this._note(t.unusedHours));
   }
 
   _note(text) {

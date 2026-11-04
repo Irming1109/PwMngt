@@ -134,6 +134,17 @@ PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES: list[str] = [
     # Whether tomorrow's hour N (0-23) is one of the cheapest hours picked
     # for grid charging. Old: "hour0".."hour23" (no underscore).
     *[f"hour_{hour}" for hour in range(24)],
+    # Issue #24: tonight's planned hours data/battery_charge_level.py's
+    # night plan (#22) skipped, and the unplanned ones it charged in after
+    # the plan -- for the battery card. Cleared with every new plan.
+    "skipped_hours",
+    "extended_hours",
+    # Issue #24: how tonight's plan ended (target reached, or stopped at
+    # 16:55) -- {"finished", "target_reached", "target", "hours",
+    # "skipped_hours", "extended_hours"}. Kept after the reset to
+    # "not_calculated", so the card can show it until a new decision is
+    # made (every new plan, postpone and midnight clear it).
+    "last_charge",
 ]
 
 PwM_BATTERY_CHARGE_DECISION_SENSORS: list[SensorEntityDescription] = [
@@ -215,6 +226,20 @@ def signal_postpone_battery_charge(entry_id: str) -> str:
     on press -- PwMngtBatteryChargeDecisionSensor listens and sets
     battery_charge_status to "no_deferred" (see module docstring)."""
     return f"{DOMAIN}_{entry_id}_postpone_battery_charge"
+
+
+# What data/battery_charge_level.py reports about the current hour
+# (signal_charge_hour_marked(), issue #24).
+HOUR_MARK_SKIPPED = "skipped"
+HOUR_MARK_EXTENDED = "extended"
+HOUR_MARK_CHARGED = "charged"
+
+
+def signal_charge_hour_marked(entry_id: str) -> str:
+    """Dispatcher signal data/battery_charge_level.py sends after a run in
+    which the night plan skipped the current hour, or a charge ran in it.
+    Payload: (HOUR_MARK_*, hour 0-23)."""
+    return f"{DOMAIN}_{entry_id}_charge_hour_marked"
 
 
 def signal_battery_charge_target_reached(entry_id: str) -> str:
@@ -441,6 +466,14 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             )
         )
 
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                signal_charge_hour_marked(self._entry.entry_id),
+                self._handle_hour_marked,
+            )
+        )
+
         # data/battery_charge_level.py (the "SOC >= target" gate) -- the
         # charge finished, so stop treating tonight as "still charging".
         self.async_on_remove(
@@ -584,6 +617,30 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             self.async_write_ha_state()
 
     @callback
+    def _handle_hour_marked(self, mark: str, hour: int) -> None:
+        """Issue #24: keep skipped_hours/extended_hours for the battery
+        card while tonight's plan runs. A charge in a skipped hour (the SoC
+        fell further, so the plan started it after all) takes it off the
+        skipped list again."""
+        if self._attr_native_value != "yes_today":
+            return
+        attributes = dict(self._attr_extra_state_attributes)
+        skipped = list(attributes.get("skipped_hours") or [])
+        extended = list(attributes.get("extended_hours") or [])
+        if mark == HOUR_MARK_SKIPPED and hour not in skipped:
+            skipped.append(hour)
+        elif mark == HOUR_MARK_EXTENDED and hour not in extended:
+            extended.append(hour)
+        elif mark == HOUR_MARK_CHARGED and hour in skipped:
+            skipped.remove(hour)
+        else:
+            return
+        attributes["skipped_hours"] = sorted(skipped)
+        attributes["extended_hours"] = sorted(extended)
+        self._attr_extra_state_attributes = attributes
+        self.async_write_ha_state()
+
+    @callback
     def _handle_day_end(self, _now=None) -> None:
         """16:55 (Node-RED: inject "16:55" -> "Ja (i dag)" ->
         ha-sensor "Ikke beregnet" -> "Lader vi ?" -> "Intern", tab
@@ -595,11 +652,7 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         Not gated by battery_mode, same as _handle_midnight()."""
         if self._attr_native_value != "yes_today":
             return
-        self._attr_native_value = _STATUS_NOT_CALCULATED
-        self._attr_extra_state_attributes = {
-            key: None for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
-        }
-        self.async_write_ha_state()
+        self._finish_plan(target_reached=False)
         self._stop_running_charge()
 
     @callback
@@ -609,10 +662,25 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         target" gate, "Lader vi?"/"Intern" reset chain) -- tonight's grid
         charge is done, so go back to "not_calculated" for the next
         scheduled recompute."""
+        self._finish_plan(target_reached=True)
+
+    def _finish_plan(self, target_reached: bool) -> None:
+        """Back to "not_calculated", keeping how tonight's plan ended in
+        last_charge (issue #24) for the battery card."""
+        attributes = self._attr_extra_state_attributes
+        last_charge = {
+            "finished": dt_util.now().isoformat(timespec="seconds"),
+            "target_reached": target_reached,
+            "target": self._read_target(),
+            "hours": [hour for hour in range(24) if attributes.get(f"hour_{hour}") is True],
+            "skipped_hours": list(attributes.get("skipped_hours") or []),
+            "extended_hours": list(attributes.get("extended_hours") or []),
+        }
         self._attr_native_value = _STATUS_NOT_CALCULATED
         self._attr_extra_state_attributes = {
             key: None for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
         }
+        self._attr_extra_state_attributes["last_charge"] = last_charge
         self.async_write_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:

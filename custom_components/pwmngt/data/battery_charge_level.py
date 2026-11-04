@@ -140,7 +140,13 @@ from ..select import (
     signal_manual_charge,
     signal_set_battery_command,
 )
-from .battery_charge_decision import signal_battery_charge_target_reached
+from .battery_charge_decision import (
+    HOUR_MARK_CHARGED,
+    HOUR_MARK_EXTENDED,
+    HOUR_MARK_SKIPPED,
+    signal_battery_charge_target_reached,
+    signal_charge_hour_marked,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -316,12 +322,15 @@ def _night_plan(
     return None
 
 
-def calculate_battery_charge_level(inputs: BatteryChargeLevelInputs) -> str | None:
-    """One run of Node-RED's "Bestem ladeeffekt". Returns the
-    battery_command option to apply ("charge_now_75"/"_50"/"_25", or
-    "internal"), or None when Node-RED itself returns null and produces
-    no output at all -- the caller must then leave battery_command
-    exactly as it was.
+def calculate_battery_charge_level(
+    inputs: BatteryChargeLevelInputs,
+) -> tuple[str | None, str | None]:
+    """One run of Node-RED's "Bestem ladeeffekt". Returns (the
+    battery_command option to apply -- "charge_now_75"/"_50"/"_25", or
+    "internal" -- or None when Node-RED itself returns null and produces
+    no output at all, so the caller must leave battery_command exactly as
+    it was; the night plan's verdict for this hour, issue #22: "skip",
+    "extend" or None -- shown on the battery card, issue #24).
     """
     tariff_fuse_size = (
         inputs.tariff_fuse_size_raw * _TARIFF_FUSE_MARGIN
@@ -330,7 +339,7 @@ def calculate_battery_charge_level(inputs: BatteryChargeLevelInputs) -> str | No
     )
     if tariff_fuse_size is None:
         # Node-RED: node.warn(...) + return null.
-        return None
+        return None, None
 
     battery_max_charge_full = (
         inputs.battery_max_charge_raw
@@ -344,7 +353,7 @@ def calculate_battery_charge_level(inputs: BatteryChargeLevelInputs) -> str | No
     amps_needed_25 = amps_needed_full * 0.25
 
     if inputs.charge_wish != _STATUS_YES_TODAY:
-        return None
+        return None, None
 
     # DIFF (issue #15): the measured loads already include the battery's
     # own charge current. Node-RED added the new level on top of it, so a
@@ -361,7 +370,7 @@ def calculate_battery_charge_level(inputs: BatteryChargeLevelInputs) -> str | No
         inputs.battery_soc if inputs.battery_soc is not None else _BATTERY_SOC_FALLBACK
     )
     if battery_soc >= inputs.battery_target:
-        return None
+        return None, None
 
     hour_is_cheap = inputs.hour_is_cheap
     night_plan = _night_plan(
@@ -373,20 +382,20 @@ def calculate_battery_charge_level(inputs: BatteryChargeLevelInputs) -> str | No
         ),
     )
     if night_plan == _NIGHT_SKIP:
-        return _COMMAND_INTERNAL
+        return _COMMAND_INTERNAL, night_plan
     if night_plan == _NIGHT_EXTEND:
         hour_is_cheap = True
 
     if not hour_is_cheap:
-        return _COMMAND_INTERNAL
+        return _COMMAND_INTERNAL, night_plan
 
     if amps_allowed >= amps_needed_75:
-        return "charge_now_75"
+        return "charge_now_75", night_plan
     if amps_allowed >= amps_needed_50:
-        return "charge_now_50"
+        return "charge_now_50", night_plan
     if amps_allowed >= amps_needed_25:
-        return "charge_now_25"
-    return _COMMAND_INTERNAL
+        return "charge_now_25", night_plan
+    return _COMMAND_INTERNAL, night_plan
 
 
 @dataclass
@@ -671,12 +680,30 @@ class PwMngtBatteryChargeLevelController:
             battery_size_kwh=self._read_battery_size(),
             charging_now=currently_charging(self._read_battery_command()),
         )
-        result = calculate_battery_charge_level(inputs)
+        result, night_plan = calculate_battery_charge_level(inputs)
         if result is None:
             return
+        self._mark_night_hour(inputs.current_hour, result, night_plan)
         if inputs.hour_is_cheap and not self._step_allowed(result):
             return
         self._apply_result(result)
+
+    def _mark_night_hour(self, hour: int | None, result: str, night_plan: str | None) -> None:
+        """Issue #24: tells battery_charge_status which planned night hour
+        the night plan (#22) skipped, and which unplanned one it charged
+        in, for the battery card. A skipped hour that starts charging later
+        on (the SoC fell further) is reported as charged and unmarked."""
+        if hour is None:
+            return
+        if night_plan == _NIGHT_SKIP:
+            mark = HOUR_MARK_SKIPPED
+        elif result in _ACTIVE_CHARGE_COMMANDS:
+            mark = HOUR_MARK_EXTENDED if night_plan == _NIGHT_EXTEND else HOUR_MARK_CHARGED
+        else:
+            return
+        async_dispatcher_send(
+            self.hass, signal_charge_hour_marked(self._entry.entry_id), mark, hour
+        )
 
     def _run_manual_charge(self, requested: str) -> None:
         """Issue #17 (see module docstring): stop when full or the battery
