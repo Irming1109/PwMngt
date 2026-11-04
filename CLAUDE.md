@@ -34,7 +34,7 @@ PwMngt ("Power Management", domæne `pwmngt`) er en **Home Assistant custom inte
 Python, Home Assistant ≥ 2025.3 (`hacs.json`), ingen eksterne pakker ud over `requests`. Afhænger (uden formel dependency – mangler de, oprettes en HA Repair, `_async_check_dependencies` i `__init__.py`) af **Solcast Solar** (`solcast_solar`) og **Strømligning** (`stromligning`). Ladere: Wallbox/Easee (valgfrit). `single_config_entry: true`.
 
 `custom_components/pwmngt/`:
-- `__init__.py` – opsætning, platforme, dependency-tjek, registrering af frontend-kortene (`/pwmngt_frontend/pwm-cards.js`).
+- `__init__.py` – opsætning, platforme, dependency-tjek, registrering af frontend-kortene (`/pwmngt_frontend/pwm-cards.js`) både som extra JS og som Lovelace-ressource (companion-appen indlæser kun ressourcen – #26).
 - `const.py` – alle konstanter: `DOMAIN`, `PLATFORMS` (sensor, number, select, button, text), `SEGMENT_*`, entity-map-felter, auto-detect-navne for invertere/ladere.
 - `config_flow.py` – opsætning + options-wizard. Sider: `init` (valgfrie segmenter) → `pv_inverter` (inverter-mærke) → `solar_pv_plant` (entity-map, obligatorisk) → `ev_charging` / `pool` / `pv_surplus`.
 - `devices.py` – **eneste sted** der definerer HA-devices: `hub_device_info` ("PwM"), `pv_device_info` ("PwM PV"), `charger_device_info` ("PwM Charger1/2", `CHARGERS`) – alle nestet under hubben via `via_device`. Nye devices tilføjes her.

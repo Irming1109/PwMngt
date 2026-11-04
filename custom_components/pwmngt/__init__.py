@@ -3,7 +3,9 @@ from pathlib import Path
 
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
+from homeassistant.components.lovelace.resources import ResourceStorageCollection
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EVENT_HOMEASSISTANT_STARTED
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers import issue_registry as ir
@@ -25,6 +27,7 @@ LOGGER = logging.getLogger(__name__)
 FRONTEND_URL_BASE = "/pwmngt_frontend"
 FRONTEND_JS_FILENAME = "pwm-cards.js"
 FRONTEND_REGISTERED = "frontend_registered"
+_LOVELACE_DOMAIN = "lovelace"
 
 # This function is called when the integration is configured through the UI (via Config Flow)
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -134,11 +137,62 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     # The query string cache-busts the browser: bumping manifest.json's
     # version (which every release already does) is enough to make sure a
     # HACS update is picked up instead of a stale cached copy of the JS.
-    add_extra_js_url(
-        hass, f"{FRONTEND_URL_BASE}/{FRONTEND_JS_FILENAME}?v={integration.version}"
-    )
+    url = f"{FRONTEND_URL_BASE}/{FRONTEND_JS_FILENAME}?v={integration.version}"
+    add_extra_js_url(hass, url)
+
+    # The companion app (iOS and Android) doesn't reliably load extra JS
+    # URLs -- every PwM card showed "Configuration error" there, while the
+    # browser was fine; a Lovelace resource for the same file fixed it
+    # (Claus, 2026-11-04, issue #26). So the cards are also registered as
+    # a dashboard resource; www/pwm-cards.js copes with being loaded twice.
+    # The resources are only ready once Home Assistant has started.
+    if hass.is_running:
+        await _async_register_lovelace_resource(hass, url)
+    else:
+
+        async def _register_when_started(_event) -> None:
+            await _async_register_lovelace_resource(hass, url)
+
+        hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _register_when_started)
 
     hass.data[DOMAIN][FRONTEND_REGISTERED] = True
+
+
+async def _async_register_lovelace_resource(hass: HomeAssistant, url: str) -> None:
+    """Add url as a "JavaScript module" dashboard resource, or update the
+    version of an existing PwMngt one (also one added by hand). Storage
+    mode only -- resources configured in YAML are read-only, and there
+    add_extra_js_url() alone has to do. Never fails the setup."""
+    try:
+        # The lovelace integration's own data: a LovelaceData dataclass
+        # (key LOVELACE_DATA == "lovelace") in current versions, a dict in
+        # older ones -- the key is the same string either way.
+        lovelace = hass.data.get(_LOVELACE_DOMAIN)
+        resources = (
+            lovelace.get("resources")
+            if isinstance(lovelace, dict)
+            else getattr(lovelace, "resources", None)
+        )
+        if not isinstance(resources, ResourceStorageCollection):
+            LOGGER.debug("PwMngt: dashboard resources are not in storage mode -- not registering the cards there")
+            return
+        # Loads the stored resources first; async_items() alone doesn't.
+        await resources.async_get_info()
+
+        path = f"{FRONTEND_URL_BASE}/{FRONTEND_JS_FILENAME}"
+        ours = [item for item in resources.async_items() if item.get("url", "").split("?")[0] == path]
+        if not ours:
+            await resources.async_create_item({"res_type": "module", "url": url})
+            LOGGER.info("PwMngt: registered the cards as dashboard resource %s", url)
+            return
+        first, *duplicates = ours
+        if first.get("url") != url or first.get("type") != "module":
+            await resources.async_update_item(first["id"], {"res_type": "module", "url": url})
+            LOGGER.info("PwMngt: updated the cards' dashboard resource to %s", url)
+        for item in duplicates:
+            await resources.async_delete_item(item["id"])
+    except Exception:  # noqa: BLE001 -- the cards still load via add_extra_js_url
+        LOGGER.warning("PwMngt: could not register the cards as a dashboard resource", exc_info=True)
 
 
 async def async_remove_config_entry_device(

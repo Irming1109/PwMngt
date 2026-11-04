@@ -128,6 +128,19 @@ const PWM_CARD_STYLE = `
  */
 const PWM_DOMAIN = "pwmngt";
 
+/**
+ * customElements.define(), but a no-op when the element already exists.
+ * This file is loaded both as an extra JS URL and as a dashboard resource
+ * (see _async_register_frontend() in __init__.py -- the companion app only
+ * loads the latter), so in a browser it runs twice; a second define()
+ * would throw and stop the rest of the file.
+ */
+function pwmDefine(name, elementClass) {
+  if (!customElements.get(name)) {
+    customElements.define(name, elementClass);
+  }
+}
+
 /** A device's own "pwmngt" identifier (see devices.py), or undefined. */
 function pwmIdentifier(device) {
   const pair = (device.identifiers || []).find(([domain]) => domain === PWM_DOMAIN);
@@ -444,7 +457,7 @@ class PwMChargerCard extends PwMngtBaseCard {
     return document.createElement("pwm-charger-card-editor");
   }
 }
-customElements.define("pwm-charger-card", PwMChargerCard);
+pwmDefine("pwm-charger-card", PwMChargerCard);
 
 /**
  * Visual editor for pwm-charger-card: a single "Charger" dropdown, listing
@@ -517,7 +530,7 @@ class PwMChargerCardEditor extends HTMLElement {
     this._selectEl.value = currentValue;
   }
 }
-customElements.define("pwm-charger-card-editor", PwMChargerCardEditor);
+pwmDefine("pwm-charger-card-editor", PwMChargerCardEditor);
 
 class PwMHubCard extends PwMngtBaseCard {
   setConfig(config) {
@@ -565,7 +578,7 @@ class PwMHubCard extends PwMngtBaseCard {
     super.setConfig(config || {});
   }
 }
-customElements.define("pwm-hub-card", PwMHubCard);
+pwmDefine("pwm-hub-card", PwMHubCard);
 
 class PwMElectricityCard extends PwMngtBaseCard {
   setConfig(config) {
@@ -605,7 +618,7 @@ class PwMElectricityCard extends PwMngtBaseCard {
     super.setConfig(config || {});
   }
 }
-customElements.define("pwm-electricity-card", PwMElectricityCard);
+pwmDefine("pwm-electricity-card", PwMElectricityCard);
 
 class PwMPvCard extends PwMngtBaseCard {
   setConfig(config) {
@@ -646,7 +659,7 @@ class PwMPvCard extends PwMngtBaseCard {
     super.setConfig(config || {});
   }
 }
-customElements.define("pwm-pv-card", PwMPvCard);
+pwmDefine("pwm-pv-card", PwMPvCard);
 
 /**
  * Card texts. Entity states are shown through hass.formatEntityState()
@@ -1077,13 +1090,13 @@ class PwMBatteryCard extends HTMLElement {
     this._hass.callService("select", "select_option", { entity_id: this._ids.mode, option });
   }
 }
-customElements.define("pwm-battery-card", PwMBatteryCard);
+pwmDefine("pwm-battery-card", PwMBatteryCard);
 
 // Register with Home Assistant's card picker so all three card types show
 // up there with a name/description, instead of only being addable by
 // typing their `type:` manually in YAML.
 window.customCards = window.customCards || [];
-window.customCards.push(
+const PWM_CUSTOM_CARDS = [
   {
     type: "pwm-hub-card",
     name: "PwM Hub",
@@ -1109,4 +1122,10 @@ window.customCards.push(
     name: "PwM Battery",
     description: "House battery control: tonight's charge plan and manual charge/stop/postpone.",
   }
-);
+];
+// Skip the ones already listed -- this file may run twice (see pwmDefine()).
+for (const card of PWM_CUSTOM_CARDS) {
+  if (!window.customCards.some((existing) => existing.type === card.type)) {
+    window.customCards.push(card);
+  }
+}
