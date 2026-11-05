@@ -685,8 +685,6 @@ class PwMngtBatteryHoldSensor(RestoreEntity, SensorEntity):
                 pv_properties.battery_data_entity_id(self.hass, self._entry),
                 pv_properties.battery_command_entity_id(self.hass, self._entry),
                 pv_properties.battery_mode_entity_id(self.hass, self._entry),
-                # Issue #33: follow the car's charging power.
-                *charger_properties.car_charging_entity_ids(self.hass, self._entry),
             )
             if entity_id
         ]
@@ -694,6 +692,10 @@ class PwMngtBatteryHoldSensor(RestoreEntity, SensorEntity):
             self.async_on_remove(
                 event.async_track_state_change_event(self.hass, trigger_entity_ids, self._handle_trigger)
             )
+        # Issue #33: follow the car's charging power.
+        self.async_on_remove(
+            charger_properties.async_track_car_charging(self.hass, self._entry, self._handle_trigger)
+        )
         self._run()
 
     @callback

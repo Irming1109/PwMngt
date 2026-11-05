@@ -923,13 +923,11 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         )
         # Issue #33: re-run when a car starts or stops charging -- the
         # chargers' power changes all the time, so only the crossing counts.
-        car_entity_ids = charger_properties.car_charging_entity_ids(self.hass, self._entry)
-        if car_entity_ids:
-            self.async_on_remove(
-                event.async_track_state_change_event(
-                    self.hass, car_entity_ids, self._handle_car_charging_changed
-                )
+        self.async_on_remove(
+            charger_properties.async_track_car_charging(
+                self.hass, self._entry, self._handle_car_charging_changed
             )
+        )
 
         # Target: only 00:01-16:59 (Node-RED's time-range switch).
         target_entity_id = pv_properties.battery_nightly_target_entity_id(

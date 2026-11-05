@@ -11,9 +11,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from collections.abc import Callable
+
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, Event, HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
 from ..const import CHARGER_POWER_TRANSLATION_KEYS, CHARGER_TYPE_NOT_INSTALLED, DOMAIN
@@ -88,6 +92,71 @@ def car_charging_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> list[str
         charger_power_entity_id(hass, source) or source
         for source in consumption_source_entity_ids(hass, entry)
     ]
+
+
+def _charger_setting_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> list[str]:
+    """Each charger's type select and consumption_source_entity text --
+    the PwMngt entities consumption_source_entity_ids() reads."""
+    registry = er.async_get(hass)
+    entity_ids: list[str] = []
+    for charger in CHARGERS:
+        prefix = f"{entry.entry_id}_{charger['id']}"
+        for domain, suffix in (("select", "type"), ("text", "consumption_source_entity")):
+            entity_id = registry.async_get_entity_id(domain, DOMAIN, f"{prefix}_{suffix}")
+            if entity_id:
+                entity_ids.append(entity_id)
+    return entity_ids
+
+
+@callback
+def async_track_car_charging(
+    hass: HomeAssistant, entry: ConfigEntry, action: Callable[[Event | None], None]
+) -> CALLBACK_TYPE:
+    """Call action whenever a charger's power (or consumption source)
+    changes -- for car_charging() triggers (issue #33).
+
+    The chargers' settings are PwMngt's own select/text entities, and the
+    text platform is set up after the sensor platform: when a sensor
+    subscribes, their states may not exist yet, so the list of power
+    sensors would come out empty and no trigger would ever fire. Hence
+    the list is built again when those settings change and once Home
+    Assistant has started. Returns the unsubscribe callback."""
+    unsub_power: CALLBACK_TYPE | None = None
+
+    @callback
+    def _subscribe_power() -> None:
+        nonlocal unsub_power
+        if unsub_power is not None:
+            unsub_power()
+            unsub_power = None
+        entity_ids = car_charging_entity_ids(hass, entry)
+        if entity_ids:
+            unsub_power = async_track_state_change_event(hass, entity_ids, action)
+
+    @callback
+    def _settings_changed(state_event: Event) -> None:
+        _subscribe_power()
+        action(state_event)
+
+    @callback
+    def _started(_hass: HomeAssistant) -> None:
+        _subscribe_power()
+        action(None)
+
+    _subscribe_power()
+    unsub_settings = async_track_state_change_event(
+        hass, _charger_setting_entity_ids(hass, entry), _settings_changed
+    )
+    unsub_started = async_at_started(hass, _started)
+
+    @callback
+    def _unsubscribe() -> None:
+        unsub_started()
+        unsub_settings()
+        if unsub_power is not None:
+            unsub_power()
+
+    return _unsubscribe
 
 
 def car_charging(hass: HomeAssistant, entry: ConfigEntry) -> CarCharging:
