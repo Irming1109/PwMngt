@@ -252,7 +252,11 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         name="Battery max charge effect (W)",
         icon="mdi:lightning-bolt",
         entity_category=EntityCategory.CONFIG,
-        options=["2800", "6000", "15000"],
+        # Issue #38 (Claus, 2026-11-05): 1000-15000 W in steps of 500 -- the
+        # three fixed values (2800/6000/15000) didn't fit e.g. Kasper's
+        # Kostal (~4500 W). Still a select, so the entity_id Claus's
+        # Node-RED translator reads stays the same.
+        options=[str(watts) for watts in range(1000, 15001, 500)],
         default_option="6000",
     ),
     # Old key="pv_battery_mode" (select.pv_battery_mode), from Node-RED.
@@ -457,6 +461,16 @@ PwM_CHARGER_SELECTS: list[PwMngtSelectEntityDescription] = [
 ]
 
 
+def _nearest_numeric_option(value: str, options: list[str]) -> str | None:
+    """The option closest to value when both are numbers, else None."""
+    try:
+        target = float(value)
+        numeric = [(abs(float(option) - target), option) for option in options]
+    except (TypeError, ValueError):
+        return None
+    return min(numeric)[1] if numeric else None
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities):
     """Set up select entities for the hub, the PV device, and each configured charger."""
     entities = []
@@ -528,6 +542,19 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
         last_state = await self.async_get_last_state()
         if last_state is not None and last_state.state in self.entity_description.options:
             self._attr_current_option = last_state.state
+        elif last_state is not None:
+            nearest = _nearest_numeric_option(last_state.state, self.entity_description.options)
+            if nearest is not None:
+                # A numeric option list that changed (issue #38: 2800 W is
+                # no longer an option) -- the closest one keeps the user's
+                # setting rather than falling back to the default.
+                LOGGER.info(
+                    "%s: '%s' is no longer an option -- using '%s'",
+                    self.entity_id,
+                    last_state.state,
+                    nearest,
+                )
+                self._attr_current_option = nearest
 
         if self._is_battery_command:
             if last_state is not None:
