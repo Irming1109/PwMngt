@@ -61,10 +61,9 @@ Deliberate differences from Node-RED (each marked "DIFF" below):
   behaviour, not part of Node-RED's own Midnat chain; see
   _handle_midnight() for the two transitions that ARE Node-RED's own
   ("Ja (i morgen)" -> "Ja (i dag)", "Nej (pris)"/"Nej (overskud)" ->
-  "Ikke beregnet"). The "Udskydning annulleres" trigger (which bypassed
-  the evening window entirely when cancelling a deferral mid-evening)
-  isn't ported -- cancelling a deferral now simply means pressing the
-  button again, waiting for the next scheduled recompute, or midnight.
+  "Ikke beregnet"). Cancelling a deferral (pressing the button again)
+  decides again right away, outside the evening window too -- Node-RED's
+  "Udskydning annulleres" trigger (issue #44).
 - The *check* for a deferred status, inside "Skal batteri lades" itself,
   is fixed rather than ported literally (Claus, 2026-10-14): Node-RED
   compares `initial_state === "Udskudt"` -- the bare word -- against the
@@ -635,7 +634,8 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         command. Node-RED left it running -- data/battery_charge_level.py
         only re-decides (and stops) while the status is "yes_today", so
         nothing would ever stop it."""
-        if self._attr_native_value == _STATUS_DEFERRED:
+        cancelled = self._attr_native_value == _STATUS_DEFERRED
+        if cancelled:
             self._attr_native_value = _STATUS_NOT_CALCULATED
         else:
             self._attr_native_value = _STATUS_DEFERRED
@@ -644,6 +644,11 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             key: None for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
         }
         self.async_write_ha_state()
+        if cancelled:
+            # Issue #44 (Node-RED: trigger "Udskydning annulleres", outside
+            # the evening window too): decide again right away, so a
+            # cancellation late in the evening still gives tonight's plan.
+            self._run()
 
     def _stop_running_charge(self) -> None:
         """Set battery_command to "internal" if a charge_now_* command is
