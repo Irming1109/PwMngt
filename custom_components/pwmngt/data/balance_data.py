@@ -34,6 +34,7 @@ from ..const import (
 from ..devices import CHARGERS, hub_device_info
 from ..helpers.state_helper import read_float_state
 from ..properties import pv_properties
+from ..select import CHARGE_NOW_OPTIONS
 
 LOGGER = logging.getLogger(__name__)
 
@@ -182,8 +183,8 @@ class PwMngtBalanceDataSensor(RestoreEntity, SensorEntity):
     """A PwM hub sensor bundling the 7 balance values above as attributes.
 
     Every 10 seconds, a timer trigger (_sample) reads Grid power plus
-    Battery power (skipped while pv_properties.is_forced_charging()
-    reports True), extends this entity's rolling sample history, then
+    Battery power (skipped while the battery charges on command, see
+    _battery_charging_on_command()), extends this entity's rolling sample history, then
     hands it to calculate_balance() for the math and writes the result
     out.
 
@@ -319,7 +320,7 @@ class PwMngtBalanceDataSensor(RestoreEntity, SensorEntity):
         battery_power *= pv_properties.power_sign(self._entry, ENTITY_KEY_BATTERY_POWER)
 
         status = grid_power
-        if not pv_properties.is_forced_charging(self.hass, self._entry):
+        if not self._battery_charging_on_command():
             status += battery_power
         self._samples.append(status)
         self._charger_samples.append(self._read_charger_power_total())
@@ -331,6 +332,17 @@ class PwMngtBalanceDataSensor(RestoreEntity, SensorEntity):
         self._attr_extra_state_attributes = values
         self._attr_available = True
         self.async_write_ha_state()
+
+    def _battery_charging_on_command(self) -> bool:
+        """Whether the battery is being charged on purpose, so its charge
+        power isn't surplus: forced charge, or battery_command on one of
+        the charge_now_* options (issue #39 -- Node-RED "Balance" skips
+        the battery while "PV batteri styring" starts with "Lad nu")."""
+        if pv_properties.is_forced_charging(self.hass, self._entry):
+            return True
+        entity_id = pv_properties.battery_command_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        return state is not None and state.state in CHARGE_NOW_OPTIONS
 
     def _read_charger_power_total(self) -> float:
         """Sum of all configured chargers' current Power reading.
