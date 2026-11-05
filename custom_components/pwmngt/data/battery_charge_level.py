@@ -1154,4 +1154,16 @@ class PwMngtBatteryChargeLevelController:
         the run entirely while this is None, instead of computing from a
         0 that only means "not ready"."""
         entity_id = pv_properties.battery_nightly_target_entity_id(self.hass, self._entry)
-        return read_float_state(self.hass.states.get(entity_id)) if entity_id else None
+        target = read_float_state(self.hass.states.get(entity_id)) if entity_id else None
+        if target is None:
+            return None
+        # Issue #43: tonight's grid charge goes to the charge decision's
+        # charge_target (the part of target tomorrow's PV won't cover).
+        status_id = pv_properties.battery_charge_status_entity_id(self.hass, self._entry)
+        status = self.hass.states.get(status_id) if status_id else None
+        if status is not None and status.state == "yes_today":
+            try:
+                return min(float(status.attributes["charge_target"]), target)
+            except (KeyError, TypeError, ValueError):
+                pass
+        return target

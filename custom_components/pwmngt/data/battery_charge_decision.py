@@ -30,6 +30,20 @@ trigger (different tab, different purpose -- that one re-runs "Bestem
 ladeeffekt", not "Skal batteri lades"), even though both happen to use
 the same Node-RED cron pattern and a fixed 30 s first delay.
 
+Partial night charge (issue #43, Claus 2026-11-05 -- new, not in
+Node-RED): Node-RED charges all the way to target or not at all ("Nej
+(overskud)" when tomorrow's 08-16 forecast minus the day consumption
+covers the battery). Here tomorrow's forecast is taken cautiously -- the
+middle between Solcast's normal and pessimistic (estimate10) estimate,
+so the margin follows the day's uncertainty -- and only what that
+expected surplus leaves short is charged: charge_target, the shortfall
+in % of the battery (rounded up, at least the battery's minimum SoC, at
+most target). PV fills the rest up to target during the day. The same
+cautious surplus decides "no_surplus", so a day that only just covered
+the battery with the normal forecast now gets a small charge ("rather a
+little too much than too little"). data/battery_charge_level.py stops the
+charge and plans the night (#22) on charge_target.
+
 Day end at 16:55 (issue #2, Node-RED: inject "16:55" on the same tab):
 a "yes_today" still standing then goes back to "not_calculated" and a
 running grid charge is stopped -- see _handle_day_end().
@@ -148,6 +162,12 @@ PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES: list[str] = [
     # Issue #37: data/battery_charge_level.py's charge watchdog --
     # {"retries", "max_retries", "failed"}, for the battery card.
     "charge_watchdog",
+    # Issue #43: tonight's grid charge goes to this SoC (%) -- target minus
+    # what tomorrow's PV is expected to add (see module docstring) -- and
+    # the cautious PV surplus (kWh) it is based on. Carried into
+    # "yes_today" at midnight.
+    "charge_target",
+    "expected_pv_surplus",
 ]
 
 PwM_BATTERY_CHARGE_DECISION_SENSORS: list[SensorEntityDescription] = [
@@ -299,10 +319,39 @@ class BatteryChargeInputs:
     # initial_state, see module docstring). Checked right after billing
     # method, before the surplus/price-difference branches.
     previous_status: str
+    # Issue #43: Solcast's pessimistic (estimate10) 08-16 forecast for
+    # tomorrow, and the battery's minimum SoC (the lowest charge target).
+    expected_solar_tomorrow_8_16_p10: float | None = None
+    battery_min_soc: float = 0.0
 
 
 def _average(values: list[float]) -> float:
     return sum(values) / len(values)
+
+
+def cautious_pv_forecast(normal: float | None, pessimistic: float | None) -> float | None:
+    """Issue #43: tomorrow's 08-16 forecast taken cautiously -- the middle
+    between Solcast's normal and pessimistic (estimate10) estimate, so the
+    margin follows how uncertain the day is. The normal one alone while
+    the pessimistic one is missing."""
+    if normal is None:
+        return None
+    if pessimistic is None:
+        return normal
+    return (normal + min(pessimistic, normal)) / 2
+
+
+def partial_charge_target(
+    battery_target: float, battery_size: float, expected_surplus: float | None, battery_min_soc: float
+) -> float:
+    """Issue #43: the SoC (%) tonight's grid charge goes to -- the part of
+    target that tomorrow's expected PV surplus (kWh) doesn't cover,
+    rounded up, at least battery_min_soc, at most battery_target. The full
+    target while the surplus is unknown."""
+    if expected_surplus is None or battery_size <= 0:
+        return battery_target
+    missing_pct = battery_target - max(expected_surplus, 0.0) / battery_size * 100
+    return float(min(battery_target, max(battery_min_soc, math.ceil(missing_pct))))
 
 
 def calculate_battery_charge_decision(
@@ -327,8 +376,23 @@ def calculate_battery_charge_decision(
     ]
 
     battery_kwh = (inputs.battery_size * inputs.battery_target) / 100
+
+    # Issue #43: cautious PV surplus tomorrow, and the part of target it
+    # leaves for tonight's grid charge.
+    pv_forecast = cautious_pv_forecast(
+        inputs.expected_solar_tomorrow_8_16, inputs.expected_solar_tomorrow_8_16_p10
+    )
+    expected_surplus = (
+        pv_forecast - inputs.day_consumption
+        if pv_forecast is not None and inputs.day_consumption is not None
+        else None
+    )
+    charge_target = partial_charge_target(
+        inputs.battery_target, inputs.battery_size, expected_surplus, inputs.battery_min_soc
+    )
+    charge_kwh = (inputs.battery_size * charge_target) / 100
     chargetime_needed = math.ceil(
-        (battery_kwh * 1000) / battery_max_charge * _CHARGETIME_SAFETY_MARGIN
+        (charge_kwh * 1000) / battery_max_charge * _CHARGETIME_SAFETY_MARGIN
     )
 
     prices_sorted_day = sorted(price_tomorrow_day, key=lambda item: item[1])
@@ -339,6 +403,8 @@ def calculate_battery_charge_decision(
             "avg_cheapest_hours": None,
             "avg_most_expensive_hours": None,
             "price_difference": None,
+            "charge_target": None,
+            "expected_pv_surplus": None,
         }
         for hour in range(24):
             attributes[f"hour_{hour}"] = False
@@ -358,6 +424,8 @@ def calculate_battery_charge_decision(
         "avg_cheapest_hours": avg_cheapest_hours,
         "avg_most_expensive_hours": avg_most_expensive_hours,
         "price_difference": price_difference,
+        "charge_target": charge_target,
+        "expected_pv_surplus": None if expected_surplus is None else round(expected_surplus, 2),
     }
     for hour in range(24):
         attributes[f"hour_{hour}"] = hour in cheapest_hour_set
@@ -366,11 +434,8 @@ def calculate_battery_charge_decision(
         status = "no_price"
     elif inputs.previous_status == _STATUS_DEFERRED:
         status = _STATUS_DEFERRED
-    elif (
-        inputs.expected_solar_tomorrow_8_16 is not None
-        and inputs.day_consumption is not None
-        and (inputs.expected_solar_tomorrow_8_16 - inputs.day_consumption) >= battery_kwh
-    ):
+    elif expected_surplus is not None and expected_surplus >= battery_kwh:
+        # Issue #43: the cautious surplus (Node-RED: the normal forecast).
         status = "no_surplus"
     elif price_difference >= inputs.price_difference_threshold:
         status = "yes_tomorrow"
@@ -614,10 +679,11 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         "no_charge_needed") is left alone.
         """
         if self._attr_native_value == "yes_tomorrow":
+            # Issue #43: tonight's charge target carries over with the hours.
             hours = {
                 key: value
                 for key, value in self._attr_extra_state_attributes.items()
-                if key.startswith("hour_")
+                if key.startswith("hour_") or key in ("charge_target", "expected_pv_surplus")
             }
             self._attr_native_value = "yes_today"
             self._attr_extra_state_attributes = {
@@ -696,7 +762,8 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         last_charge = {
             "finished": dt_util.now().isoformat(timespec="seconds"),
             "target_reached": target_reached,
-            "target": self._read_target(),
+            # Issue #43: what tonight's charge went to.
+            "target": attributes.get("charge_target") or self._read_target(),
             "hours": [hour for hour in range(24) if attributes.get(f"hour_{hour}") is True],
             "skipped_hours": list(attributes.get("skipped_hours") or []),
             "extended_hours": list(attributes.get("extended_hours") or []),
@@ -821,6 +888,10 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
                 hub_properties.billing_method_entity_id, ""
             ),
             expected_solar_tomorrow_8_16=self._read_solar_forecast_tomorrow_8_16(),
+            expected_solar_tomorrow_8_16_p10=self._read_solar_forecast_tomorrow_8_16(
+                "pv_forecast_8_16_tomorrow_p10"
+            ),
+            battery_min_soc=pv_properties.battery_min_soc(self.hass, self._entry),
             day_consumption=self._read_consumption_daytime_adjusted(),
             battery_size=self._read_float_pv(pv_properties.battery_size_entity_id, 0.0) or 0.0,
             battery_target=battery_target,
@@ -864,13 +935,15 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         entity_id = pv_properties.battery_nightly_target_entity_id(self.hass, self._entry)
         return read_float_state(self.hass.states.get(entity_id)) if entity_id else None
 
-    def _read_solar_forecast_tomorrow_8_16(self) -> float | None:
+    def _read_solar_forecast_tomorrow_8_16(
+        self, attribute: str = "pv_forecast_8_16_tomorrow"
+    ) -> float | None:
         entity_id = pv_properties.solar_data_entity_id(self.hass, self._entry)
         state = self.hass.states.get(entity_id) if entity_id else None
         if state is None:
             return None
         try:
-            value = state.attributes.get("pv_forecast_8_16_tomorrow")
+            value = state.attributes.get(attribute)
             return None if value is None else float(value)
         except (TypeError, ValueError):
             return None

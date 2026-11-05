@@ -131,7 +131,7 @@ KEY_PV_BIG_SHIFTS_LAST_60MIN = "pv_big_shifts_last_60min"
 # local clock hours "from-to" (to not included).
 # ---------------------------------------------------------------------------
 
-PwM_SOLAR_DATA_ATTRIBUTES: dict[str, tuple[str, int, int]] = {
+PwM_SOLAR_DATA_ATTRIBUTES: dict[str, tuple[str, int, int] | tuple[str, int, int, str]] = {
     # 17-21 today. Not a Node-RED sensor -- the figure the target is
     # built from, shown for transparency.
     "pv_forecast_17_21_today": ("today", 17, 21),
@@ -141,6 +141,10 @@ PwM_SOLAR_DATA_ATTRIBUTES: dict[str, tuple[str, int, int]] = {
     # 08-16 tomorrow. Old: sensor.solproduktion_imorgen_8_16 (Claus).
     # Read by Claus's "Skal batteri lades".
     "pv_forecast_8_16_tomorrow": ("tomorrow", 8, 16),
+    # 08-16 tomorrow, Solcast's pessimistic estimate (estimate10). Not a
+    # Node-RED sensor -- issue #43: the charge decision takes the middle
+    # between this and pv_forecast_8_16_tomorrow.
+    "pv_forecast_8_16_tomorrow_p10": ("tomorrow", 8, 16, "pv_estimate10"),
 }
 
 PwM_SOLAR_DATA_SENSORS: list[SensorEntityDescription] = [
@@ -276,8 +280,8 @@ def calculate_solar_data(inputs: SolarInputs) -> dict[str, float | None]:
     (None = unknown)."""
     hourly = {"today": inputs.today_hourly, "tomorrow": inputs.tomorrow_hourly}
     values: dict[str, float | None] = {
-        key: _js_round(sum_pv_forecast(hourly[day], start, end), 1)
-        for key, (day, start, end) in PwM_SOLAR_DATA_ATTRIBUTES.items()
+        key: _js_round(sum_pv_forecast(hourly[day], start, end, *estimate), 1)
+        for key, (day, start, end, *estimate) in PwM_SOLAR_DATA_ATTRIBUTES.items()
     }
 
     night = inputs.night_consumption

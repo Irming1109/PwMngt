@@ -738,6 +738,14 @@ const PWM_BATTERY_TEXTS = {
     lastChargeDone: (time, target) =>
       `Tonight's charge finished at ${time}${target !== null ? ` - target ${target}% reached` : ""}`,
     lastChargeStopped: (time) => `Tonight's charge stopped at ${time} - the target wasn't reached`,
+    kwh: (value) => `${value.toFixed(1)} kWh`,
+    partialCharge: (pct, target, kwh) =>
+      `Charges to ${pct}% from the grid - tomorrow's PV (${kwh} surplus expected) fills it up to the target of ${target}%`,
+    fullCharge: (pct, kwh) =>
+      `Charges all the way to ${pct}% from the grid - tomorrow's PV surplus is only ${kwh}`,
+    chargeTo: (pct) => `Charges to ${pct}% from the grid`,
+    surplusCovers: (target, kwh) =>
+      `Tomorrow's PV surplus (${kwh}, cautious estimate) covers the target of ${target}%`,
     manualTitle: "Manual battery control",
     chargeNow: (pct) => `Charge now ${pct}%`,
     stop: "Stop charging",
@@ -777,6 +785,14 @@ const PWM_BATTERY_TEXTS = {
     lastChargeDone: (time, target) =>
       `Nattens ladning færdig kl. ${time}${target !== null ? ` - target ${target} % nået` : ""}`,
     lastChargeStopped: (time) => `Nattens ladning stoppet kl. ${time} - target blev ikke nået`,
+    kwh: (value) => `${value.toFixed(1).replace(".", ",")} kWh`,
+    partialCharge: (pct, target, kwh) =>
+      `Lades til ${pct} % fra nettet - solen i morgen (forventet ${kwh} overskud) fylder op til target ${target} %`,
+    fullCharge: (pct, kwh) =>
+      `Lades helt til ${pct} % fra nettet - forventet sol-overskud i morgen kun ${kwh}`,
+    chargeTo: (pct) => `Lades til ${pct} % fra nettet`,
+    surplusCovers: (target, kwh) =>
+      `Forventet sol-overskud i morgen (${kwh}, forsigtigt skøn) dækker target ${target} %`,
     manualTitle: "Manuel betjening af batteri",
     chargeNow: (pct) => `Lad nu ${pct} %`,
     stop: "Afbryd ladning",
@@ -977,6 +993,7 @@ class PwMBatteryCard extends HTMLElement {
       status: pwmFindEntityId(this._hass, "pv", "sensor", "battery_charge_status"),
       postpone: pwmFindEntityId(this._hass, "pv", "button", "postpone_battery_charge"),
       soc: pwmFindEntityId(this._hass, "pv", "sensor", "battery_soc"),
+      target: pwmFindEntityId(this._hass, "pv", "sensor", "battery_nightly_target"),
     };
     this._signature = undefined;
   }
@@ -988,7 +1005,7 @@ class PwMBatteryCard extends HTMLElement {
 
   /** Only re-render when something the card shows has changed. */
   _stateSignature() {
-    const parts = ["command", "mode", "status", "soc"].map((name) => {
+    const parts = ["command", "mode", "status", "soc", "target"].map((name) => {
       const state = this._state(name);
       return state ? `${state.state}|${JSON.stringify(state.attributes)}` : "-";
     });
@@ -1050,6 +1067,13 @@ class PwMBatteryCard extends HTMLElement {
         content.appendChild(this._banner(PWM_BATTERY_STATUS_TONE[status.state], text));
       }
     }
+    // Issue #43: what the decision is based on, and how far tonight's
+    // charge goes (a partial charge leaves the rest to tomorrow's PV).
+    if (isAuto) {
+      const decision = this._decisionText(t, status);
+      if (decision) content.appendChild(this._note(decision));
+    }
+
     if (manualPct !== null) {
       if (chargingPct === null) {
         content.appendChild(this._banner("warn", t.pausedByFuse(manualPct)));
@@ -1198,6 +1222,33 @@ class PwMBatteryCard extends HTMLElement {
     if (skipped.length) content.appendChild(this._note(t.skippedHours));
     if (extended.length) content.appendChild(this._note(t.extendedHours));
     if (anyUnused) content.appendChild(this._note(t.unusedHours));
+  }
+
+  /**
+   * Issue #43: the charge decision in words -- the charge target tonight
+   * (partial or full) against the nightly target, and tomorrow's cautious
+   * PV surplus it is based on. Null when there is nothing to say.
+   */
+  _decisionText(t, status) {
+    const number = (value) =>
+      value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
+    const surplus = number(status.attributes.expected_pv_surplus);
+    const chargeTarget = number(status.attributes.charge_target);
+    const targetState = this._state("target");
+    const target = targetState ? number(targetState.state) : null;
+    const kwh = surplus === null ? null : t.kwh(Math.max(surplus, 0));
+    if (status.state === "yes_today" || status.state === "yes_tomorrow") {
+      if (chargeTarget === null) return null;
+      const pct = Math.round(chargeTarget);
+      if (target !== null && chargeTarget < target && kwh !== null) {
+        return t.partialCharge(pct, Math.round(target), kwh);
+      }
+      return kwh !== null ? t.fullCharge(pct, kwh) : t.chargeTo(pct);
+    }
+    if (status.state === "no_surplus" && kwh !== null && target !== null) {
+      return t.surplusCovers(Math.round(target), kwh);
+    }
+    return null;
   }
 
   _note(text) {
