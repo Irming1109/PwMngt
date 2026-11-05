@@ -91,9 +91,11 @@ after it are enough to reach the target from the current SoC, counted
 at a safe power: the lower of 50 % of the max charge power and what the
 fuse allows right now (the charge itself still runs at "Charge 75" when
 the fuse allows it). A charge that has started runs on. Safety net: if
-the target isn't reached when the last planned night hour has passed,
-charging goes on in the following hours, until 06:00 at the latest.
-Planned day hours are left as they are.
+the target isn't reached when the last planned hour of the day has
+passed, charging goes on in the following night hours, until 06:00 at
+the latest. Planned day hours count too (issue #35, see _night_plan()):
+they make skipping possible, and no extension happens while one is
+still to come.
 
 New in PwMngt (issue #17, Claus 2026-11-03 -- Node-RED had the same gap,
 "Bestem ladeeffekt" only ran on "Ja (i dag)"): a manual "Charge now".
@@ -110,6 +112,16 @@ runs, also while battery_mode is "manual" -- it can't be turned off: the
 same fuse rule as above, stepping down at once (to "internal" when not
 even 25 % fits) and back up towards the chosen level 10 minutes after the
 last step down. Checked every 30 s, plus the fuse trigger.
+
+New in PwMngt (issue #37, Claus 2026-11-05): a charge watchdog. Under a
+charge command (automatic or manual) the battery must show charge power
+(at least 30 % of the commanded power, 300 W) -- when it hasn't for 10
+minutes, the command goes to "internal" for 2 minutes and is sent again,
+at most 3 times per charge; then a warning in the log, a Repair and on the
+battery card, cleared by the next charge that works. Not once the target
+(or, manual, 95 %) is reached, nor while Battery power is missing. On
+2026-11-05 Rene's Kostal ignored its charge relays all night after a deep
+discharge, and nobody knew before the morning.
 """
 
 from __future__ import annotations
@@ -123,10 +135,11 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import event
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 
-from ..const import CONF_ENTITY_MAP, ENTITY_KEY_BATTERY_POWER, ENTITY_KEY_BATTERY_SOC
+from ..const import CONF_ENTITY_MAP, DOMAIN, ENTITY_KEY_BATTERY_POWER, ENTITY_KEY_BATTERY_SOC
 from ..const import (
     ENTITY_KEY_MAIN_FUSE_LOAD_L1,
     ENTITY_KEY_MAIN_FUSE_LOAD_L2,
@@ -146,6 +159,7 @@ from .battery_charge_decision import (
     HOUR_MARK_SKIPPED,
     signal_battery_charge_target_reached,
     signal_charge_hour_marked,
+    signal_charge_watchdog,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -194,6 +208,8 @@ _NIGHT_END_HOUR = 6
 _SAFE_CHARGE_SHARE = 0.50
 # Same margin data/battery_charge_decision.py plans its hours with.
 _CHARGETIME_SAFETY_MARGIN = 1.10
+# Issue #35: battery_target_end_time's default (select.py), 16:45.
+_DEFAULT_TARGET_END_MINUTES = 16 * 60 + 45
 _NIGHT_SKIP = "skip"
 _NIGHT_EXTEND = "extend"
 
@@ -215,6 +231,25 @@ _MANUAL_START_GRACE_SECONDS = 2 * 60
 _CHARGE_START_GRACE_SECONDS = 60
 # Below this charge power (W) the battery counts as not charging.
 _MANUAL_CHARGING_MIN_W = 100.0
+# Issue #37: the "no charge power" stop of a manual charge only counts this
+# close to full (the inverter's own max SoC); lower down the charge
+# watchdog below resends the command instead.
+_MANUAL_IDLE_STOP_MIN_SOC = 95.0
+
+# Issue #37 (Claus, 2026-11-05): the charge watchdog. When the battery
+# shows no charge power for _WATCHDOG_WAIT_SECONDS after a charge command
+# (or stops charging under one), the command goes to "internal" for
+# _WATCHDOG_PAUSE_SECONDS and is then sent again -- at most
+# _WATCHDOG_MAX_RETRIES times per charge, then a warning (log, Repair, the
+# battery card). Seen on Rene's Kostal on 2026-11-05: after a deep
+# discharge it ignored the charge relays all night.
+_WATCHDOG_WAIT_SECONDS = 10 * 60
+_WATCHDOG_PAUSE_SECONDS = 2 * 60
+_WATCHDOG_MAX_RETRIES = 3
+# Charging = at least this share of the commanded power, and this much (W).
+_WATCHDOG_MIN_SHARE = 0.30
+_WATCHDOG_MIN_W = 300.0
+_WATCHDOG_ISSUE_ID = "charge_not_responding"
 # Manual levels, highest first, for stepping down from the chosen one.
 _MANUAL_LEVELS = (100, 75, 50, 25)
 
@@ -263,6 +298,9 @@ class BatteryChargeLevelInputs:
     battery_size_kwh: float | None = None
     # A charge_now_* command is active right now.
     charging_now: bool = False
+    # Battery target end time in minutes after midnight (issue #35); None
+    # = _DEFAULT_TARGET_END_MINUTES.
+    target_end_minutes: int | None = None
 
 
 def _amps_per_phase(power_w: float) -> float:
@@ -298,26 +336,41 @@ def _night_plan(
     inputs: BatteryChargeLevelInputs, battery_soc: float, safe_power_w: float
 ) -> str | None:
     """Issue #22 (see module docstring): _NIGHT_SKIP to leave this planned
-    night hour out because the planned night hours after it are enough,
-    _NIGHT_EXTEND to keep charging in an unplanned night hour after the
-    last planned one, or None for the plain Node-RED rule."""
+    night hour out because the planned hours after it are enough,
+    _NIGHT_EXTEND to keep charging in an unplanned night hour when no
+    planned hour is left today, or None for the plain Node-RED rule.
+
+    DIFF (issue #35, Claus 2026-11-05): "the planned hours after it" are
+    the whole day's, not only the night's -- "Skal batteri lades" picks the
+    cheapest hours 0-16, so a planned morning hour is cheaper than the
+    night hours it beat. For skipping, a day hour only counts when it ends
+    by the target end time (the evening needs the target); a charge is
+    never extended into the night while planned day hours are still to
+    come."""
     hour = inputs.current_hour
     if hour is None or hour >= _NIGHT_END_HOUR or not inputs.battery_size_kwh:
         return None
-    planned_night = [h for h in inputs.cheap_hours if h < _NIGHT_END_HOUR]
-    if not planned_night:
+    if not any(h < _NIGHT_END_HOUR for h in inputs.cheap_hours):
         return None
+    later = [h for h in inputs.cheap_hours if h > hour]
     if inputs.hour_is_cheap:
         if inputs.charging_now:
             # Once started, a charge runs on -- skipping now would only
             # add a stop and a start (two inverter commands).
             return None
-        hours_left_after = sum(1 for h in planned_night if h > hour)
+        end_minutes = (
+            inputs.target_end_minutes
+            if inputs.target_end_minutes is not None
+            else _DEFAULT_TARGET_END_MINUTES
+        )
+        hours_left_after = sum(
+            1 for h in later if h < _NIGHT_END_HOUR or (h + 1) * 60 <= end_minutes
+        )
         needed = _charge_hours_needed(
             battery_soc, inputs.battery_target, inputs.battery_size_kwh, safe_power_w
         )
         return _NIGHT_SKIP if hours_left_after >= needed else None
-    if max(planned_night) < hour:
+    if not later:
         return _NIGHT_EXTEND
     return None
 
@@ -506,6 +559,13 @@ class PwMngtBatteryChargeLevelController:
         # Issue #17: when the battery stopped showing charge power during
         # a manual charge (None while it charges).
         self._manual_idle_since = None
+        # Issue #37: the charge watchdog -- see _check_charge_response().
+        self._watch_since = None
+        self._watch_retries = 0
+        self._watch_pause_until = None
+        self._watch_resend: str | None = None
+        self._watch_manual = False
+        self._watch_failed = False
 
         if not self._soc_entity_id:
             LOGGER.warning(
@@ -544,7 +604,7 @@ class PwMngtBatteryChargeLevelController:
         self._unsubscribers.append(
             event.async_track_time_interval(
                 self.hass,
-                self._handle_manual_interval,
+                self._handle_interval,
                 timedelta(seconds=_MANUAL_CHECK_SECONDS),
             )
         )
@@ -638,16 +698,21 @@ class PwMngtBatteryChargeLevelController:
         self._maybe_target_reached()
 
     @callback
-    def _handle_manual_interval(self, _now) -> None:
+    def _handle_interval(self, _now) -> None:
         manual_charge = self._read_manual_charge()
         if manual_charge is not None:
             self._run_manual_charge(manual_charge)
         else:
             self._manual_idle_since = None
+        self._check_charge_response()
 
     # -- runs ----------------------------------------------------------------
 
     def _run_charge_level(self) -> None:
+        if self._watchdog_paused():
+            # Issue #37: the watchdog's "internal" pause -- it resends the
+            # charge command itself when the pause is over.
+            return
         manual_charge = self._read_manual_charge()
         if manual_charge is not None:
             # Issue #17: a manual charge replaces the automatic level --
@@ -679,6 +744,7 @@ class PwMngtBatteryChargeLevelController:
             cheap_hours=self._read_cheap_hours(),
             battery_size_kwh=self._read_battery_size(),
             charging_now=currently_charging(self._read_battery_command()),
+            target_end_minutes=self._read_target_end_minutes(),
         )
         result, night_plan = calculate_battery_charge_level(inputs)
         if result is None:
@@ -716,6 +782,8 @@ class PwMngtBatteryChargeLevelController:
         if self._manual_charge_idle_too_long():
             self._end_manual_charge("no charge power for 5 minutes")
             return
+        if self._watchdog_paused():
+            return
         result = calculate_manual_charge_level(
             ManualChargeLevelInputs(
                 requested=requested,
@@ -743,8 +811,11 @@ class PwMngtBatteryChargeLevelController:
         now = dt_util.utcnow()
         entity_id = pv_properties.battery_command_entity_id(self.hass, self._entry)
         command = self.hass.states.get(entity_id) if entity_id else None
+        soc = self._read_soc()
         if (
             command is None
+            or soc is None
+            or soc < _MANUAL_IDLE_STOP_MIN_SOC
             or not currently_charging(command.state)
             or (now - command.last_changed).total_seconds() < _MANUAL_START_GRACE_SECONDS
             or self._battery_is_charging()
@@ -773,6 +844,129 @@ class PwMngtBatteryChargeLevelController:
         LOGGER.info("PwMngt: manual battery charge ended -- %s", reason)
         self._manual_idle_since = None
         async_dispatcher_send(self.hass, signal_manual_charge(self._entry.entry_id), None)
+
+    # -- charge watchdog (issue #37) -----------------------------------------
+
+    def _watchdog_paused(self) -> bool:
+        return self._watch_pause_until is not None and dt_util.utcnow() < self._watch_pause_until
+
+    def _check_charge_response(self) -> None:
+        """Issue #37 (see _WATCHDOG_WAIT_SECONDS): runs every
+        _MANUAL_CHECK_SECONDS. Resends a charge command the battery doesn't
+        follow, and reports when that doesn't help either."""
+        now = dt_util.utcnow()
+        if self._watch_pause_until is not None:
+            if now < self._watch_pause_until:
+                return
+            option, manual = self._watch_resend, self._watch_manual
+            self._watch_pause_until = None
+            self._watch_resend = None
+            self._watch_since = now
+            LOGGER.info("PwMngt: charge watchdog -- sending %s again", option)
+            self._send_watchdog_command(option, manual)
+            self._publish_watchdog()
+            return
+
+        entity_id = pv_properties.battery_command_entity_id(self.hass, self._entry)
+        command = self.hass.states.get(entity_id) if entity_id else None
+        if command is None or not currently_charging(command.state):
+            # Not charging on purpose (fuse pause, target reached, internal):
+            # the next charge starts the count over.
+            if self._watch_since is not None or self._watch_retries:
+                self._watch_since = None
+                self._watch_retries = 0
+                self._publish_watchdog()
+            return
+        if self._watch_since is None:
+            self._watch_since = command.last_changed
+
+        if self._charge_target_reached():
+            return
+        power = self._read_battery_power()
+        if power is None:
+            return  # Can't tell -- never act on a missing reading.
+        commanded = self._commanded_charge_power(command.state)
+        if -power >= max(_WATCHDOG_MIN_W, commanded * _WATCHDOG_MIN_SHARE):
+            self._watch_since = now
+            if self._watch_failed or self._watch_retries:
+                self._watch_retries = 0
+                self._watch_failed = False
+                ir.async_delete_issue(self.hass, DOMAIN, _WATCHDOG_ISSUE_ID)
+                self._publish_watchdog()
+            return
+        if (now - self._watch_since).total_seconds() < _WATCHDOG_WAIT_SECONDS:
+            return
+
+        if self._watch_retries < _WATCHDOG_MAX_RETRIES:
+            self._watch_retries += 1
+            self._watch_resend = command.state
+            self._watch_manual = self._read_manual_charge() is not None
+            self._watch_pause_until = now + timedelta(seconds=_WATCHDOG_PAUSE_SECONDS)
+            LOGGER.warning(
+                "PwMngt: the battery isn't charging on %s -- internal for %d s, "
+                "then sending it again (attempt %d of %d)",
+                command.state,
+                _WATCHDOG_PAUSE_SECONDS,
+                self._watch_retries,
+                _WATCHDOG_MAX_RETRIES,
+            )
+            self._send_watchdog_command(_COMMAND_INTERNAL, self._watch_manual)
+            self._publish_watchdog()
+        elif not self._watch_failed:
+            self._watch_failed = True
+            LOGGER.warning(
+                "PwMngt: the battery doesn't respond to %s after %d attempts -- check the inverter",
+                command.state,
+                _WATCHDOG_MAX_RETRIES,
+            )
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                _WATCHDOG_ISSUE_ID,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=_WATCHDOG_ISSUE_ID,
+            )
+            self._publish_watchdog()
+
+    def _charge_target_reached(self) -> bool:
+        """The battery stops charging by itself here -- not a fault."""
+        soc = self._read_soc()
+        if soc is None:
+            return False
+        if self._read_manual_charge() is not None:
+            return soc >= _MANUAL_IDLE_STOP_MIN_SOC
+        target = self._read_target()
+        return target is not None and soc >= target
+
+    def _send_watchdog_command(self, option: str | None, manual: bool) -> None:
+        """A manual charge keeps its flag (issue #17): its own signal."""
+        if option is None:
+            return
+        signal = signal_manual_charge if manual else signal_set_battery_command
+        async_dispatcher_send(self.hass, signal(self._entry.entry_id), option)
+
+    def _publish_watchdog(self) -> None:
+        async_dispatcher_send(
+            self.hass,
+            signal_charge_watchdog(self._entry.entry_id),
+            {
+                "retries": self._watch_retries,
+                "max_retries": _WATCHDOG_MAX_RETRIES,
+                "failed": self._watch_failed,
+            },
+        )
+
+    def _read_battery_power(self) -> float | None:
+        """Battery power, normalized: positive = discharging."""
+        power = (
+            read_float_state(self.hass.states.get(self._battery_power_entity_id))
+            if self._battery_power_entity_id
+            else None
+        )
+        if power is None:
+            return None
+        return power * pv_properties.power_sign(self._entry, ENTITY_KEY_BATTERY_POWER)
 
     def _step_allowed(self, result: str) -> bool:
         """Issue #15's step-up wait (see module docstring): records a step
@@ -865,6 +1059,16 @@ class PwMngtBatteryChargeLevelController:
         return frozenset(
             hour for hour in range(24) if state.attributes.get(f"hour_{hour}") is True
         )
+
+    def _read_target_end_minutes(self) -> int | None:
+        """battery_target_end_time ("16:45") in minutes after midnight."""
+        entity_id = pv_properties.battery_target_end_time_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        try:
+            hours, minutes = str(state.state).split(":")
+            return int(hours) * 60 + int(minutes)
+        except (AttributeError, ValueError):
+            return None
 
     def _read_battery_size(self) -> float | None:
         entity_id = pv_properties.battery_size_entity_id(self.hass, self._entry)

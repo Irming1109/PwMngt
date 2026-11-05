@@ -93,6 +93,14 @@ def battery_target_end_time_entity_id(hass: HomeAssistant, entry: ConfigEntry) -
     return _pv_entity_id(hass, entry, "select", "battery_target_end_time")
 
 
+def inverter_type(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+    """select.<pv>_inverter_type's option (e.g. "Kostal Plenticore"), or
+    None while it has no state."""
+    entity_id = _pv_entity_id(hass, entry, "select", "inverter_type")
+    state = hass.states.get(entity_id) if entity_id else None
+    return state.state if state is not None else None
+
+
 def battery_command_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
     """Entity id of select.<pv>_battery_command (see PwM_PV_CONFIG_SELECTS
     in select.py)."""

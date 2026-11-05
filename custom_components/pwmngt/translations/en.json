@@ -275,6 +275,10 @@
     "missing_stromligning": {
       "title": "Strømligning is not installed",
       "description": "PwMngt's \"Spot electricity price\" field (Options -> Solar PV Plant) expects a spot-price sensor (kr/kWh), which normally comes from the **Strømligning** integration. Without it there's nothing to pick for this required field, and the Solar PV Plant wizard can't be completed.\n\nInstall and set up Strømligning (via HACS, or search for it directly in Settings -> Devices & services -> Add integration), then revisit PwMngt's options to pick its price sensor. This warning clears itself automatically once Strømligning is installed."
+    },
+    "charge_not_responding": {
+      "title": "The battery doesn't respond to the charge command",
+      "description": "PwMngt asked the battery to charge, but it showed no charge power -- also after the command was sent again 3 times (2 minutes on \"internal\" in between).\n\nCheck the inverter (its own event log and battery status) and whatever passes the battery command on to it (relays, Node-RED). This warning clears itself the next time a charge works."
     }
   },
   "entity": {

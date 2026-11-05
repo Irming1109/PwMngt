@@ -99,6 +99,9 @@ CHARGER_POWER_TRANSLATION_KEYS: dict[str, str] = {
 
 GROWATT_MODBUS_PLATFORM = "growatt_modbus"
 
+# select.<pv>_inverter_type's option for a Kostal (select.py).
+INVERTER_TYPE_KOSTAL = "Kostal Plenticore"
+
 INVERTER_TYPE_INTEGRATION_DOMAINS: dict[str, tuple[str, ...]] = {
     "Kostal Plenticore": ("kostal_plenticore",),
     "Growatt": ("growatt_server", GROWATT_MODBUS_PLATFORM),

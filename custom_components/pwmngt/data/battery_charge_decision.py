@@ -145,6 +145,9 @@ PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES: list[str] = [
     # "not_calculated", so the card can show it until a new decision is
     # made (every new plan, postpone and midnight clear it).
     "last_charge",
+    # Issue #37: data/battery_charge_level.py's charge watchdog --
+    # {"retries", "max_retries", "failed"}, for the battery card.
+    "charge_watchdog",
 ]
 
 PwM_BATTERY_CHARGE_DECISION_SENSORS: list[SensorEntityDescription] = [
@@ -240,6 +243,12 @@ def signal_charge_hour_marked(entry_id: str) -> str:
     which the night plan skipped the current hour, or a charge ran in it.
     Payload: (HOUR_MARK_*, hour 0-23)."""
     return f"{DOMAIN}_{entry_id}_charge_hour_marked"
+
+
+def signal_charge_watchdog(entry_id: str) -> str:
+    """Dispatcher signal data/battery_charge_level.py sends when its charge
+    watchdog (issue #37) changes. Payload: the charge_watchdog dict."""
+    return f"{DOMAIN}_{entry_id}_charge_watchdog"
 
 
 def signal_battery_charge_target_reached(entry_id: str) -> str:
@@ -473,6 +482,13 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
                 self._handle_hour_marked,
             )
         )
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                signal_charge_watchdog(self._entry.entry_id),
+                self._handle_charge_watchdog,
+            )
+        )
 
         # data/battery_charge_level.py (the "SOC >= target" gate) -- the
         # charge finished, so stop treating tonight as "still charging".
@@ -615,6 +631,15 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
                 key: None for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
             }
             self.async_write_ha_state()
+
+    @callback
+    def _handle_charge_watchdog(self, watchdog: dict) -> None:
+        """Issue #37: the charge watchdog's state, for the battery card --
+        whatever the status (a manual charge has its own)."""
+        attributes = dict(self._attr_extra_state_attributes)
+        attributes["charge_watchdog"] = watchdog
+        self._attr_extra_state_attributes = attributes
+        self.async_write_ha_state()
 
     @callback
     def _handle_hour_marked(self, mark: str, hour: int) -> None:

@@ -350,6 +350,10 @@
     "missing_stromligning": {
       "title": "Strømligning er ikke installeret",
       "description": "PwMngt's felt \"Elpris (inkl. moms)\" (Indstillinger -> Solar PV Plant) skal bruge en pris-sensor (kr/kWh), som normalt kommer fra integrationen **Strømligning**. Uden den er der intet at vælge i det påkrævede felt, og Solar PV Plant-wizarden kan ikke gennemføres.\n\nInstallér og opsæt Strømligning (via HACS, eller søg direkte efter den under Indstillinger -> Enheder & tjenester -> Tilføj integration), og gå så tilbage til PwMngt's indstillinger for at vælge pris-sensoren. Advarslen forsvinder af sig selv, når Strømligning er installeret."
+    },
+    "charge_not_responding": {
+      "title": "Batteriet reagerer ikke på ladekommandoen",
+      "description": "PwMngt bad batteriet om at lade, men det viste ingen ladeeffekt -- heller ikke efter, at kommandoen blev sendt igen 3 gange (2 minutter på \"internal\" imellem).\n\nTjek inverteren (dens egen hændelseslog og batteristatus) og det, der sender batterikommandoen videre til den (relæer, Node-RED). Advarslen forsvinder af sig selv, næste gang en ladning lykkes."
     }
   }
 }

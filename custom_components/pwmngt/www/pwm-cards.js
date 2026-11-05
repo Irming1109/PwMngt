@@ -128,17 +128,60 @@ const PWM_CARD_STYLE = `
  */
 const PWM_DOMAIN = "pwmngt";
 
+// This copy's version, from the "?v=" the integration loads it with (see
+// _async_register_frontend() in __init__.py); "0" when it has none.
+const PWM_CARDS_VERSION = (() => {
+  try {
+    return new URL(import.meta.url).searchParams.get("v") || "0";
+  } catch (error) {
+    return "0";
+  }
+})();
+
+/** Whether version a (e.g. "0.4.37") is newer than version b. */
+function pwmIsNewer(a, b) {
+  const pa = String(a).split(".").map(Number);
+  const pb = String(b).split(".").map(Number);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const x = pa[i] || 0;
+    const y = pb[i] || 0;
+    if (x !== y) return x > y;
+  }
+  return false;
+}
+
 /**
- * customElements.define(), but a no-op when the element already exists.
- * This file is loaded both as an extra JS URL and as a dashboard resource
- * (see _async_register_frontend() in __init__.py -- the companion app only
- * loads the latter), so in a browser it runs twice; a second define()
- * would throw and stop the rest of the file.
+ * customElements.define(), but safe when this file runs more than once.
+ * It is loaded both as an extra JS URL and as a dashboard resource (the
+ * companion app only loads the latter), so in a browser it runs twice; a
+ * second define() would throw and stop the rest of the file.
+ *
+ * Those two can be different versions: a cached Home Assistant page still
+ * lists the previous release's URL, and whichever copy runs first owns the
+ * element (issue #34 -- the battery card lost the night result that way).
+ * So a newer copy moves its code onto the already registered class, the
+ * whole prototype chain (PwMngtBaseCard too): the newest always wins.
+ * Cards already on screen pick it up at their next render.
  */
 function pwmDefine(name, elementClass) {
-  if (!customElements.get(name)) {
+  const existing = customElements.get(name);
+  if (!existing) {
+    elementClass.pwmVersion = PWM_CARDS_VERSION;
     customElements.define(name, elementClass);
+    return;
   }
+  if (!pwmIsNewer(PWM_CARDS_VERSION, existing.pwmVersion || "0")) return;
+  let source = elementClass.prototype;
+  let target = existing.prototype;
+  while (source && target && source !== HTMLElement.prototype && target !== HTMLElement.prototype) {
+    for (const key of Object.getOwnPropertyNames(source)) {
+      if (key === "constructor") continue;
+      Object.defineProperty(target, key, Object.getOwnPropertyDescriptor(source, key));
+    }
+    source = Object.getPrototypeOf(source);
+    target = Object.getPrototypeOf(target);
+  }
+  existing.pwmVersion = PWM_CARDS_VERSION;
 }
 
 /** A device's own "pwmngt" identifier (see devices.py), or undefined. */
@@ -690,6 +733,8 @@ const PWM_BATTERY_TEXTS = {
     skippedHours: "Red = skipped by the automation - the later hours are enough to reach the target",
     extendedHours: "Dashed = charged after the plan, the target wasn't reached in the planned hours",
     unusedHours: "Grey = not used, the target was already reached",
+    chargeNotResponding: "The battery doesn't respond to the charge command - check the inverter",
+    chargeRetry: (n, max) => `The battery didn't charge - command sent again (attempt ${n} of ${max})`,
     lastChargeDone: (time, target) =>
       `Tonight's charge finished at ${time}${target !== null ? ` - target ${target}% reached` : ""}`,
     lastChargeStopped: (time) => `Tonight's charge stopped at ${time} - the target wasn't reached`,
@@ -727,6 +772,8 @@ const PWM_BATTERY_TEXTS = {
     skippedHours: "Rød = sprunget over af automatikken - de senere timer er nok til at nå target",
     extendedHours: "Stiplet = ladet efter planen, target blev ikke nået i de planlagte timer",
     unusedHours: "Grå = ikke brugt, target var allerede nået",
+    chargeNotResponding: "Batteriet reagerer ikke på ladekommandoen - tjek inverteren",
+    chargeRetry: (n, max) => `Batteriet ladede ikke - kommandoen sendt igen (forsøg ${n} af ${max})`,
     lastChargeDone: (time, target) =>
       `Nattens ladning færdig kl. ${time}${target !== null ? ` - target ${target} % nået` : ""}`,
     lastChargeStopped: (time) => `Nattens ladning stoppet kl. ${time} - target blev ikke nået`,
@@ -980,6 +1027,15 @@ class PwMBatteryCard extends HTMLElement {
     const manualMatch = /^charge_now_(\d+)$/.exec(command.attributes.manual_charge || "");
     const manualPct = manualMatch ? Number(manualMatch[1]) : null;
     const planned = status.state === "yes_today" || status.state === "yes_tomorrow";
+
+    // Issue #37: the charge watchdog -- the battery didn't follow a charge
+    // command.
+    const watchdog = status.attributes.charge_watchdog;
+    if (watchdog && watchdog.failed) {
+      content.appendChild(this._banner("bad", t.chargeNotResponding));
+    } else if (watchdog && watchdog.retries > 0) {
+      content.appendChild(this._note(t.chargeRetry(watchdog.retries, watchdog.max_retries)));
+    }
 
     // Banners -- same order and conditions as the Node-RED card.
     if (!isAuto) {

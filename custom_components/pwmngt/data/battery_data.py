@@ -126,6 +126,7 @@ from ..const import (
     DOMAIN,
     ENTITY_KEY_BATTERY_GRID_CHARGED_DAY,
     ENTITY_KEY_BATTERY_SOC,
+    INVERTER_TYPE_KOSTAL,
 )
 from ..devices import CHARGERS, pv_device_info
 from ..helpers.state_helper import read_float_state
@@ -199,6 +200,9 @@ _DEFAULT_PRICE = 1.5
 # Charger state (sensor.py, PwM_CHARGER_SENSORS "state") that stops the
 # house battery from discharging. Old: "Aktiv - manuel".
 _CHARGER_STATE_ACTIVE_MANUAL = "Active - manual"
+# Issue #35: today's grid-charged energy (kWh) from which tonight's grid
+# charge counts as started -- above the counter's own noise.
+_NIGHT_CHARGE_STARTED_KWH = 0.5
 # Battery command (select.py, "battery_command") that pauses charging.
 # Old: "Bloker ladning". Node-RED also checked "Bloker batteri", which
 # PwMngt doesn't offer (removed, issue #29).
@@ -520,6 +524,20 @@ def _target_floor(
     return today, max(kept, new_floor)
 
 
+def kostal_min_soc_step(min_soc: float, target: float, battery_min_soc: float) -> int:
+    """Issue #1 (Claus, 2026-11-05): a Kostal stores Battery:MinSoc in its
+    permanent memory, so the minimum SoC is published in steps of 10 --
+    the highest step the calculated min_soc has reached, never above it:
+    it follows the SoC up 10, 20, 30 ... (Node-RED's translator wrote every
+    point, ~70 writes in one night). The target itself is published once
+    reached, also when it isn't a multiple of 10 (one extra write), and
+    never below the battery's own minimum. Done here, not in a translator,
+    because PwMngt will write the inverter itself later on."""
+    if min_soc >= target:
+        return int(round(min_soc))
+    return int(max(math.floor(min_soc / 10) * 10, battery_min_soc))
+
+
 def calculate_battery_data(
     inputs: BatteryInputs, previous: BatteryLedger
 ) -> tuple[int, BatteryLedger, str, bool]:
@@ -568,7 +586,17 @@ def calculate_battery_data(
     vinter = month in (11, 12, 1)  # November, December, January
     # Protect grid-bought energy until the target end time, but only from
     # 06:00 and never during the free 17:00-20:59 window.
-    target_protection_active = before_target_end and hour >= 6 and not is_evening_free_window
+    # DIFF (issue #35, Claus 2026-11-05): also from the moment tonight's
+    # grid charge has started -- Node-RED's 06:00 left the battery free
+    # between the end of the charge and 06:00, and the night price
+    # protection only keeps grid cells: on 2026-11-05 the target (43 %) was
+    # reached at 03:45 and the battery ran down to 36 % on its PV cells
+    # before 06:00. Before the charge starts the battery stays free (the
+    # night plan, issue #22, skips early hours precisely for that).
+    night_charge_started = hour < 6 and inputs.grid_charged_day >= _NIGHT_CHARGE_STARTED_KWH
+    target_protection_active = (
+        before_target_end and (hour >= 6 or night_charge_started) and not is_evening_free_window
+    )
 
     # ---- Which discharge rule applies this run, based on the cells as
     # loaded (before this run's rise/fall -- rise and fall are mutually
@@ -1076,8 +1104,16 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         )
         self._ledger = ledger
 
+        # Issue #1: a Kostal gets the minimum SoC in steps of 10 -- see
+        # kostal_min_soc_step().
+        calculated_min_soc = min_soc
+        if pv_properties.inverter_type(self.hass, self._entry) == INVERTER_TYPE_KOSTAL:
+            min_soc = kostal_min_soc_step(min_soc, inputs.target, inputs.battery_min_soc)
         self._attr_native_value = min_soc
         self._attr_extra_state_attributes = {
+            # Before the Kostal steps (issue #1); the same as the state on
+            # other inverters.
+            "min_soc_calculated": calculated_min_soc,
             "soc_grid": round(ledger.soc_grid, 2),
             "soc_pv": round(ledger.soc_pv, 2),
             "soc_cells": [round(v, 4) for v in ledger.soc_cells],
