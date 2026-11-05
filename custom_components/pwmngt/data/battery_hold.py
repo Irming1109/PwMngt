@@ -117,6 +117,8 @@ or battery_command changes -- plus battery_mode, for the manual pause.
 from __future__ import annotations
 
 import logging
+import statistics
+from collections import deque
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Any
@@ -198,6 +200,14 @@ _DISCHARGE_SECONDS_UNSTABLE = 6 * 60
 _WAIT_MAX_POINTS_BELOW = 2
 
 _RUN_INTERVAL_SECONDS = 60  # Node-RED inject "1 Minut".
+# Issue #42: the house power is the median of this many House Consumption
+# readings. growatt_modbus derives it from the inverter's own output and
+# the grid, read at different moments: right after the hold power steps,
+# it reads 0 or the whole output for one update. Followed as is, the hold
+# power jumps with it, which makes the next reading jump -- it swung
+# between 0 and 6 kW every ~30 s. A median of 3 drops those single
+# readings and follows a real change after two updates.
+_HOUSE_MEDIAN_READINGS = 3
 
 # The "status" attribute (Node-RED's node.status text). Translated in
 # strings.json under entity.sensor.battery_hold_power.state_attributes.
@@ -661,6 +671,7 @@ class PwMngtBatteryHoldSensor(RestoreEntity, SensorEntity):
         self._house_entity_id = find_entity_by_name(
             hass, GROWATT_MODBUS_PLATFORM, GROWATT_MODBUS_HOUSE_CONSUMPTION
         )
+        self._house_readings: deque[float] = deque(maxlen=_HOUSE_MEDIAN_READINGS)
 
     @property
     def extra_restore_state_data(self) -> PwMngtBatteryHoldStoredData:
@@ -696,7 +707,30 @@ class PwMngtBatteryHoldSensor(RestoreEntity, SensorEntity):
         self.async_on_remove(
             charger_properties.async_track_car_charging(self.hass, self._entry, self._handle_trigger)
         )
+        # Issue #42: collect House Consumption readings for the median --
+        # no run of its own, the hold keeps its own triggers.
+        if self._house_entity_id:
+            self._add_house_reading()
+            self.async_on_remove(
+                event.async_track_state_change_event(
+                    self.hass, [self._house_entity_id], self._handle_house_changed
+                )
+            )
         self._run()
+
+    @callback
+    def _handle_house_changed(self, _event) -> None:
+        self._add_house_reading()
+
+    def _add_house_reading(self) -> None:
+        value = self._read(self._house_entity_id)
+        if value is not None:
+            self._house_readings.append(value)
+
+    def _house_power(self) -> float | None:
+        """Issue #42: the median of the last House Consumption readings,
+        or None while there is none."""
+        return statistics.median(self._house_readings) if self._house_readings else None
 
     @callback
     def _handle_trigger(self, _event_or_now=None) -> None:
@@ -734,7 +768,7 @@ class PwMngtBatteryHoldSensor(RestoreEntity, SensorEntity):
             limit=self._read(pv_properties.battery_data_entity_id(self.hass, self._entry)),
             soc=self._read(self._soc_entity_id),
             pv_power=self._read(pv_properties.pv_total_entity_id(self.hass, self._entry)),
-            house_power=self._read(self._house_entity_id),
+            house_power=self._house_power(),
             battery_power=battery_power,
             battery_command=(
                 command_state.state
