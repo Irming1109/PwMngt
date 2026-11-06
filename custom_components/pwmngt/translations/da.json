@@ -143,7 +143,7 @@
             "data_description": {
               "electricity_tax_full_rate": "Din egen sensor, der viser den aktuelle fulde elafgift (kr/kWh inkl. moms), fx Strømlignings afgiftssensor. Bruges til at beregne den fiktive \"indkøbspris uden PV\" (hvad du ville betale, hvis hele forbruget skulle købes fra nettet) og besparelsessensorerne nedenfor, sammen med PwM-hubbens valg \"Billing period\" og \"Electricity tax\" under fanen Konfiguration, som afgør afgiftsgrænsen og om den nedsatte sats overhovedet gælder. Valgfri -- lad feltet stå tomt (\"Ikke tilgængelig\"), hvis du ikke følger det; så forbliver de sensorer utilgængelige.",
               "household_consumption_hourly": "Den entity, der viser husstandens samlede forbrug (kWh) som en rå tæller, der kun stiger, ikke en Daily/Hourly Utility Meter-hjælper -- PwMngt udleder selv hver times tal og tåler, at tælleren nulstilles, eller at du senere peger feltet på en ny entity (fx efter udskiftning af inverter). Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
-              "grid_import_hourly": "Den entity, der viser strøm købt fra nettet (kWh) som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
+              "grid_import_hourly": "Den entity, der viser strøm købt fra nettet (kWh) som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Ikke en nettotæller (eksport minus import), som også kan gå ned. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
               "battery_grid_charge_hourly": "Den entity, der viser energi ladet ind i batteriet specifikt fra nettet (kWh) som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
               "battery_discharge_hourly": "Den entity, der viser al energi, batteriet har afladet (kWh), som en rå tæller, der kun stiger -- også det, der evt. sælges til nettet. Samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en."
             }
@@ -225,7 +225,7 @@
           "sell_force_override": "En input_boolean, switch eller binary_sensor, som dine egne automationer kan tænde for at tvinge batteriet i salgstilstand med det samme, uanset hvad PwMngt's egen pris-/prognoseberegning ellers ville beslutte. Kun den ene vej -- den kan kun tvinge salg, aldrig forhindre det. Valgfri -- lad feltet stå tomt (\"Ikke tilgængelig\"), hvis du ikke har sådan en automation; så afgøres salg alene af PwMngt's egen beregning.",
           "electricity_tax_full_rate": "Din egen sensor, der viser den aktuelle fulde elafgift (kr/kWh inkl. moms), fx Strømlignings afgiftssensor. Bruges til at beregne den fiktive \"indkøbspris uden PV\" (hvad du ville betale, hvis hele forbruget skulle købes fra nettet) og besparelsessensorerne nedenfor, sammen med PwM-hubbens valg \"Billing period\" og \"Electricity tax\" under fanen Konfiguration, som afgør afgiftsgrænsen og om den nedsatte sats overhovedet gælder. Valgfri -- lad feltet stå tomt (\"Ikke tilgængelig\"), hvis du ikke følger det; så forbliver de sensorer utilgængelige.",
           "household_consumption_hourly": "Den entity, der viser husstandens samlede forbrug (kWh) som en rå tæller, der kun stiger, ikke en Daily/Hourly Utility Meter-hjælper -- PwMngt udleder selv hver times tal og tåler, at tælleren nulstilles, eller at du senere peger feltet på en ny entity (fx efter udskiftning af inverter). Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
-          "grid_import_hourly": "Den entity, der viser strøm købt fra nettet (kWh) som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
+          "grid_import_hourly": "Den entity, der viser strøm købt fra nettet (kWh) som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Ikke en nettotæller (eksport minus import), som også kan gå ned. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
           "battery_grid_charge_hourly": "Den entity, der viser energi ladet ind i batteriet specifikt fra nettet (kWh) som en rå tæller, der kun stiger -- samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
           "battery_discharge_hourly": "Den entity, der viser al energi, batteriet har afladet (kWh), som en rå tæller, der kun stiger -- også det, der evt. sælges til nettet. Samme begrundelse som feltet ovenfor. Valgfri -- lad feltet stå tomt, hvis du ikke har en.",
           "seed_purchase_price_real": "Flytter du fra en eksisterende Node-RED-opsætning, der fører den samme løbende sum (kr), så peg på den gamle sensor, så PwMngt's egen sum starter fra dens nuværende værdi i stedet for 0. Læses kun én gang, ved PwMngt's allerførste besparelsesberegning -- røres aldrig igen bagefter. Lad feltet stå tomt (\"Ikke tilgængelig\") på en ny installation uden historik. \"Besparelse egen produktion\" udledes så automatisk af dette og feltet nedenfor og behøver ikke sin egen startværdi.",
@@ -354,6 +354,32 @@
     "charge_not_responding": {
       "title": "Batteriet reagerer ikke på ladekommandoen",
       "description": "PwMngt bad batteriet om at lade, men det viste ingen ladeeffekt -- heller ikke efter, at kommandoen blev sendt igen 3 gange (2 minutter på \"internal\" imellem).\n\nTjek inverteren (dens egen hændelseslog og batteristatus) og det, der sender batterikommandoen videre til den (relæer, Node-RED). Advarslen forsvinder af sig selv, næste gang en ladning lykkes."
+    }
+  },
+  "services": {
+    "adjust_savings": {
+      "name": "Ret besparelsessum",
+      "description": "Lægger et beløb til (eller trækker det fra, hvis det er negativt) en af de summer, besparelses-sensorerne bygger på -- fx for at rette det, en forkert valgt tæller har bogført. Besparelses-sensorerne følger kun med op.",
+      "fields": {
+        "total": {
+          "name": "Sum",
+          "description": "Den sum, der skal rettes."
+        },
+        "amount": {
+          "name": "Beløb",
+          "description": "Kroner, der lægges til; negativt for at trække fra."
+        }
+      }
+    }
+  },
+  "selector": {
+    "savings_total": {
+      "options": {
+        "purchase_price_real": "Indkøbspris (reel)",
+        "purchase_price_real_without_pv": "Indkøbspris uden PV",
+        "battery_grid_charge_sum": "Batteri ladet fra nettet (sum)",
+        "battery_grid_discharge_sum": "Batteriets netandel afladet (sum)"
+      }
     }
   }
 }

@@ -1,0 +1,21 @@
+adjust_savings:
+  fields:
+    total:
+      required: true
+      selector:
+        select:
+          translation_key: savings_total
+          options:
+            - purchase_price_real
+            - purchase_price_real_without_pv
+            - battery_grid_charge_sum
+            - battery_grid_discharge_sum
+    amount:
+      required: true
+      selector:
+        number:
+          min: -1000000
+          max: 1000000
+          step: 0.01
+          mode: box
+          unit_of_measurement: DKK

@@ -259,12 +259,32 @@ _SEED_SOURCE_KEYS: dict[str, str] = {
 _PRICE_SHIFT_DELAY_SECONDS = 60
 _ACCUMULATE_DELAY_SECONDS = 75
 
+# A counter that drops below this fraction of its last value was reset
+# (new meter/firmware); a smaller drop is noise, see read_counter_delta().
+_COUNTER_RESET_FRACTION = 0.5
+
+# The four running totals pwmngt.adjust_savings may correct (issue #46) --
+# service field value -> (ledger part, attribute).
+ADJUSTABLE_SAVINGS_TOTALS: dict[str, tuple[str, str]] = {
+    "purchase_price_real": ("purchase", "purchase_price_real"),
+    "purchase_price_real_without_pv": ("purchase", "purchase_price_real_without_pv"),
+    "battery_grid_charge_sum": ("battery", "battery_grid_charge_sum"),
+    "battery_grid_discharge_sum": ("battery", "battery_grid_discharge_sum"),
+}
+
 
 def signal_savings_update(entry_id: str) -> str:
     """Dispatcher signal PwMngtSavingsDataSensor sends after every +75 s
     run -- the two headline sensors listen and update themselves. Payload:
     (own_production_savings, battery_charging_savings)."""
     return f"{DOMAIN}_{entry_id}_savings_update"
+
+
+def signal_savings_adjust(entry_id: str) -> str:
+    """Dispatcher signal the pwmngt.adjust_savings action sends (issue
+    #46) -- PwMngtSavingsDataSensor listens. Payload: (total, amount_dkk),
+    total being a key of ADJUSTABLE_SAVINGS_TOTALS."""
+    return f"{DOMAIN}_{entry_id}_savings_adjust"
 
 
 # ---------------------------------------------------------------------------
@@ -353,11 +373,16 @@ def read_counter_delta(
       one hour's data right at the swap, which is the safe trade-off:
       the alternative is guessing whether the new entity's current value
       is "since the reset" or "since always".
-    - raw_value dropped below last_raw_value on the SAME entity: a
-      meter/firmware reset. Mirrors data/consumption_data.py's own
-      accumulate() helper -- the new, lower reading is itself this
-      period's accumulated amount since the reset, not negative
-      consumption, so it becomes the delta directly.
+    - raw_value dropped below _COUNTER_RESET_FRACTION of last_raw_value
+      on the SAME entity: a meter/firmware reset. Mirrors data/
+      consumption_data.py's own accumulate() helper -- the new, lower
+      reading is itself this period's accumulated amount since the
+      reset, not negative consumption, so it becomes the delta directly.
+    - A smaller drop is noise (issue #46): delta 0, and the baseline stays
+      at the highest value seen, so the energy is counted once when the
+      counter passes it again -- over time the sum equals the counter's
+      real rise. On 2026-11-04-06 a counter jittering 597 -> 596.9 kWh
+      was taken for a reset and booked 597 kWh into an hour, 18 times.
     - Otherwise: the normal case, delta = raw_value - last_raw_value.
     """
     if raw_value is None:
@@ -365,6 +390,8 @@ def read_counter_delta(
     if state.last_raw_value is None or state.last_entity_id != entity_id:
         return 0.0, HourlyCounterState(last_entity_id=entity_id, last_raw_value=raw_value)
     if raw_value < state.last_raw_value:
+        if raw_value >= state.last_raw_value * _COUNTER_RESET_FRACTION:
+            return 0.0, state
         delta = raw_value
     else:
         delta = raw_value - state.last_raw_value
@@ -721,6 +748,11 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
                 self.hass, self._handle_hourly_trigger, minute=0, second=0
             )
         )
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass, signal_savings_adjust(self._entry.entry_id), self._handle_adjust
+            )
+        )
         self._write_state()
         self._dispatch_headline_values()
 
@@ -774,6 +806,12 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         # value -- this runs on every reload now, not just once, so it
         # must not undo an hourly high-water mark set since the last
         # reload just because this run's raw diff happens to be smaller.
+        self._raise_headline_values()
+
+    def _raise_headline_values(self) -> None:
+        """Raise own_production_savings/battery_charging_savings to the
+        four sums' current differences -- never lowered: they're
+        total_increasing sensors, where a drop reads as a meter reset."""
         purchase = self._ledger.purchase
         derived_production_savings = max(
             0.0, purchase.purchase_price_real_without_pv - purchase.purchase_price_real
@@ -794,6 +832,26 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         return read_float_state(self.hass.states.get(entity_id))
 
     # -- triggers ----------------------------------------------------------
+
+    @callback
+    def _handle_adjust(self, total: str, amount: float) -> None:
+        """pwmngt.adjust_savings (issue #46): add amount (DKK, negative
+        to subtract) to one of the four running totals, to correct data a
+        wrongly mapped counter booked."""
+        part_name, attr_name = ADJUSTABLE_SAVINGS_TOTALS[total]
+        part = getattr(self._ledger, part_name)
+        before = getattr(part, attr_name)
+        setattr(part, attr_name, round(before + amount, 2))
+        LOGGER.warning(
+            "PwMngt: savings total '%s' adjusted by %.2f DKK (%.2f -> %.2f)",
+            total,
+            amount,
+            before,
+            getattr(part, attr_name),
+        )
+        self._raise_headline_values()
+        self._write_state()
+        self._dispatch_headline_values()
 
     @callback
     def _handle_hourly_trigger(self, _now=None) -> None:
