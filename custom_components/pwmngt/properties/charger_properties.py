@@ -36,10 +36,12 @@ _ENERGY_FALLBACK_SECONDS = 10 * 60
 class CarCharging:
     """Whether any charger is charging a car right now, and with how much
     (W) -- power_w is None when a charging charger has no power sensor
-    (only its consumption source shows that it charges)."""
+    (only its consumption source shows that it charges). power_unavailable:
+    a charger's power sensor reads unavailable/unknown right now."""
 
     charging: bool
     power_w: float | None
+    power_unavailable: bool = False
 
 
 def consumption_source_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> list[str]:
@@ -166,12 +168,15 @@ def car_charging(hass: HomeAssistant, entry: ConfigEntry) -> CarCharging:
     changed within the last _ENERGY_FALLBACK_SECONDS (power unknown)."""
     charging = False
     power_known = True
+    power_unavailable = False
     total_w = 0.0
     for source in consumption_source_entity_ids(hass, entry):
         power_entity_id = charger_power_entity_id(hass, source)
         if power_entity_id is not None:
             watts = _power_w(hass.states.get(power_entity_id))
-            if watts is not None and watts >= CAR_CHARGING_MIN_W:
+            if watts is None:
+                power_unavailable = True
+            elif watts >= CAR_CHARGING_MIN_W:
                 charging = True
                 total_w += watts
             continue
@@ -184,7 +189,7 @@ def car_charging(hass: HomeAssistant, entry: ConfigEntry) -> CarCharging:
         ):
             charging = True
             power_known = False
-    return CarCharging(charging, total_w if power_known else None)
+    return CarCharging(charging, total_w if power_known else None, power_unavailable)
 
 
 def _power_w(state) -> float | None:

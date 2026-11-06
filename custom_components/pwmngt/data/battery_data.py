@@ -200,9 +200,10 @@ _DEFAULT_PRICE = 1.5
 # Charger state (sensor.py, PwM_CHARGER_SENSORS "state") that stops the
 # house battery from discharging. Old: "Aktiv - manuel".
 _CHARGER_STATE_ACTIVE_MANUAL = "Active - manual"
-# Issue #35: today's grid-charged energy (kWh) from which tonight's grid
-# charge counts as started -- above the counter's own noise.
-_NIGHT_CHARGE_STARTED_KWH = 0.5
+# Issue #33: how long a charger's power sensor may be unavailable/unknown
+# while the last known "car charging" is kept -- a Wallbox drops out for a
+# minute or two now and then, and each unlock/relock is an inverter write.
+_CAR_POWER_UNAVAILABLE_HOLD = timedelta(minutes=10)
 # Battery command (select.py, "battery_command") that pauses charging.
 # Old: "Bloker ladning". Node-RED also checked "Bloker batteri", which
 # PwMngt doesn't offer (removed, issue #29).
@@ -332,6 +333,17 @@ class BatteryLedger:
     # _target_floor(). None = no floor kept (protection not active).
     target_floor_date: str | None = None
     target_floor: float | None = None
+    # Issue #45: the min_soc the last grid charge (charge_now_*) stopped at
+    # -- a Kostal may hold exactly this (not a step of 10), see
+    # kostal_min_soc_step(). Kept until the target protection ends.
+    charge_lock_date: str | None = None
+    charge_lock: float | None = None
+    # Whether a charge_now_* command ran at the previous run -- the lock is
+    # taken when it stops.
+    charging_previous: bool = False
+    # Issue #35: the date a charge_now_* command ran before 06:00 -- "the
+    # night charge has started", see calculate_battery_data().
+    night_charge_date: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -348,6 +360,10 @@ class BatteryLedger:
             "plan_start_soc": self.plan_start_soc,
             "target_floor_date": self.target_floor_date,
             "target_floor": self.target_floor,
+            "charge_lock_date": self.charge_lock_date,
+            "charge_lock": self.charge_lock,
+            "charging_previous": self.charging_previous,
+            "night_charge_date": self.night_charge_date,
         }
 
     @classmethod
@@ -366,6 +382,10 @@ class BatteryLedger:
             plan_start_soc=restored.get("plan_start_soc"),
             target_floor_date=restored.get("target_floor_date"),
             target_floor=restored.get("target_floor"),
+            charge_lock_date=restored.get("charge_lock_date"),
+            charge_lock=restored.get("charge_lock"),
+            charging_previous=bool(restored.get("charging_previous", False)),
+            night_charge_date=restored.get("night_charge_date"),
         )
 
 
@@ -524,7 +544,9 @@ def _target_floor(
     return today, max(kept, new_floor)
 
 
-def kostal_min_soc_step(min_soc: float, target: float, battery_min_soc: float) -> int:
+def kostal_min_soc_step(
+    min_soc: float, target: float, battery_min_soc: float, charge_lock: float | None = None
+) -> int:
     """Issue #1 (Claus, 2026-11-05): a Kostal stores Battery:MinSoc in its
     permanent memory, so the minimum SoC is published in steps of 10 --
     the highest step the calculated min_soc has reached, never above it:
@@ -532,10 +554,21 @@ def kostal_min_soc_step(min_soc: float, target: float, battery_min_soc: float) -
     point, ~70 writes in one night). The target itself is published once
     reached, also when it isn't a multiple of 10 (one extra write), and
     never below the battery's own minimum. Done here, not in a translator,
-    because PwMngt will write the inverter itself later on."""
+    because PwMngt will write the inverter itself later on.
+
+    Issue #45 (Claus, 2026-11-06): after a partial night charge (#43) to,
+    say, 47 %, the step down to 40 let the battery discharge 7 points of
+    the grid charge before 06:00. So the level a grid charge stopped at
+    (charge_lock, see BatteryLedger) is held exactly -- one write off the
+    steps per charge, also when the plan has a second block later in the
+    day -- until the steps pass it or the protection ends; never above the
+    calculated min_soc (the winter rule keeps that at or below the SoC)."""
     if min_soc >= target:
         return int(round(min_soc))
-    return int(max(math.floor(min_soc / 10) * 10, battery_min_soc))
+    stepped = max(math.floor(min_soc / 10) * 10, battery_min_soc)
+    if charge_lock is not None:
+        stepped = max(stepped, min(charge_lock, min_soc))
+    return int(round(stepped))
 
 
 def calculate_battery_data(
@@ -593,7 +626,15 @@ def calculate_battery_data(
     # reached at 03:45 and the battery ran down to 36 % on its PV cells
     # before 06:00. Before the charge starts the battery stays free (the
     # night plan, issue #22, skips early hours precisely for that).
-    night_charge_started = hour < 6 and inputs.grid_charged_day >= _NIGHT_CHARGE_STARTED_KWH
+    # "Started" = a charge_now_* command has run since midnight, not the
+    # grid counter: the inverter resets that up to a minute after midnight,
+    # so yesterday's kWh locked the battery at 00:00 on 2026-11-06 (Kasper).
+    today = inputs.now.strftime("%Y-%m-%d")
+    charging = inputs.battery_command in _ACTIVE_CHARGE_COMMANDS
+    night_charge_date = previous.night_charge_date
+    if hour < 6 and charging:
+        night_charge_date = today
+    night_charge_started = hour < 6 and night_charge_date == today
     target_protection_active = (
         before_target_end and (hour >= 6 or night_charge_started) and not is_evening_free_window
     )
@@ -678,7 +719,6 @@ def calculate_battery_data(
 
     # ---- Restart plan (see _restart_plan()) ---------------------------
     blocked = inputs.battery_command == _COMMAND_BLOCK_CHARGING
-    today = inputs.now.strftime("%Y-%m-%d")
     plan_date, plan_start_minutes, plan_start_soc = _restart_plan(
         previous, today, blocked, hour, now_minutes, soc
     )
@@ -796,6 +836,17 @@ def calculate_battery_data(
     ) else "off"
     min_soc_rounded = _js_round(min_soc)
 
+    # ---- Charge lock (issue #45, see kostal_min_soc_step()) ---------------
+    # Taken when a charge_now_* command stops while the protection after
+    # the grid charge holds -- the level that part of the charge reached.
+    # A later block (say 02-04, then 11-12) takes it again at its own end.
+    # Cleared when the protection ends.
+    charge_lock_date, charge_lock = previous.charge_lock_date, previous.charge_lock
+    if not target_protection_active or charge_lock_date != today:
+        charge_lock_date, charge_lock = None, None
+    if target_protection_active and previous.charging_previous and not charging:
+        charge_lock_date, charge_lock = today, float(min_soc_rounded)
+
     avg_cheapest_hours = (
         inputs.avg_cheapest_hours
         if inputs.avg_cheapest_hours is not None
@@ -816,6 +867,10 @@ def calculate_battery_data(
         plan_start_soc=plan_start_soc,
         target_floor_date=target_floor_date,
         target_floor=target_floor,
+        charge_lock_date=charge_lock_date,
+        charge_lock=charge_lock,
+        charging_previous=charging,
+        night_charge_date=night_charge_date,
     )
     return min_soc_rounded, ledger, forced_charge, behind_charge_curve
 
@@ -871,6 +926,9 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         self._last_run: datetime | None = None
         self._pending_run: Any = None  # cancel callback of a scheduled run
         self._last_car_charging_lock = False  # issue #33
+        # When the charger's power became unavailable while the lock was
+        # kept (issue #33), or None.
+        self._car_power_unavailable_since: datetime | None = None
 
         if not self._soc_entity_id:
             LOGGER.warning(
@@ -988,20 +1046,35 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
 
     @callback
     def _handle_car_charging_changed(self, _state_event) -> None:
-        charging = self._car_charging_lock()
-        if charging != self._last_car_charging_lock:
-            self._last_car_charging_lock = charging
+        previous = self._last_car_charging_lock
+        if self._update_car_charging_lock() != previous:
             self._handle_trigger(None)
 
+    def _update_car_charging_lock(self) -> bool:
+        self._last_car_charging_lock = self._car_charging_lock()
+        return self._last_car_charging_lock
+
     def _car_charging_lock(self) -> bool:
-        """Issue #33 -- see BatteryInputs.car_charging_lock."""
+        """Issue #33 -- see BatteryInputs.car_charging_lock. While a
+        charger's power sensor is unavailable/unknown (and no other charger
+        charges), the last known state is kept for up to
+        _CAR_POWER_UNAVAILABLE_HOLD."""
         # Imported here: battery_hold imports solar_data, which battery_data
         # mustn't pull in at module load.
         from .battery_hold import battery_hold_supported
 
         if battery_hold_supported(self.hass):
             return False
-        return charger_properties.car_charging(self.hass, self._entry).charging
+        car = charger_properties.car_charging(self.hass, self._entry)
+        if car.charging or not car.power_unavailable:
+            self._car_power_unavailable_since = None
+            return car.charging
+        now = dt_util.utcnow()
+        if self._car_power_unavailable_since is None:
+            self._car_power_unavailable_since = now
+        if now - self._car_power_unavailable_since < _CAR_POWER_UNAVAILABLE_HOLD:
+            return self._last_car_charging_lock
+        return False
 
     @callback
     def _handle_target_changed(self, state_event) -> None:
@@ -1094,7 +1167,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
                 if (state := self.hass.states.get(entity_id)) is not None
             ],
             battery_min_soc=battery_min_soc,
-            car_charging_lock=self._car_charging_lock(),
+            car_charging_lock=self._update_car_charging_lock(),
         )
 
         min_soc, ledger, forced_charge, behind_charge_curve = calculate_battery_data(
@@ -1106,12 +1179,16 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         # kostal_min_soc_step().
         calculated_min_soc = min_soc
         if pv_properties.inverter_type(self.hass, self._entry) == INVERTER_TYPE_KOSTAL:
-            min_soc = kostal_min_soc_step(min_soc, inputs.target, inputs.battery_min_soc)
+            min_soc = kostal_min_soc_step(
+                min_soc, inputs.target, inputs.battery_min_soc, ledger.charge_lock
+            )
         self._attr_native_value = min_soc
         self._attr_extra_state_attributes = {
             # Before the Kostal steps (issue #1); the same as the state on
             # other inverters.
             "min_soc_calculated": calculated_min_soc,
+            # Issue #45: the level the last grid charge stopped at, or None.
+            "charge_lock": ledger.charge_lock,
             "soc_grid": round(ledger.soc_grid, 2),
             "soc_pv": round(ledger.soc_pv, 2),
             "soc_cells": [round(v, 4) for v in ledger.soc_cells],
