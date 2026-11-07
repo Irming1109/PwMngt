@@ -13,6 +13,12 @@ while it's "manual", _run() does nothing at all (Claus, 2026-10-14) --
 see data/battery_charge_level.py's own docstring for the matching gate
 on the actuation side. _handle_midnight() and the postpone button are
 NOT gated by it -- see _handle_midnight()'s own docstring.
+DIFF (issue #52, Claus 2026-11-07): switching to "manual" clears the
+status to "not_calculated" (and stops a running automatic grid charge,
+same as postponing, issue #18), so the sensor never shows a plan nothing
+will carry out. Switching back to "auto" decides again right away (same
+as cancelling a postponement, issue #44) instead of acting on a plan
+made before the switch.
 
 Hourly nudge (Claus, 2026-10-14: "min node red forsøgte at beregne hver
 hele klokketime" -- traced from the flow export, not guessed): on the
@@ -641,6 +647,15 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
                     for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
                 }
 
+        # Issue #52: clear on "manual", decide again on "auto".
+        battery_mode_entity_id = pv_properties.battery_mode_entity_id(self.hass, self._entry)
+        if battery_mode_entity_id:
+            self.async_on_remove(
+                event.async_track_state_change_event(
+                    self.hass, [battery_mode_entity_id], self._handle_battery_mode_change
+                )
+            )
+
         # Postpone button (button.py) and the local-midnight reset.
         self.async_on_remove(
             async_dispatcher_connect(
@@ -780,6 +795,25 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             # Issue #44 (Node-RED: trigger "Udskydning annulleres", outside
             # the evening window too): decide again right away, so a
             # cancellation late in the evening still gives tonight's plan.
+            self._run()
+
+    @callback
+    def _handle_battery_mode_change(self, state_event) -> None:
+        """Issue #52 -- see module docstring. Only a real switch between
+        "auto" and "manual" counts; a restore at startup (no old state)
+        or unavailable leaves the status alone."""
+        old_state = state_event.data.get("old_state")
+        new_state = state_event.data.get("new_state")
+        if old_state is None or new_state is None:
+            return
+        if old_state.state == "auto" and new_state.state == "manual":
+            self._attr_native_value = _STATUS_NOT_CALCULATED
+            self._attr_extra_state_attributes = {
+                key: None for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
+            }
+            self._stop_running_charge()
+            self.async_write_ha_state()
+        elif old_state.state == "manual" and new_state.state == "auto":
             self._run()
 
     def _stop_running_charge(self) -> None:
