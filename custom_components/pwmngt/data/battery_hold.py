@@ -110,6 +110,16 @@ New logic with no Node-RED counterpart (Claus, issue #14):
   -- a small battery reaches it within a few minutes, so its wait is
   shorter in practice.
 
+Night standby (issue #48, Claus 2026-11-07): asked for 0 W in a hard
+hold with no PV, the WIT takes its own consumption (~275 W) from the
+battery -- 0.9 kWh of the grid charge in one night. A positive remote
+power makes it import (tested: +1 % = ~175 W more from the grid), so the
+hold publishes a negative power for what PV doesn't cover of the
+inverter's standby, in whole 150 W steps rounded up (a little charge
+rather than a discharge). The standby is learned from Battery power
+while PV is ~0 and the last write has settled. Only the power moves, so
+no EEPROM writes are added.
+
 Triggers (as Node-RED): every minute, and whenever PV total, battery_data
 or battery_command changes -- plus battery_mode, for the manual pause.
 """
@@ -117,6 +127,7 @@ or battery_command changes -- plus battery_mode, for the manual pause.
 from __future__ import annotations
 
 import logging
+import math
 import statistics
 from collections import deque
 from dataclasses import dataclass, replace
@@ -183,6 +194,15 @@ _BLOCK_GAIN = 0.5
 # The correction's range, as a share of PV on top of _BLOCK_LOSS_SHARE.
 _BLOCK_CORRECTION_RANGE = (-_BLOCK_LOSS_SHARE, 0.07)
 _LOW_PV_W = 1000  # LAV_PV_W: below this, a hard hold at 0 W (never discharges).
+# Issue #48: the inverter's own consumption covered from the grid in a
+# hard hold -- start value, range and the translator's 150 W per Growatt-%.
+_STANDBY_START_W = 275.0
+_STANDBY_RANGE_W = (0.0, 600.0)
+_STANDBY_STEP_W = 150.0
+# Learned only with PV below this (night: Battery power is the standby
+# minus the import) and after the last write has settled.
+_STANDBY_LEARN_PV_W = 30.0
+_STANDBY_LEARN_GAIN = 0.5
 _FULL_SOC = 98  # FULD_SOC: above this, PV surplus may go to the grid.
 _COOLDOWN_SECONDS = 30  # COOLDOWN_MS: the growatt_modbus lock per register.
 _DEADBAND_UP_W = 300  # DEADBAND_OP: 2 Growatt-% at 150 W per %.
@@ -230,6 +250,9 @@ STATUS_HOLDING_AT_LIMIT = "holding_at_limit"
 STATUS_NORMAL_OPERATION = "normal_operation"
 STATUS_BLOCKING_CHARGE = "blocking_charge"
 STATUS_BLOCKING_CHARGE_AT_LIMIT = "blocking_charge_at_limit"
+# Issue #48: the hold statuses at 0 W, where the grid covers the
+# inverter's standby (_standby_import()).
+_STANDBY_STATUSES = frozenset({STATUS_HARD_HOLD_LOW_PV, STATUS_CATCHING_UP})
 STATUS_COVERING_HOUSE_CAR_CHARGING = "covering_house_car_charging"
 STATUS_CAR_CHARGING_PV_TO_CAR = "car_charging_pv_to_car"
 STATUS_CAR_CHARGING_PV_TO_BATTERY = "car_charging_pv_to_battery"
@@ -287,6 +310,10 @@ class BatteryHoldState:
     # of PV), kept between blocks, and when it was last changed.
     block_correction: float = 0.0
     last_block_correction: float = 0.0
+    # Issue #48: the inverter's learned standby consumption (W), and when
+    # it was last learned.
+    standby_w: float = _STANDBY_START_W
+    last_standby_learn: float = 0.0
 
 
 @dataclass
@@ -396,6 +423,31 @@ def _car_target(st: BatteryHoldState, inputs: BatteryHoldInputs, starting: bool)
     feedback = pv_power - _MARGIN_W > house_only and not starting
     pv_out = max(0.0, pv_power - _block_margin(st, inputs, feedback))
     return max(house_only, pv_out), STATUS_CAR_CHARGING_PV_TO_CAR
+
+
+def _standby_import(st: BatteryHoldState, inputs: BatteryHoldInputs, learn: bool) -> float:
+    """Issue #48: the power (W, negative = import) that covers what PV
+    doesn't of the inverter's standby in a hard hold -- whole 150 W steps,
+    rounded up. With learn, the standby is first corrected half-way
+    towards Battery power minus what was last published (night only)."""
+    now = inputs.now
+    if (
+        learn
+        and st.power_w is not None
+        and (inputs.pv_power or 0.0) < _STANDBY_LEARN_PV_W
+        and inputs.battery_power is not None
+        and now - st.last_write >= _BLOCK_SETTLE_SECONDS
+        and now - st.last_standby_learn >= _BLOCK_SETTLE_SECONDS
+    ):
+        # Battery power = standby - import, and import = -power_w.
+        measured = inputs.battery_power - st.power_w
+        low, high = _STANDBY_RANGE_W
+        st.standby_w = min(max(st.standby_w + (measured - st.standby_w) * _STANDBY_LEARN_GAIN, low), high)
+        st.last_standby_learn = now
+    missing = st.standby_w - (inputs.pv_power or 0.0)
+    if missing <= 0:
+        return 0.0
+    return -math.ceil(missing / _STANDBY_STEP_W) * _STANDBY_STEP_W
 
 
 def _hold_target(soc: float, limit: float, pv_power: float, house_power: float) -> tuple[float, str]:
@@ -584,7 +636,9 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
         if car_cover:
             target, _ = _car_target(st, inputs, starting=True)
         else:
-            target, _ = _hold_target(soc, limit, pv_power, house_power)
+            target, hold_status = _hold_target(soc, limit, pv_power, house_power)
+            if hold_status in _STANDBY_STATUSES:
+                target = _standby_import(st, inputs, learn=False)
         return BatteryHoldResult(
             st, COMMAND_HOLD, STATUS_HOLD_STARTED, True, _start_power(st, target, now)
         )
@@ -604,6 +658,8 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
         target, status = _car_target(st, inputs, starting=started_by_other)
     else:
         target, hold_status = _hold_target(soc, limit, pv_power, house_power)
+        if hold_status in _STANDBY_STATUSES:
+            target = _standby_import(st, inputs, learn=not started_by_other)
         if soc > limit:
             status = status or hold_status
         else:
@@ -643,6 +699,8 @@ class PwMngtBatteryHoldStoredData(ExtraStoredData):
                 blocking=bool(restored.get("blocking", False)),
                 block_correction=float(restored.get("block_correction") or 0.0),
                 last_block_correction=float(restored.get("last_block_correction") or 0.0),
+                standby_w=float(restored.get("standby_w") or _STANDBY_START_W),
+                last_standby_learn=float(restored.get("last_standby_learn") or 0.0),
             )
         )
 
