@@ -111,6 +111,24 @@ a whole soc_state/context-restore block (`saved`/`ha_attrs`/`har_saved`/
 `src`/`har_gyldig_tidligere_tilstand`) -- neither is referenced anywhere
 else in the function body.
 
+Period savings (issue #53, Claus 2026-11-07): own_production_savings and
+battery_charging_savings only ever rise, because Home Assistant's own
+utility meters (today / this year) read any drop in their source as a
+meter reset. So after a night of grid charging, battery_charging_savings
+stands still for hours until the evening's discharge has earned the
+charge back. PwMngt now keeps its own period totals instead -- today,
+this month and this year, for both -- from the real differences
+(purchase_price_real_without_pv - purchase_price_real, and
+battery_grid_discharge_sum - battery_grid_charge_sum) minus that same
+difference at the start of the period. They may go down (the battery's
+"today" is negative after a night charge) and are state_class "total"
+with last_reset at the period start, which Home Assistant's statistics
+handle. The hour 23-24 is booked at 00:01, so a period only rolls over
+after that run has booked it into the old period (see roll_periods()).
+pwmngt.adjust_savings can move a period total too (it shifts the
+period's baseline) -- e.g. to start "this year" from an existing utility
+meter's value instead of 0.
+
 Triggers: every hour, on the hour (00:00-23:00), all day. Two separately-
 delayed runs off that same trigger, exactly matching Claus's own delay
 nodes (randomFirst/randomLast on Node-RED's "delay" pauseType are inert,
@@ -125,6 +143,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -185,6 +204,34 @@ PwM_SAVINGS_DATA_ATTRIBUTES: list[str] = [
     "battery_charging_savings",
 ]
 
+# Issue #53: the period totals -- see module docstring. Period -> its id
+# format (strftime, local time); the id changes exactly when the period
+# rolls over.
+SAVINGS_PERIODS: dict[str, str] = {
+    "today": "%Y-%m-%d",
+    "month": "%Y-%m",
+    "year": "%Y",
+}
+# The two kinds of savings a period total exists for. The key prefix is
+# the matching headline sensor's key.
+_PRODUCTION = "own_production_savings"
+_BATTERY = "battery_charging_savings"
+SAVINGS_PERIOD_KINDS: tuple[str, ...] = (_PRODUCTION, _BATTERY)
+
+
+def period_total_key(kind: str, period: str) -> str:
+    """E.g. "battery_charging_savings_today" -- the sensor key, the
+    savings_data attribute and the pwmngt.adjust_savings value."""
+    return f"{kind}_{period}"
+
+
+# Every period total pwmngt.adjust_savings may move -- key -> (kind, period).
+ADJUSTABLE_SAVINGS_PERIODS: dict[str, tuple[str, str]] = {
+    period_total_key(kind, period): (kind, period)
+    for kind in SAVINGS_PERIOD_KINDS
+    for period in SAVINGS_PERIODS
+}
+
 PwM_SAVINGS_DATA_SENSORS: list[SensorEntityDescription] = [
     SensorEntityDescription(
         key="savings_data",
@@ -230,6 +277,25 @@ PwM_SAVINGS_HEADLINE_SENSORS: list[SensorEntityDescription] = [
         state_class=SensorStateClass.TOTAL_INCREASING,
         native_unit_of_measurement="DKK",
     ),
+]
+
+_PERIOD_NAMES = {"today": "today", "month": "this month", "year": "this year"}
+_KIND_NAMES = {_PRODUCTION: "Own production savings", _BATTERY: "Battery charging savings"}
+_KIND_ICONS = {_PRODUCTION: "mdi:solar-power-variant", _BATTERY: "mdi:battery-heart-variant"}
+
+# Issue #53: the period totals, which may go down -- state_class "total"
+# with last_reset at the period start (see PwMngtSavingsPeriodSensor).
+PwM_SAVINGS_PERIOD_SENSORS: list[SensorEntityDescription] = [
+    SensorEntityDescription(
+        key=period_total_key(kind, period),
+        name=f"{_KIND_NAMES[kind]} {_PERIOD_NAMES[period]}",
+        icon=_KIND_ICONS[kind],
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.TOTAL,
+        native_unit_of_measurement="DKK",
+    )
+    for kind in SAVINGS_PERIOD_KINDS
+    for period in SAVINGS_PERIODS
 ]
 
 # The electricity price itself never comes from a plain entity_map lookup
@@ -280,10 +346,18 @@ def signal_savings_update(entry_id: str) -> str:
     return f"{DOMAIN}_{entry_id}_savings_update"
 
 
+def signal_savings_periods(entry_id: str) -> str:
+    """Dispatcher signal PwMngtSavingsDataSensor sends with the period
+    totals (issue #53) -- the period sensors listen. Payload: (values,
+    period_ids), both dicts: period total key -> DKK, period -> id."""
+    return f"{DOMAIN}_{entry_id}_savings_periods"
+
+
 def signal_savings_adjust(entry_id: str) -> str:
     """Dispatcher signal the pwmngt.adjust_savings action sends (issue
     #46) -- PwMngtSavingsDataSensor listens. Payload: (total, amount_dkk),
-    total being a key of ADJUSTABLE_SAVINGS_TOTALS."""
+    total being a key of ADJUSTABLE_SAVINGS_TOTALS or (issue #53)
+    ADJUSTABLE_SAVINGS_PERIODS."""
     return f"{DOMAIN}_{entry_id}_savings_adjust"
 
 
@@ -339,6 +413,20 @@ class HourlyCountersState:
 
 
 @dataclass
+class PeriodBaseline:
+    """Issue #53: one period's start -- its id (SAVINGS_PERIODS format)
+    and both real differences at that moment. None = not started yet."""
+
+    period_id: str | None = None
+    own_production_savings: float = 0.0
+    battery_charging_savings: float = 0.0
+
+
+def _new_period_baselines() -> dict[str, PeriodBaseline]:
+    return {period: PeriodBaseline() for period in SAVINGS_PERIODS}
+
+
+@dataclass
 class SavingsLedger:
     purchase: PurchasePriceState = field(default_factory=PurchasePriceState)
     battery: BatteryGridBalanceState = field(default_factory=BatteryGridBalanceState)
@@ -350,6 +438,54 @@ class SavingsLedger:
     # tier ahead of time.
     last_hour_price: float | None = None
     this_hour_price: float | None = None
+    # Issue #53: period -> its baseline (see roll_periods()).
+    periods: dict[str, PeriodBaseline] = field(default_factory=_new_period_baselines)
+
+
+def real_savings(ledger: SavingsLedger) -> dict[str, float]:
+    """Issue #53: the two real differences behind the headline sensors,
+    before their high-water mark -- free to go down."""
+    return {
+        _PRODUCTION: ledger.purchase.purchase_price_real_without_pv
+        - ledger.purchase.purchase_price_real,
+        _BATTERY: ledger.battery.battery_grid_discharge_sum
+        - ledger.battery.battery_grid_charge_sum,
+    }
+
+
+def period_ids(now: datetime) -> dict[str, str]:
+    return {period: now.strftime(fmt) for period, fmt in SAVINGS_PERIODS.items()}
+
+
+def roll_periods(ledger: SavingsLedger, now: datetime, only_unstarted: bool = False) -> None:
+    """Issue #53: start every period whose id differs from now's -- its
+    baseline becomes the current real differences, so its total starts at
+    0. Called after the hourly booking (so the hour 23-24, booked at 00:01,
+    still lands in the old day), and with only_unstarted at startup, so a
+    restart just after midnight doesn't roll over before that booking."""
+    current = real_savings(ledger)
+    for period, new_id in period_ids(now).items():
+        baseline = ledger.periods.setdefault(period, PeriodBaseline())
+        if baseline.period_id == new_id:
+            continue
+        if only_unstarted and baseline.period_id is not None:
+            continue
+        baseline.period_id = new_id
+        baseline.own_production_savings = round(current[_PRODUCTION], 2)
+        baseline.battery_charging_savings = round(current[_BATTERY], 2)
+
+
+def period_totals(ledger: SavingsLedger) -> dict[str, float]:
+    """Issue #53: period total key -> DKK since that period started."""
+    current = real_savings(ledger)
+    return {
+        period_total_key(kind, period): round(
+            current[kind] - getattr(ledger.periods[period], kind), 2
+        )
+        for kind in SAVINGS_PERIOD_KINDS
+        for period in SAVINGS_PERIODS
+        if period in ledger.periods
+    }
 
 
 def read_counter_delta(
@@ -603,6 +739,27 @@ def _price_from_restored(raw: Any) -> float | None:
         return None
 
 
+def _periods_from_restored(raw: Any) -> dict[str, PeriodBaseline]:
+    """Issue #53 -- missing (stored before 0.4.56) or broken: not started,
+    roll_periods() starts it at 0."""
+    periods = _new_period_baselines()
+    if not isinstance(raw, dict):
+        return periods
+    for period in periods:
+        item = raw.get(period)
+        if not isinstance(item, dict) or not item.get("period_id"):
+            continue
+        try:
+            periods[period] = PeriodBaseline(
+                period_id=str(item["period_id"]),
+                own_production_savings=float(item.get(_PRODUCTION) or 0.0),
+                battery_charging_savings=float(item.get(_BATTERY) or 0.0),
+            )
+        except (TypeError, ValueError):
+            continue
+    return periods
+
+
 @dataclass
 class PwMngtSavingsStoredData(ExtraStoredData):
     """Everything PwMngtSavingsDataSensor restores across a restart --
@@ -639,6 +796,7 @@ class PwMngtSavingsStoredData(ExtraStoredData):
             },
             "last_hour_price": self.ledger.last_hour_price,
             "this_hour_price": self.ledger.this_hour_price,
+            "periods": {period: vars(baseline) for period, baseline in self.ledger.periods.items()},
         }
 
     @classmethod
@@ -684,6 +842,7 @@ class PwMngtSavingsStoredData(ExtraStoredData):
                 ),
                 last_hour_price=_price_from_restored(last_hour_raw),
                 this_hour_price=_price_from_restored(this_hour_raw),
+                periods=_periods_from_restored(restored.get("periods")),
             )
         )
 
@@ -742,6 +901,7 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         if restored is not None:
             self._ledger = PwMngtSavingsStoredData.from_dict(restored.as_dict()).ledger
         self._seed_ledger()
+        roll_periods(self._ledger, dt_util.now(), only_unstarted=True)
 
         self.async_on_remove(
             event.async_track_time_change(
@@ -837,7 +997,22 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
     def _handle_adjust(self, total: str, amount: float) -> None:
         """pwmngt.adjust_savings (issue #46): add amount (DKK, negative
         to subtract) to one of the four running totals, to correct data a
-        wrongly mapped counter booked."""
+        wrongly mapped counter booked. Issue #53: or to one of the period
+        totals, by moving that period's baseline the other way."""
+        if total in ADJUSTABLE_SAVINGS_PERIODS:
+            kind, period = ADJUSTABLE_SAVINGS_PERIODS[total]
+            baseline = self._ledger.periods[period]
+            before = period_totals(self._ledger)[total]
+            setattr(baseline, kind, round(getattr(baseline, kind) - amount, 2))
+            LOGGER.warning(
+                "PwMngt: savings period total '%s' adjusted by %.2f DKK (%.2f -> %.2f)",
+                total,
+                amount,
+                before,
+                period_totals(self._ledger)[total],
+            )
+            self._write_state()
+            return
         part_name, attr_name = ADJUSTABLE_SAVINGS_TOTALS[total]
         part = getattr(self._ledger, part_name)
         before = getattr(part, attr_name)
@@ -880,6 +1055,8 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
             # the very first hourly cycle since startup) -- nothing to
             # price this hour's energy at. Node-RED: global.get() returns
             # undefined here too before its own first run.
+            roll_periods(self._ledger, dt_util.now())
+            self._write_state()
             return
 
         counters = self._ledger.counters
@@ -938,6 +1115,9 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
                 "balance run -- a required hourly reading is missing"
             )
 
+        # Issue #53: after the booking, so the hour just booked counts in
+        # the period it belongs to.
+        roll_periods(self._ledger, dt_util.now())
         self._write_state()
         self._dispatch_headline_values()
 
@@ -1019,7 +1199,15 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
             "own_production_savings": purchase.own_production_savings,
             "battery_charging_savings": battery.battery_charging_savings,
         }
+        # Issue #53: the period totals and each period's id.
+        totals = period_totals(self._ledger)
+        ids = {period: baseline.period_id for period, baseline in self._ledger.periods.items()}
+        self._attr_extra_state_attributes.update(totals)
+        self._attr_extra_state_attributes["period_ids"] = ids
         self.async_write_ha_state()
+        async_dispatcher_send(
+            self.hass, signal_savings_periods(self._entry.entry_id), totals, ids
+        )
 
     def _dispatch_headline_values(self) -> None:
         async_dispatcher_send(
@@ -1124,4 +1312,75 @@ class PwMngtSavingsHeadlineSensor(RestoreEntity, SensorEntity):
     def _handle_update(self, own_production_savings: float, battery_charging_savings: float) -> None:
         value = (own_production_savings, battery_charging_savings)[self._value_index]
         self._attr_native_value = value
+        self.async_write_ha_state()
+
+
+def _period_start(period: str, period_id: str | None) -> datetime | None:
+    """Local start of a period from its id (SAVINGS_PERIODS format) -- the
+    period sensors' last_reset."""
+    if not period_id:
+        return None
+    try:
+        start = datetime.strptime(period_id, SAVINGS_PERIODS[period])
+    except (KeyError, ValueError):
+        return None
+    return start.replace(tzinfo=dt_util.get_default_time_zone())
+
+
+class PwMngtSavingsPeriodSensor(RestoreEntity, SensorEntity):
+    """Issue #53: one period total (own production or battery, today /
+    this month / this year) -- see PwM_SAVINGS_PERIOD_SENSORS. May go
+    down, so state_class "total" with last_reset at the period start
+    instead of total_increasing. Same startup handling as
+    PwMngtSavingsHeadlineSensor: restored value, then the live one off
+    savings_data's attributes, then the dispatcher signal."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+
+    def __init__(self, description: SensorEntityDescription, entry: ConfigEntry) -> None:
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
+        self._attr_device_info = hub_device_info(entry)
+        self._attr_native_value = 0.0
+        self._attr_last_reset = None
+        self._entry = entry
+        _kind, self._period = ADJUSTABLE_SAVINGS_PERIODS[description.key]
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+
+        last_state = await self.async_get_last_state()
+        if last_state is not None:
+            value = read_float_state(last_state)
+            if value is not None:
+                self._attr_native_value = value
+
+        entity_id = _savings_data_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is not None:
+            value = _read_float_attribute(state, self.entity_description.key)
+            ids = state.attributes.get("period_ids")
+            if value is not None and isinstance(ids, dict):
+                self._apply(value, ids.get(self._period))
+
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                signal_savings_periods(self._entry.entry_id),
+                self._handle_update,
+            )
+        )
+        self.async_write_ha_state()
+
+    def _apply(self, value: float, period_id: str | None) -> None:
+        self._attr_native_value = value
+        self._attr_last_reset = _period_start(self._period, period_id)
+
+    @callback
+    def _handle_update(self, totals: dict[str, float], ids: dict[str, str | None]) -> None:
+        value = totals.get(self.entity_description.key)
+        if value is None:
+            return
+        self._apply(value, ids.get(self._period))
         self.async_write_ha_state()

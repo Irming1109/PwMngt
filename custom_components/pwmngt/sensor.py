@@ -69,8 +69,10 @@ from .data.battery_sell_decision import PwMngtBatterySellDecisionController
 from .data.savings_data import (
     PwM_SAVINGS_DATA_SENSORS,
     PwM_SAVINGS_HEADLINE_SENSORS,
+    PwM_SAVINGS_PERIOD_SENSORS,
     PwMngtSavingsDataSensor,
     PwMngtSavingsHeadlineSensor,
+    PwMngtSavingsPeriodSensor,
 )
 from .data.inverter_derived_data import (
     PwMngtBatteryPvChargedDerivedSensor,
@@ -197,6 +199,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     for value_index, description in enumerate(PwM_SAVINGS_HEADLINE_SENSORS):
         entity = PwMngtSavingsHeadlineSensor(description, entry, value_index)
         LOGGER.info("Added savings headline sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    # Issue #53: the period totals -- after savings_data, whose state they
+    # read at startup (see PwMngtSavingsHeadlineSensor on why).
+    for description in PwM_SAVINGS_PERIOD_SENSORS:
+        entity = PwMngtSavingsPeriodSensor(description, entry)
+        LOGGER.info("Added savings period sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
     # Not an entity -- only writes to battery_command (select.py) and

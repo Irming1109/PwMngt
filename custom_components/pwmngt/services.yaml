@@ -10,6 +10,12 @@ adjust_savings:
             - purchase_price_real_without_pv
             - battery_grid_charge_sum
             - battery_grid_discharge_sum
+            - own_production_savings_today
+            - own_production_savings_month
+            - own_production_savings_year
+            - battery_charging_savings_today
+            - battery_charging_savings_month
+            - battery_charging_savings_year
     amount:
       required: true
       selector:

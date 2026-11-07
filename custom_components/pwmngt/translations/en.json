@@ -309,6 +309,24 @@
       }
     },
     "sensor": {
+      "own_production_savings_today": {
+        "name": "Own production savings today"
+      },
+      "own_production_savings_month": {
+        "name": "Own production savings this month"
+      },
+      "own_production_savings_year": {
+        "name": "Own production savings this year"
+      },
+      "battery_charging_savings_today": {
+        "name": "Battery charging savings today"
+      },
+      "battery_charging_savings_month": {
+        "name": "Battery charging savings this month"
+      },
+      "battery_charging_savings_year": {
+        "name": "Battery charging savings this year"
+      },
       "battery_charge_status": {
         "state": {
           "not_calculated": "Not calculated",
@@ -359,7 +377,7 @@
   "services": {
     "adjust_savings": {
       "name": "Adjust savings total",
-      "description": "Adds an amount to (or, if negative, subtracts it from) one of the running totals behind the savings sensors -- to correct what a wrongly mapped counter booked. The headline savings sensors only follow upwards.",
+      "description": "Adds an amount to (or, if negative, subtracts it from) one of the running totals behind the savings sensors -- to correct what a wrongly mapped counter booked. The headline savings sensors only follow upwards. The period totals (today / this month / this year) can be moved directly, e.g. to start \"this year\" from an existing utility meter.",
       "fields": {
         "total": {
           "name": "Total",
@@ -378,7 +396,13 @@
         "purchase_price_real": "Purchase price (real)",
         "purchase_price_real_without_pv": "Purchase price without PV",
         "battery_grid_charge_sum": "Battery charged from grid (sum)",
-        "battery_grid_discharge_sum": "Battery grid share discharged (sum)"
+        "battery_grid_discharge_sum": "Battery grid share discharged (sum)",
+        "own_production_savings_today": "Own production savings today",
+        "own_production_savings_month": "Own production savings this month",
+        "own_production_savings_year": "Own production savings this year",
+        "battery_charging_savings_today": "Battery charging savings today",
+        "battery_charging_savings_month": "Battery charging savings this month",
+        "battery_charging_savings_year": "Battery charging savings this year"
       }
     }
   }
