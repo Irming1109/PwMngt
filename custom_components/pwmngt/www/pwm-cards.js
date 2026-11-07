@@ -747,9 +747,8 @@ const PWM_BATTERY_TEXTS = {
     chargeTo: (pct) => `Charges to ${pct}% from the grid`,
     surplusCovers: (target, kwh) =>
       `Tomorrow's PV surplus (${kwh}, cautious estimate) covers the target of ${target}%`,
-    price: (value) => `${value.toFixed(2)} kr`,
-    worthHours: (hours, price) =>
-      `Covers ${hours} - always 17-21, later hours only where power costs at least ${price}`,
+    chargeCovers: (pct, hours) => `Charges to ${pct}% from the grid - enough for ${hours}`,
+    pvFills: (kwh, target) => `Tomorrow's PV (${kwh} surplus expected) fills it up towards the target of ${target}%`,
     surplusCoversWorth: (hours, kwh) =>
       `Tomorrow's PV surplus (${kwh}, cautious estimate) covers ${hours}, the hours tonight's charge would cover`,
     manualTitle: "Manual battery control",
@@ -800,9 +799,8 @@ const PWM_BATTERY_TEXTS = {
     chargeTo: (pct) => `Lades til ${pct} % fra nettet`,
     surplusCovers: (target, kwh) =>
       `Forventet sol-overskud i morgen (${kwh}, forsigtigt skøn) dækker target ${target} %`,
-    price: (value) => `${value.toFixed(2).replace(".", ",")} kr`,
-    worthHours: (hours, price) =>
-      `Dækker kl. ${hours} - altid 17-21, senere timer kun hvor strømmen koster mindst ${price}`,
+    chargeCovers: (pct, hours) => `Lades til ${pct} % fra nettet - nok til kl. ${hours}`,
+    pvFills: (kwh, target) => `Solen i morgen (forventet ${kwh} overskud) fylder op mod target ${target} %`,
     surplusCoversWorth: (hours, kwh) =>
       `Forventet sol-overskud i morgen (${kwh}, forsigtigt skøn) dækker kl. ${hours}, de timer natladningen skulle dække`,
     manualTitle: "Manuel betjening af batteri",
@@ -1248,7 +1246,6 @@ class PwMBatteryCard extends HTMLElement {
       value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
     const surplus = number(status.attributes.expected_pv_surplus);
     const chargeTarget = number(status.attributes.charge_target);
-    const breakEven = number(status.attributes.break_even_price);
     const covered = Array.isArray(status.attributes.covered_hours) ? status.attributes.covered_hours : null;
     const hours = covered && covered.length ? pwmHourRanges(covered) : null;
     const targetState = this._state("target");
@@ -1258,6 +1255,14 @@ class PwMBatteryCard extends HTMLElement {
       if (chargeTarget === null) return [];
       const pct = Math.round(chargeTarget);
       const lines = [];
+      if (hours) {
+        // Issue #50: the charge covers these hours; PV (if any) tops up.
+        lines.push(t.chargeCovers(pct, hours));
+        if (surplus !== null && surplus >= 0.05 && target !== null && chargeTarget < target) {
+          lines.push(t.pvFills(kwh, Math.round(target)));
+        }
+        return lines;
+      }
       if (target !== null && chargeTarget < target && kwh !== null) {
         lines.push(t.partialCharge(pct, Math.round(target), kwh));
       } else {
@@ -1266,7 +1271,6 @@ class PwMBatteryCard extends HTMLElement {
         else if (surplus < 0.05) lines.push(t.fullChargeNoSurplus(pct));
         else lines.push(t.fullCharge(pct, kwh));
       }
-      if (hours && breakEven !== null) lines.push(t.worthHours(hours, t.price(breakEven)));
       return lines;
     }
     if (status.state === "no_surplus" && kwh !== null) {
