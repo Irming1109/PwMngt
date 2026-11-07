@@ -749,9 +749,9 @@ const PWM_BATTERY_TEXTS = {
       `Tomorrow's PV surplus (${kwh}, cautious estimate) covers the target of ${target}%`,
     price: (value) => `${value.toFixed(2)} kr`,
     worthHours: (hours, price) =>
-      `Covers ${hours}, where power costs at least ${price} - the rest of the night isn't worth charging for`,
+      `Covers ${hours} - always 17-21, later hours only where power costs at least ${price}`,
     surplusCoversWorth: (hours, kwh) =>
-      `Tomorrow's PV surplus (${kwh}, cautious estimate) covers ${hours}, the hours worth charging for`,
+      `Tomorrow's PV surplus (${kwh}, cautious estimate) covers ${hours}, the hours tonight's charge would cover`,
     manualTitle: "Manual battery control",
     chargeNow: (pct) => `Charge now ${pct}%`,
     stop: "Stop charging",
@@ -802,9 +802,9 @@ const PWM_BATTERY_TEXTS = {
       `Forventet sol-overskud i morgen (${kwh}, forsigtigt skøn) dækker target ${target} %`,
     price: (value) => `${value.toFixed(2).replace(".", ",")} kr`,
     worthHours: (hours, price) =>
-      `Dækker kl. ${hours}, hvor strømmen koster mindst ${price} - resten af natten kan ikke betale sig at lade til`,
+      `Dækker kl. ${hours} - altid 17-21, senere timer kun hvor strømmen koster mindst ${price}`,
     surplusCoversWorth: (hours, kwh) =>
-      `Forventet sol-overskud i morgen (${kwh}, forsigtigt skøn) dækker kl. ${hours}, de timer det kan betale sig at lade til`,
+      `Forventet sol-overskud i morgen (${kwh}, forsigtigt skøn) dækker kl. ${hours}, de timer natladningen skulle dække`,
     manualTitle: "Manuel betjening af batteri",
     chargeNow: (pct) => `Lad nu ${pct} %`,
     stop: "Afbryd ladning",
@@ -1249,8 +1249,8 @@ class PwMBatteryCard extends HTMLElement {
     const surplus = number(status.attributes.expected_pv_surplus);
     const chargeTarget = number(status.attributes.charge_target);
     const breakEven = number(status.attributes.break_even_price);
-    const worthHours = Array.isArray(status.attributes.worth_hours) ? status.attributes.worth_hours : null;
-    const hours = worthHours && worthHours.length ? pwmHourRanges(worthHours) : null;
+    const covered = Array.isArray(status.attributes.covered_hours) ? status.attributes.covered_hours : null;
+    const hours = covered && covered.length ? pwmHourRanges(covered) : null;
     const targetState = this._state("target");
     const target = targetState ? number(targetState.state) : null;
     const kwh = surplus === null ? null : t.kwh(Math.max(surplus, 0));

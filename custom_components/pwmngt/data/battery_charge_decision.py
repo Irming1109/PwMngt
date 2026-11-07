@@ -59,7 +59,10 @@ to the charge price. The expected consumption in those hours (net of
 tomorrow's PV 17-21) x the nightly target's margin becomes the grid
 charge's target, before #43 takes the PV surplus off. No hour worth it
 -> "no_price"; a cautious PV surplus covering those hours ->
-"no_surplus". The break-even price uses the charge hours the full
+"no_surplus". Once one hour is worth it, the charge always covers 17-21
+too (Claus, 2026-11-07): the battery is free from 17 (data/battery_data.py
+-- Node-RED's FRI_17_21_UANSET_PRIS), so a charge that leaves 17-21 short
+would be spent there anyway, before the later hour it was meant for. The break-even price uses the charge hours the full
 target would need -- more hours, a higher average, so on the safe side.
 Battery nightly target keeps covering the whole night: it decides how
 much PV the battery keeps (data/battery_data.py's charge curve), and PV
@@ -191,11 +194,13 @@ PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES: list[str] = [
     "charge_target",
     "expected_pv_surplus",
     # Issue #50: the price an evening hour must reach to be worth charging
-    # for (kr/kWh), those hours 17-23 tomorrow, and the energy (kWh) the
-    # battery is expected to cover in them. Carried into "yes_today".
+    # for (kr/kWh), those hours 17-23 tomorrow, the hours the charge covers
+    # (those plus always 17-21), and the energy (kWh) the battery is
+    # expected to cover in them. Carried into "yes_today".
     "break_even_price",
     "worth_hours",
-    "worth_kwh",
+    "covered_hours",
+    "covered_kwh",
 ]
 
 PwM_BATTERY_CHARGE_DECISION_SENSORS: list[SensorEntityDescription] = [
@@ -280,7 +285,14 @@ _HOURLY_RECHECK_STATUSES = {_STATUS_NOT_CALCULATED, "yes_today"}
 # What "yes_tomorrow" carries into "yes_today" at midnight besides the hour
 # flags (issues #43, #50).
 _CARRIED_TO_TODAY = frozenset(
-    {"charge_target", "expected_pv_surplus", "break_even_price", "worth_hours", "worth_kwh"}
+    {
+        "charge_target",
+        "expected_pv_surplus",
+        "break_even_price",
+        "worth_hours",
+        "covered_hours",
+        "covered_kwh",
+    }
 )
 _HOURLY_RECHECK_WINDOW_START = (14, 0)
 _HOURLY_RECHECK_WINDOW_END = (23, 30)
@@ -434,14 +446,16 @@ def evening_hour_consumption(inputs: BatteryChargeInputs) -> dict[int, float]:
 
 def worth_charging(
     prices_tomorrow: list[float], avg_charge_price: float, minimum_gain: float, hourly_kwh: dict[int, float]
-) -> tuple[float, list[int], float]:
+) -> tuple[float, list[int], list[int], float]:
     """Issue #50: (break-even price, the hours 17-23 tomorrow at or above
-    it, the energy in kWh the battery covers in them). An hour is worth
-    charging for when its price pays the charge price, the loss and the
-    minimum gain."""
+    it, the hours the charge covers, the energy in kWh the battery covers
+    in them). An hour is worth charging for when its price pays the charge
+    price, the loss and the minimum gain. When one is, the charge always
+    covers 17-21 too -- see the module docstring."""
     break_even = round(avg_charge_price / _ROUND_TRIP_EFFICIENCY + minimum_gain, 2)
-    hours = [hour for hour in sorted(hourly_kwh) if prices_tomorrow[hour] >= break_even]
-    return break_even, hours, sum(hourly_kwh[hour] for hour in hours)
+    worth = [hour for hour in sorted(hourly_kwh) if prices_tomorrow[hour] >= break_even]
+    covered = sorted(set(worth) | set(_EVENING_HOURS)) if worth else []
+    return break_even, worth, covered, sum(hourly_kwh[hour] for hour in covered)
 
 
 def calculate_battery_charge_decision(
@@ -502,17 +516,18 @@ def calculate_battery_charge_decision(
         return "no_charge_needed", attributes
 
     avg_charge_price = _average([price for _hour, price in prices_sorted_day[:full_hours]])
-    break_even, worth_hours, worth_kwh = worth_charging(
+    break_even, worth_hours, covered_hours, covered_kwh = worth_charging(
         inputs.prices_tomorrow,
         avg_charge_price,
         inputs.price_difference_threshold,
         evening_hour_consumption(inputs),
     )
-    # Issue #50: tonight's grid charge only covers the hours worth it --
+    # Issue #50: tonight's grid charge only covers the hours worth it (and
+    # always 17-21) --
     # then #43 takes tomorrow's expected PV surplus off.
     worth_target = min(
         inputs.battery_target,
-        inputs.battery_min_soc + math.ceil(worth_kwh * TARGET_MARGIN / inputs.battery_size * 100),
+        inputs.battery_min_soc + math.ceil(covered_kwh * TARGET_MARGIN / inputs.battery_size * 100),
     )
     charge_target = partial_charge_target(
         worth_target, inputs.battery_size, expected_surplus, inputs.battery_min_soc
@@ -536,7 +551,8 @@ def calculate_battery_charge_decision(
         "expected_pv_surplus": None if expected_surplus is None else round(expected_surplus, 2),
         "break_even_price": break_even,
         "worth_hours": worth_hours,
-        "worth_kwh": round(worth_kwh, 2),
+        "covered_hours": covered_hours,
+        "covered_kwh": round(covered_kwh, 2),
     }
     for hour in range(24):
         attributes[f"hour_{hour}"] = hour in cheapest_hour_set
@@ -549,7 +565,7 @@ def calculate_battery_charge_decision(
         # Issue #50: no evening hour pays for the charge.
         status = "no_price"
     elif expected_surplus is not None and expected_surplus >= min(
-        battery_kwh, worth_kwh * TARGET_MARGIN
+        battery_kwh, covered_kwh * TARGET_MARGIN
     ):
         # Issue #43: the cautious surplus (Node-RED: the normal forecast)
         # -- issue #50: enough when it covers the hours worth charging for.
