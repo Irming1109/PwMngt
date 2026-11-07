@@ -204,6 +204,11 @@ _CHARGER_STATE_ACTIVE_MANUAL = "Active - manual"
 # while the last known "car charging" is kept -- a Wallbox drops out for a
 # minute or two now and then, and each unlock/relock is an inverter write.
 _CAR_POWER_UNAVAILABLE_HOLD = timedelta(minutes=10)
+# Issue #33: how long a charger may read below CAR_CHARGING_MIN_W before
+# the car counts as stopped -- a Wallbox pauses at 0 W for a minute or two
+# mid-session (Kasper, 2026-11-07: 90 s), and each unlock/relock is an
+# inverter write.
+_CAR_PAUSE_HOLD = timedelta(minutes=3)
 # Battery command (select.py, "battery_command") that pauses charging.
 # Old: "Bloker ladning". Node-RED also checked "Bloker batteri", which
 # PwMngt doesn't offer (removed, issue #29).
@@ -341,6 +346,10 @@ class BatteryLedger:
     # Whether a charge_now_* command ran at the previous run -- the lock is
     # taken when it stops.
     charging_previous: bool = False
+    # Issue #33: the min_soc when a charger started charging a car -- a
+    # Kostal holds exactly this while the car charges, see
+    # kostal_min_soc_step(). None = no car charging.
+    car_lock: float | None = None
     # Issue #35: the date a charge_now_* command ran before 06:00 -- "the
     # night charge has started", see calculate_battery_data().
     night_charge_date: str | None = None
@@ -363,6 +372,7 @@ class BatteryLedger:
             "charge_lock_date": self.charge_lock_date,
             "charge_lock": self.charge_lock,
             "charging_previous": self.charging_previous,
+            "car_lock": self.car_lock,
             "night_charge_date": self.night_charge_date,
         }
 
@@ -385,6 +395,7 @@ class BatteryLedger:
             charge_lock_date=restored.get("charge_lock_date"),
             charge_lock=restored.get("charge_lock"),
             charging_previous=bool(restored.get("charging_previous", False)),
+            car_lock=restored.get("car_lock"),
             night_charge_date=restored.get("night_charge_date"),
         )
 
@@ -545,7 +556,7 @@ def _target_floor(
 
 
 def kostal_min_soc_step(
-    min_soc: float, target: float, battery_min_soc: float, charge_lock: float | None = None
+    min_soc: float, target: float, battery_min_soc: float, lock: float | None = None
 ) -> int:
     """Issue #1 (Claus, 2026-11-05): a Kostal stores Battery:MinSoc in its
     permanent memory, so the minimum SoC is published in steps of 10 --
@@ -562,13 +573,26 @@ def kostal_min_soc_step(
     (charge_lock, see BatteryLedger) is held exactly -- one write off the
     steps per charge, also when the plan has a second block later in the
     day -- until the steps pass it or the protection ends; never above the
-    calculated min_soc (the winter rule keeps that at or below the SoC)."""
+    calculated min_soc (the winter rule keeps that at or below the SoC).
+
+    Issue #33 (Claus, 2026-11-07): the same for a car charging -- the lock
+    sets min_soc to the SoC (16), the step rounded it to 10, and the
+    battery covered the car from 16 to 10 % (Kasper, 2026-11-07). So the
+    SoC at the start of the car charge (car_lock) is held exactly too.
+    lock is the higher of charge_lock and car_lock."""
     if min_soc >= target:
         return int(round(min_soc))
     stepped = max(math.floor(min_soc / 10) * 10, battery_min_soc)
-    if charge_lock is not None:
-        stepped = max(stepped, min(charge_lock, min_soc))
+    if lock is not None:
+        stepped = max(stepped, min(lock, min_soc))
     return int(round(stepped))
+
+
+def kostal_lock(ledger: "BatteryLedger") -> float | None:
+    """The level kostal_min_soc_step() holds exactly: the higher of the
+    charge lock (#45) and the car lock (#33), or None."""
+    locks = [v for v in (ledger.charge_lock, ledger.car_lock) if v is not None]
+    return max(locks) if locks else None
 
 
 def calculate_battery_data(
@@ -847,6 +871,15 @@ def calculate_battery_data(
     if target_protection_active and previous.charging_previous and not charging:
         charge_lock_date, charge_lock = today, float(min_soc_rounded)
 
+    # ---- Car lock (issue #33, see kostal_min_soc_step()) ----------------
+    # Taken once when a charger starts charging a car (min_soc is the SoC
+    # then), kept while it charges, cleared when it stops.
+    car_lock = None
+    if manual_charger_active:
+        car_lock = (
+            previous.car_lock if previous.car_lock is not None else float(min_soc_rounded)
+        )
+
     avg_cheapest_hours = (
         inputs.avg_cheapest_hours
         if inputs.avg_cheapest_hours is not None
@@ -871,6 +904,7 @@ def calculate_battery_data(
         charge_lock=charge_lock,
         charging_previous=charging,
         night_charge_date=night_charge_date,
+        car_lock=car_lock,
     )
     return min_soc_rounded, ledger, forced_charge, behind_charge_curve
 
@@ -926,9 +960,11 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         self._last_run: datetime | None = None
         self._pending_run: Any = None  # cancel callback of a scheduled run
         self._last_car_charging_lock = False  # issue #33
-        # When the charger's power became unavailable while the lock was
-        # kept (issue #33), or None.
-        self._car_power_unavailable_since: datetime | None = None
+        # When the chargers stopped reading "charging" while the lock was
+        # kept (issue #33), or None; and the cancel callback of the re-check
+        # when that grace runs out.
+        self._car_stopped_since: datetime | None = None
+        self._car_recheck: Any = None
 
         if not self._soc_entity_id:
             LOGGER.warning(
@@ -1013,6 +1049,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         self._handle_trigger(None)
 
     async def async_will_remove_from_hass(self) -> None:
+        self._cancel_car_recheck()
         if self._pending_run is not None:
             self._pending_run()
             self._pending_run = None
@@ -1055,10 +1092,12 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         return self._last_car_charging_lock
 
     def _car_charging_lock(self) -> bool:
-        """Issue #33 -- see BatteryInputs.car_charging_lock. While a
-        charger's power sensor is unavailable/unknown (and no other charger
-        charges), the last known state is kept for up to
-        _CAR_POWER_UNAVAILABLE_HOLD."""
+        """Issue #33 -- see BatteryInputs.car_charging_lock. Once locked,
+        a car only counts as stopped when the chargers haven't read
+        "charging" for _CAR_PAUSE_HOLD -- or _CAR_POWER_UNAVAILABLE_HOLD
+        while a power sensor is unavailable/unknown -- so a short pause
+        doesn't unlock and relock the inverter. A re-check is scheduled for
+        when that grace runs out."""
         # Imported here: battery_hold imports solar_data, which battery_data
         # mustn't pull in at module load.
         from .battery_hold import battery_hold_supported
@@ -1066,15 +1105,33 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         if battery_hold_supported(self.hass):
             return False
         car = charger_properties.car_charging(self.hass, self._entry)
-        if car.charging or not car.power_unavailable:
-            self._car_power_unavailable_since = None
+        if car.charging or not self._last_car_charging_lock:
+            self._car_stopped_since = None
+            self._cancel_car_recheck()
             return car.charging
         now = dt_util.utcnow()
-        if self._car_power_unavailable_since is None:
-            self._car_power_unavailable_since = now
-        if now - self._car_power_unavailable_since < _CAR_POWER_UNAVAILABLE_HOLD:
-            return self._last_car_charging_lock
+        if self._car_stopped_since is None:
+            self._car_stopped_since = now
+        hold = _CAR_POWER_UNAVAILABLE_HOLD if car.power_unavailable else _CAR_PAUSE_HOLD
+        remaining = (self._car_stopped_since + hold - now).total_seconds()
+        if remaining > 0:
+            self._cancel_car_recheck()
+            self._car_recheck = event.async_call_later(
+                self.hass, remaining, self._handle_car_recheck
+            )
+            return True
+        self._car_stopped_since = None
         return False
+
+    @callback
+    def _handle_car_recheck(self, _now) -> None:
+        self._car_recheck = None
+        self._handle_car_charging_changed(None)
+
+    def _cancel_car_recheck(self) -> None:
+        if self._car_recheck is not None:
+            self._car_recheck()
+            self._car_recheck = None
 
     @callback
     def _handle_target_changed(self, state_event) -> None:
@@ -1180,7 +1237,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         calculated_min_soc = min_soc
         if pv_properties.inverter_type(self.hass, self._entry) == INVERTER_TYPE_KOSTAL:
             min_soc = kostal_min_soc_step(
-                min_soc, inputs.target, inputs.battery_min_soc, ledger.charge_lock
+                min_soc, inputs.target, inputs.battery_min_soc, kostal_lock(ledger)
             )
         self._attr_native_value = min_soc
         self._attr_extra_state_attributes = {
@@ -1189,6 +1246,8 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             "min_soc_calculated": calculated_min_soc,
             # Issue #45: the level the last grid charge stopped at, or None.
             "charge_lock": ledger.charge_lock,
+            # Issue #33: the SoC a car charge started at, or None.
+            "car_lock": ledger.car_lock,
             "soc_grid": round(ledger.soc_grid, 2),
             "soc_pv": round(ledger.soc_pv, 2),
             "soc_cells": [round(v, 4) for v in ledger.soc_cells],
