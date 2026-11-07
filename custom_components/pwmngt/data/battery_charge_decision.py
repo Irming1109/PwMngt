@@ -51,9 +51,11 @@ expensive evening hours 17-23 and then charges for the whole night
 energy for 21-06 was charged at about the price it saves, plus ~15 %
 loss. Now the grid charge only covers the evening hours worth it: the
 hours 17-23 tomorrow whose price is at least the break-even price -- the
-average charge price / _ROUND_TRIP_EFFICIENCY + the minimum gain per kWh
-(select pv_battery_price_difference, which meant "average price
-difference" in Node-RED). The night hours 00-06 never count: their
+average charge price + the price difference (select
+pv_battery_price_difference, compared with the average of the 5 most
+expensive evening hours in Node-RED). The loss is left out on purpose
+(Claus, 2026-11-07): the user should be able to see from the prices
+alone why an hour counts -- the price difference is the margin for it. The night hours 00-06 never count: their
 prices aren't known when the decision is made, and they're usually close
 to the charge price. The expected consumption in those hours (net of
 tomorrow's PV 17-21) x the nightly target's margin becomes the grid
@@ -231,9 +233,6 @@ _PRICE_DIFFERENCE_FALLBACK = 1.2
 _CHARGETIME_SAFETY_MARGIN = 1.10
 _DAY_END_HOUR = 17  # Day window: hours 0-16, evening: 17-23.
 
-# Issue #50 (see module docstring). Energy out of the battery per kWh
-# bought for it -- charge and discharge losses together.
-_ROUND_TRIP_EFFICIENCY = 0.85
 # consumption_data's evening_average covers 17-21; nighttime_average 17-24
 # plus 00-06 -- the rest of it is spread evenly over those 9 hours.
 _EVENING_HOURS = range(17, 21)
@@ -445,14 +444,15 @@ def evening_hour_consumption(inputs: BatteryChargeInputs) -> dict[int, float]:
 
 
 def worth_charging(
-    prices_tomorrow: list[float], avg_charge_price: float, minimum_gain: float, hourly_kwh: dict[int, float]
+    prices_tomorrow: list[float], avg_charge_price: float, price_difference: float, hourly_kwh: dict[int, float]
 ) -> tuple[float, list[int], list[int], float]:
     """Issue #50: (break-even price, the hours 17-23 tomorrow at or above
     it, the hours the charge covers, the energy in kWh the battery covers
     in them). An hour is worth charging for when its price pays the charge
-    price, the loss and the minimum gain. When one is, the charge always
+    price plus the price difference (no loss -- see the module
+    docstring). When one is, the charge always
     covers 17-21 too -- see the module docstring."""
-    break_even = round(avg_charge_price / _ROUND_TRIP_EFFICIENCY + minimum_gain, 2)
+    break_even = round(avg_charge_price + price_difference, 2)
     worth = [hour for hour in sorted(hourly_kwh) if prices_tomorrow[hour] >= break_even]
     covered = sorted(set(worth) | set(_EVENING_HOURS)) if worth else []
     return break_even, worth, covered, sum(hourly_kwh[hour] for hour in covered)

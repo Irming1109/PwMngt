@@ -276,9 +276,9 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
     ),
     # Old key="pv_batteri_pris_difference"
     # Old name="pv batteri pris difference"
-    # DIFF (issue #50): the minimum gain per kWh (kr) an evening hour must
-    # give after the charge price and the loss -- in Node-RED the average
-    # price difference to the 5 most expensive evening hours. See
+    # DIFF (issue #50): how much (kr/kWh) an evening hour must cost above
+    # the charge price -- in Node-RED the average price difference to the
+    # 5 most expensive evening hours. See
     # data/battery_charge_decision.py.
     PwMngtSelectEntityDescription(
         key="pv_battery_price_difference",
