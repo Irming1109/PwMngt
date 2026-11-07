@@ -26,6 +26,10 @@ LOGGER = logging.getLogger(__name__)
 # Registered once per Home Assistant instance in _async_register_frontend().
 FRONTEND_URL_BASE = "/pwmngt_frontend"
 FRONTEND_JS_FILENAME = "pwm-cards.js"
+# Issue #47: the copy under <config>/www, served as /local/pwmngt/ -- see
+# _async_register_frontend().
+LOCAL_FRONTEND_DIR = "pwmngt"
+LOCAL_URL_BASE = f"/local/{LOCAL_FRONTEND_DIR}"
 FRONTEND_REGISTERED = "frontend_registered"
 _LOVELACE_DOMAIN = "lovelace"
 
@@ -131,13 +135,29 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     integration = await async_get_integration(hass, DOMAIN)
     www_path = Path(__file__).parent / "www"
 
+    # Kept for clients that still have the old address, and as the
+    # fallback below.
     await hass.http.async_register_static_paths(
         [StaticPathConfig(FRONTEND_URL_BASE, str(www_path), cache_headers=False)]
+    )
+    # Issue #47 (Claus, 2026-11-07): /pwmngt_frontend only exists once this
+    # config entry is set up, but the web server answers before that --
+    # the Android companion app reloads the dashboard right after a
+    # restart, got a 404 for the cards, and showed a red "!" until its
+    # frontend cache was cleared (a module that failed to load isn't
+    # fetched again until the page reloads). /local is registered by the
+    # frontend integration early in startup, so the cards are served from
+    # a copy under <config>/www/pwmngt instead -- when that folder existed
+    # at startup (Home Assistant only registers /local then).
+    base = (
+        LOCAL_URL_BASE
+        if await hass.async_add_executor_job(_copy_cards_to_local_www, hass, www_path)
+        else FRONTEND_URL_BASE
     )
     # The query string cache-busts the browser: bumping manifest.json's
     # version (which every release already does) is enough to make sure a
     # HACS update is picked up instead of a stale cached copy of the JS.
-    url = f"{FRONTEND_URL_BASE}/{FRONTEND_JS_FILENAME}?v={integration.version}"
+    url = f"{base}/{FRONTEND_JS_FILENAME}?v={integration.version}"
     add_extra_js_url(hass, url)
 
     # The companion app (iOS and Android) doesn't reliably load extra JS
@@ -156,6 +176,27 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _register_when_started)
 
     hass.data[DOMAIN][FRONTEND_REGISTERED] = True
+
+
+def _copy_cards_to_local_www(hass: HomeAssistant, www_path: Path) -> bool:
+    """Copy the cards to <config>/www/pwmngt (only when changed). True
+    when /local can serve them, i.e. <config>/www existed already -- a
+    folder created now is only served after the next restart. Runs in
+    the executor (file I/O)."""
+    local_www = Path(hass.config.path("www"))
+    served = local_www.is_dir()
+    try:
+        target_dir = local_www / LOCAL_FRONTEND_DIR
+        target_dir.mkdir(parents=True, exist_ok=True)
+        source = www_path / FRONTEND_JS_FILENAME
+        target = target_dir / FRONTEND_JS_FILENAME
+        content = source.read_bytes()
+        if not target.is_file() or target.read_bytes() != content:
+            target.write_bytes(content)
+    except OSError:
+        LOGGER.warning("PwMngt: could not copy the cards to %s", local_www, exc_info=True)
+        return False
+    return served
 
 
 async def _async_register_lovelace_resource(hass: HomeAssistant, url: str) -> None:
@@ -179,8 +220,12 @@ async def _async_register_lovelace_resource(hass: HomeAssistant, url: str) -> No
         # Loads the stored resources first; async_items() alone doesn't.
         await resources.async_get_info()
 
-        path = f"{FRONTEND_URL_BASE}/{FRONTEND_JS_FILENAME}"
-        ours = [item for item in resources.async_items() if item.get("url", "").split("?")[0] == path]
+        # Both addresses (issue #47) -- the old one is moved to the new.
+        paths = {
+            f"{FRONTEND_URL_BASE}/{FRONTEND_JS_FILENAME}",
+            f"{LOCAL_URL_BASE}/{FRONTEND_JS_FILENAME}",
+        }
+        ours = [item for item in resources.async_items() if item.get("url", "").split("?")[0] in paths]
         if not ours:
             await resources.async_create_item({"res_type": "module", "url": url})
             LOGGER.info("PwMngt: registered the cards as dashboard resource %s", url)
