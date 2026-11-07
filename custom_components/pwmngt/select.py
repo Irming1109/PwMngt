@@ -47,6 +47,27 @@ def signal_manual_charge(entry_id: str) -> str:
     return f"{DOMAIN}_{entry_id}_manual_charge"
 
 
+def signal_sell_override(entry_id: str) -> str:
+    """Dispatcher signal data/battery_sell_decision.py sends when the
+    "force sell" override boolean changes (issue #51). Payload: one of
+    SELL_OVERRIDE_START / SELL_OVERRIDE_RESTORE / SELL_OVERRIDE_FORGET."""
+    return f"{DOMAIN}_{entry_id}_sell_override"
+
+
+# Issue #51 payloads for signal_sell_override():
+# - START: the override turned on -- remember the current battery_command
+#   and switch to "block_charging".
+# - RESTORE: the override turned off in manual battery mode -- put the
+#   remembered command back, but only while battery_command is still the
+#   override's "block_charging" (a command the user picked meanwhile wins).
+# - FORGET: the override turned off in auto mode -- the sell decision
+#   decides from here, so the remembered command (possibly stale, e.g. a
+#   finished night charge) is just dropped.
+SELL_OVERRIDE_START = "start"
+SELL_OVERRIDE_RESTORE = "restore"
+SELL_OVERRIDE_FORGET = "forget"
+
+
 # battery_command options that charge the battery from the grid. Picked by
 # the user (the battery card's "Charge now" buttons), one of these starts
 # a manual charge -- see PwMngtSelect.async_select_option().
@@ -58,6 +79,15 @@ CHARGE_NOW_OPTIONS = frozenset(
 # (None when there is none). Read by data/battery_charge_level.py and the
 # battery card (www/pwm-cards.js).
 ATTR_MANUAL_CHARGE = "manual_charge"
+
+# battery_command attribute holding the command that was active when the
+# "force sell" override turned on (issue #51; None when not overriding).
+# An attribute, so it survives a Home Assistant restart while the
+# override is on.
+ATTR_COMMAND_BEFORE_SELL_OVERRIDE = "command_before_sell_override"
+
+_COMMAND_INTERNAL = "internal"
+_COMMAND_BLOCK_CHARGING = "block_charging"
 
 # Shown once, under the main "PwM" hub device's "Configuration" tab --
 # not tied to a specific charger.
@@ -532,12 +562,17 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
         self._is_battery_command = description.key == "battery_command"
         # Issue #17: level of a running manual charge (battery_command only).
         self._manual_charge: str | None = None
+        # Issue #51: battery_command before the "force sell" override.
+        self._command_before_sell_override: str | None = None
 
     @property
     def extra_state_attributes(self) -> dict | None:
         if not self._is_battery_command:
             return None
-        return {ATTR_MANUAL_CHARGE: self._manual_charge}
+        return {
+            ATTR_MANUAL_CHARGE: self._manual_charge,
+            ATTR_COMMAND_BEFORE_SELL_OVERRIDE: self._command_before_sell_override,
+        }
 
     async def async_added_to_hass(self) -> None:
         """Restore the last chosen option -- see the class docstring for
@@ -565,6 +600,9 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
                 manual_charge = last_state.attributes.get(ATTR_MANUAL_CHARGE)
                 if manual_charge in CHARGE_NOW_OPTIONS:
                     self._manual_charge = manual_charge
+                before_override = last_state.attributes.get(ATTR_COMMAND_BEFORE_SELL_OVERRIDE)
+                if before_override in self.entity_description.options:
+                    self._command_before_sell_override = before_override
             # data/battery_charge_level.py ("Bestem ladeeffekt" and the
             # "SOC >= target" gate) sets this one programmatically.
             self.async_on_remove(
@@ -579,6 +617,13 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
                     self.hass,
                     signal_manual_charge(self._entry_id),
                     self._handle_manual_charge,
+                )
+            )
+            self.async_on_remove(
+                async_dispatcher_connect(
+                    self.hass,
+                    signal_sell_override(self._entry_id),
+                    self._handle_sell_override,
                 )
             )
 
@@ -613,6 +658,31 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
         self._attr_current_option = option
         self.async_write_ha_state()
 
+    @callback
+    def _handle_sell_override(self, action: str) -> None:
+        """Issue #51 -- see SELL_OVERRIDE_* for the three actions."""
+        if self._manual_charge is not None:
+            # Issue #17: a manual charge outranks the override as well.
+            LOGGER.debug("%s: manual charge running -- ignoring sell override", self.entity_id)
+            return
+        if action == SELL_OVERRIDE_START:
+            # Turning on twice keeps the first remembered command.
+            if self._command_before_sell_override is None:
+                self._command_before_sell_override = self._attr_current_option
+            self._attr_current_option = _COMMAND_BLOCK_CHARGING
+        elif action == SELL_OVERRIDE_RESTORE:
+            if self._attr_current_option == _COMMAND_BLOCK_CHARGING:
+                self._attr_current_option = (
+                    self._command_before_sell_override or _COMMAND_INTERNAL
+                )
+            self._command_before_sell_override = None
+        elif action == SELL_OVERRIDE_FORGET:
+            self._command_before_sell_override = None
+        else:
+            LOGGER.warning("%s: ignoring unknown sell override action '%s'", self.entity_id, action)
+            return
+        self.async_write_ha_state()
+
     async def async_select_option(self, option: str) -> None:
         """Store the chosen option locally. On battery_command, a
         charge_now_* picked by the user starts a manual charge and any
@@ -620,5 +690,8 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
         LOGGER.info("%s set to '%s'", self.entity_id, option)
         if self._is_battery_command:
             self._manual_charge = option if option in CHARGE_NOW_OPTIONS else None
+            # Issue #51: a command picked by hand takes over from the
+            # override -- nothing to restore when it turns off.
+            self._command_before_sell_override = None
         self._attr_current_option = option
         self.async_write_ha_state()

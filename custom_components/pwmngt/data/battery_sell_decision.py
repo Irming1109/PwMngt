@@ -76,6 +76,12 @@ export, not guessed):
 - The override boolean turning *off* (any state other than "on") -> run
   immediately, no delay (Node-RED: "Lejere prioriteres on/off" output 2)
   -- so a release isn't stuck waiting for the next scheduled tick.
+  DIFF (issue #51, Claus 2026-11-07): in manual battery mode the run
+  does nothing, so the block would stay forever. Instead battery_command
+  remembers the command from when the override turned on and gets it
+  back (select.py's SELL_OVERRIDE_RESTORE) -- unless the user picked
+  another command meanwhile. In auto mode the remembered command is
+  dropped and the run decides, as before.
 - The override boolean turning *on* -> NOT a run of the full decision --
   Node-RED wires this straight to its own small "force block_charging"
   check instead (see _handle_override_turned_on below), independent of
@@ -116,7 +122,13 @@ from ..const import (
 )
 from ..helpers.state_helper import read_float_state
 from ..properties import pv_properties
-from ..select import signal_set_battery_command
+from ..select import (
+    SELL_OVERRIDE_FORGET,
+    SELL_OVERRIDE_RESTORE,
+    SELL_OVERRIDE_START,
+    signal_sell_override,
+    signal_set_battery_command,
+)
 from .solar_data import sum_pv_forecast
 
 LOGGER = logging.getLogger(__name__)
@@ -509,6 +521,12 @@ class PwMngtBatterySellDecisionController:
         if is_on and not was_on:
             self._handle_override_turned_on()
         elif was_on and not is_on:
+            if pv_properties.is_battery_mode_manual(self.hass, self._entry):
+                # Issue #51: _run() does nothing in manual mode -- put
+                # back the command from before the override instead.
+                self._send_sell_override(SELL_OVERRIDE_RESTORE)
+                return
+            self._send_sell_override(SELL_OVERRIDE_FORGET)
             # Node-RED: "Lejere prioriteres on/off" output 2 -- re-run
             # immediately rather than waiting for the next scheduled
             # tick, so a release isn't stuck.
@@ -523,8 +541,9 @@ class PwMngtBatterySellDecisionController:
         ENTITY_KEY_SELL_FORCE_OVERRIDE for why this is one-way-only.
         Node-RED's switch skipped a "Bloker batteri" command; PwMngt has no
         such command (removed, issue #29), so it always sends -- also when
-        already "block_charging" (harmless)."""
-        self._send_battery_command(_COMMAND_BLOCK_CHARGING)
+        already "block_charging" (harmless). Issue #51: battery_command
+        remembers the command it replaces (select.py)."""
+        self._send_sell_override(SELL_OVERRIDE_START)
 
     # -- runs ----------------------------------------------------------------
 
@@ -601,6 +620,11 @@ class PwMngtBatterySellDecisionController:
     def _send_battery_command(self, option: str) -> None:
         async_dispatcher_send(
             self.hass, signal_set_battery_command(self._entry.entry_id), option
+        )
+
+    def _send_sell_override(self, action: str) -> None:
+        async_dispatcher_send(
+            self.hass, signal_sell_override(self._entry.entry_id), action
         )
 
     # -- input readers (Node-RED fallback when missing/unknown) ----------
