@@ -276,6 +276,10 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
     ),
     # Old key="pv_batteri_pris_difference"
     # Old name="pv batteri pris difference"
+    # DIFF (issue #50): the minimum gain per kWh (kr) an evening hour must
+    # give after the charge price and the loss -- in Node-RED the average
+    # price difference to the 5 most expensive evening hours. See
+    # data/battery_charge_decision.py.
     PwMngtSelectEntityDescription(
         key="pv_battery_price_difference",
         name="PV battery price difference",
@@ -284,7 +288,7 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["0.20", "0.30", "0.40", "0.50", "0.60", "0.70", "0.80", "0.90",
                  "1.00", "1.10", "1.20", "1.30", "1.40", "1.50", "1.60", "1.70",
                  "1.80", "1.90", "2.00"],
-        default_option="0.80",
+        default_option="0.30",
     ),
     # New -- no "Old key"/"Old name", this field didn't exist before the
     # Options wizard's own "Inverter" page (config_flow.py's

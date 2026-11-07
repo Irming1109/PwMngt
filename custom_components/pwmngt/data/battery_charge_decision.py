@@ -44,6 +44,28 @@ the battery with the normal forecast now gets a small charge ("rather a
 little too much than too little"). data/battery_charge_level.py stops the
 charge and plans the night (#22) on charge_target.
 
+Value-based night charge (issue #50, Claus 2026-11-07 -- new, not in
+Node-RED): Node-RED compares the cheapest charge hours with the 5 most
+expensive evening hours 17-23 and then charges for the whole night
+17-06. The expensive hours (typically 17-21) paid for the rest, but the
+energy for 21-06 was charged at about the price it saves, plus ~15 %
+loss. Now the grid charge only covers the evening hours worth it: the
+hours 17-23 tomorrow whose price is at least the break-even price -- the
+average charge price / _ROUND_TRIP_EFFICIENCY + the minimum gain per kWh
+(select pv_battery_price_difference, which meant "average price
+difference" in Node-RED). The night hours 00-06 never count: their
+prices aren't known when the decision is made, and they're usually close
+to the charge price. The expected consumption in those hours (net of
+tomorrow's PV 17-21) x the nightly target's margin becomes the grid
+charge's target, before #43 takes the PV surplus off. No hour worth it
+-> "no_price"; a cautious PV surplus covering those hours ->
+"no_surplus". The break-even price uses the charge hours the full
+target would need -- more hours, a higher average, so on the safe side.
+Battery nightly target keeps covering the whole night: it decides how
+much PV the battery keeps (data/battery_data.py's charge curve), and PV
+kept for the night saves the full purchase price against selling it at
+the spot price.
+
 Day end at 16:55 (issue #2, Node-RED: inject "16:55" on the same tab):
 a "yes_today" still standing then goes back to "not_calculated" and a
 running grid charge is stopped -- see _handle_day_end().
@@ -128,6 +150,7 @@ from ..devices import pv_device_info
 from ..helpers.state_helper import read_float_state
 from ..properties import hub_properties, pv_properties
 from ..select import signal_set_battery_command
+from .solar_data import TARGET_MARGIN
 
 LOGGER = logging.getLogger(__name__)
 
@@ -167,6 +190,12 @@ PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES: list[str] = [
     # "yes_today" at midnight.
     "charge_target",
     "expected_pv_surplus",
+    # Issue #50: the price an evening hour must reach to be worth charging
+    # for (kr/kWh), those hours 17-23 tomorrow, and the energy (kWh) the
+    # battery is expected to cover in them. Carried into "yes_today".
+    "break_even_price",
+    "worth_hours",
+    "worth_kwh",
 ]
 
 PwM_BATTERY_CHARGE_DECISION_SENSORS: list[SensorEntityDescription] = [
@@ -196,6 +225,16 @@ _CHARGE_POWER_UTILIZATION = 0.75
 _PRICE_DIFFERENCE_FALLBACK = 1.2
 _CHARGETIME_SAFETY_MARGIN = 1.10
 _DAY_END_HOUR = 17  # Day window: hours 0-16, evening: 17-23.
+
+# Issue #50 (see module docstring). Energy out of the battery per kWh
+# bought for it -- charge and discharge losses together.
+_ROUND_TRIP_EFFICIENCY = 0.85
+# consumption_data's evening_average covers 17-21; nighttime_average 17-24
+# plus 00-06 -- the rest of it is spread evenly over those 9 hours.
+_EVENING_HOURS = range(17, 21)
+_LATE_EVENING_HOURS = range(21, 24)
+_NIGHT_HOURS = 13
+_REST_OF_NIGHT_HOURS = _NIGHT_HOURS - len(_EVENING_HOURS)
 
 # Billing method (select.py, hub "billing_method") that means a fixed
 # price -- no spot-price spread to exploit. Old: "Fastpris".
@@ -237,6 +276,12 @@ _SKIP_RECOMPUTE_STATUSES = {"not_calculated", "no_price", "no_deferred"}
 # Hourly nudge (see module docstring). Node-RED: switch comparing against
 # "Ikke beregnet"/"Ja (i dag)", then time-range-switch 539e00bafbeb80df.
 _HOURLY_RECHECK_STATUSES = {_STATUS_NOT_CALCULATED, "yes_today"}
+
+# What "yes_tomorrow" carries into "yes_today" at midnight besides the hour
+# flags (issues #43, #50).
+_CARRIED_TO_TODAY = frozenset(
+    {"charge_target", "expected_pv_surplus", "break_even_price", "worth_hours", "worth_kwh"}
+)
 _HOURLY_RECHECK_WINDOW_START = (14, 0)
 _HOURLY_RECHECK_WINDOW_END = (23, 30)
 _HOURLY_RECHECK_FIRST_DELAY_SECONDS = 30
@@ -322,6 +367,13 @@ class BatteryChargeInputs:
     # tomorrow, and the battery's minimum SoC (the lowest charge target).
     expected_solar_tomorrow_8_16_p10: float | None = None
     battery_min_soc: float = 0.0
+    # Issue #50: consumption_data's night (17-06, without the chargers, and
+    # as measured) and evening (17-21) averages (kWh), and tomorrow's PV
+    # forecast 17-21 (kWh). None = unknown.
+    night_consumption: float | None = None
+    night_consumption_raw: float | None = None
+    evening_consumption: float | None = None
+    pv_forecast_17_21_tomorrow: float | None = None
 
 
 def _average(values: list[float]) -> float:
@@ -351,6 +403,45 @@ def partial_charge_target(
         return battery_target
     missing_pct = battery_target - max(expected_surplus, 0.0) / battery_size * 100
     return float(min(battery_target, max(battery_min_soc, math.ceil(missing_pct))))
+
+
+def evening_hour_consumption(inputs: BatteryChargeInputs) -> dict[int, float]:
+    """Issue #50: the energy (kWh) the battery is expected to cover in each
+    hour 17-23 tomorrow. 17-21 is the evening average (scaled like the night
+    average, without the chargers) minus tomorrow's PV 17-21; 21-24 gets the
+    rest of the night average spread evenly over its 9 hours. While the
+    averages are missing, the night is what the nightly target covers
+    (without its margin and minimum SoC), spread evenly."""
+    night = inputs.night_consumption
+    if night is None or night <= 0:
+        night = max(inputs.battery_target - inputs.battery_min_soc, 0.0) / 100 * inputs.battery_size / TARGET_MARGIN
+        evening = night * len(_EVENING_HOURS) / _NIGHT_HOURS
+        pv = 0.0
+    else:
+        raw = inputs.night_consumption_raw
+        if inputs.evening_consumption is not None and raw:
+            evening = inputs.evening_consumption * night / raw
+        else:
+            evening = night * len(_EVENING_HOURS) / _NIGHT_HOURS
+        evening = min(evening, night)
+        pv = max(inputs.pv_forecast_17_21_tomorrow or 0.0, 0.0)
+    per_evening_hour = max(evening - pv, 0.0) / len(_EVENING_HOURS)
+    per_late_hour = max(night - evening, 0.0) / _REST_OF_NIGHT_HOURS
+    hourly = {hour: per_evening_hour for hour in _EVENING_HOURS}
+    hourly.update({hour: per_late_hour for hour in _LATE_EVENING_HOURS})
+    return hourly
+
+
+def worth_charging(
+    prices_tomorrow: list[float], avg_charge_price: float, minimum_gain: float, hourly_kwh: dict[int, float]
+) -> tuple[float, list[int], float]:
+    """Issue #50: (break-even price, the hours 17-23 tomorrow at or above
+    it, the energy in kWh the battery covers in them). An hour is worth
+    charging for when its price pays the charge price, the loss and the
+    minimum gain."""
+    break_even = round(avg_charge_price / _ROUND_TRIP_EFFICIENCY + minimum_gain, 2)
+    hours = [hour for hour in sorted(hourly_kwh) if prices_tomorrow[hour] >= break_even]
+    return break_even, hours, sum(hourly_kwh[hour] for hour in hours)
 
 
 def calculate_battery_charge_decision(
@@ -386,30 +477,48 @@ def calculate_battery_charge_decision(
         if pv_forecast is not None and inputs.day_consumption is not None
         else None
     )
-    charge_target = partial_charge_target(
-        inputs.battery_target, inputs.battery_size, expected_surplus, inputs.battery_min_soc
-    )
-    charge_kwh = (inputs.battery_size * charge_target) / 100
-    chargetime_needed = math.ceil(
-        (charge_kwh * 1000) / battery_max_charge * _CHARGETIME_SAFETY_MARGIN
-    )
+    def hours_needed(target_pct: float) -> int:
+        charge_kwh = (inputs.battery_size * target_pct) / 100
+        return math.ceil((charge_kwh * 1000) / battery_max_charge * _CHARGETIME_SAFETY_MARGIN)
 
     prices_sorted_day = sorted(price_tomorrow_day, key=lambda item: item[1])
     prices_sorted_evening = sorted(price_tomorrow_evening, key=lambda item: item[1], reverse=True)
 
-    if chargetime_needed <= 0:
+    # The charge hours the full target would need (#43) -- their average is
+    # the charge price issue #50's break-even is based on (see module
+    # docstring).
+    full_charge_target = partial_charge_target(
+        inputs.battery_target, inputs.battery_size, expected_surplus, inputs.battery_min_soc
+    )
+    full_hours = hours_needed(full_charge_target)
+
+    if full_hours <= 0:
         attributes: dict[str, Any] = {
-            "avg_cheapest_hours": None,
-            "avg_most_expensive_hours": None,
-            "price_difference": None,
-            "charge_target": None,
-            "expected_pv_surplus": None,
+            key: None for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
+            if not key.startswith("hour_")
         }
         for hour in range(24):
             attributes[f"hour_{hour}"] = False
         return "no_charge_needed", attributes
 
-    cheapest_hours = prices_sorted_day[:chargetime_needed]
+    avg_charge_price = _average([price for _hour, price in prices_sorted_day[:full_hours]])
+    break_even, worth_hours, worth_kwh = worth_charging(
+        inputs.prices_tomorrow,
+        avg_charge_price,
+        inputs.price_difference_threshold,
+        evening_hour_consumption(inputs),
+    )
+    # Issue #50: tonight's grid charge only covers the hours worth it --
+    # then #43 takes tomorrow's expected PV surplus off.
+    worth_target = min(
+        inputs.battery_target,
+        inputs.battery_min_soc + math.ceil(worth_kwh * TARGET_MARGIN / inputs.battery_size * 100),
+    )
+    charge_target = partial_charge_target(
+        worth_target, inputs.battery_size, expected_surplus, inputs.battery_min_soc
+    )
+
+    cheapest_hours = prices_sorted_day[: max(hours_needed(charge_target), 1)]
     most_expensive_hours = prices_sorted_evening[:_NUM_MOST_EXPENSIVE_HOURS]
 
     avg_cheapest_hours = round(_average([price for _hour, price in cheapest_hours]), 2)
@@ -425,6 +534,9 @@ def calculate_battery_charge_decision(
         "price_difference": price_difference,
         "charge_target": charge_target,
         "expected_pv_surplus": None if expected_surplus is None else round(expected_surplus, 2),
+        "break_even_price": break_even,
+        "worth_hours": worth_hours,
+        "worth_kwh": round(worth_kwh, 2),
     }
     for hour in range(24):
         attributes[f"hour_{hour}"] = hour in cheapest_hour_set
@@ -433,13 +545,17 @@ def calculate_battery_charge_decision(
         status = "no_price"
     elif inputs.previous_status == _STATUS_DEFERRED:
         status = _STATUS_DEFERRED
-    elif expected_surplus is not None and expected_surplus >= battery_kwh:
-        # Issue #43: the cautious surplus (Node-RED: the normal forecast).
-        status = "no_surplus"
-    elif price_difference >= inputs.price_difference_threshold:
-        status = "yes_tomorrow"
-    else:
+    elif not worth_hours:
+        # Issue #50: no evening hour pays for the charge.
         status = "no_price"
+    elif expected_surplus is not None and expected_surplus >= min(
+        battery_kwh, worth_kwh * TARGET_MARGIN
+    ):
+        # Issue #43: the cautious surplus (Node-RED: the normal forecast)
+        # -- issue #50: enough when it covers the hours worth charging for.
+        status = "no_surplus"
+    else:
+        status = "yes_tomorrow"
 
     return status, attributes
 
@@ -688,7 +804,7 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             hours = {
                 key: value
                 for key, value in self._attr_extra_state_attributes.items()
-                if key.startswith("hour_") or key in ("charge_target", "expected_pv_surplus")
+                if key.startswith("hour_") or key in _CARRIED_TO_TODAY
             }
             self._attr_native_value = "yes_today"
             self._attr_extra_state_attributes = {
@@ -898,6 +1014,14 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             ),
             battery_min_soc=pv_properties.battery_min_soc(self.hass, self._entry),
             day_consumption=self._read_consumption_daytime_adjusted(),
+            night_consumption=self._read_consumption(
+                "nighttime_average_adjusted"
+            ) or self._read_consumption("nighttime_average"),
+            night_consumption_raw=self._read_consumption("nighttime_average"),
+            evening_consumption=self._read_consumption("evening_average"),
+            pv_forecast_17_21_tomorrow=self._read_solar_forecast_tomorrow_8_16(
+                "pv_forecast_17_21_tomorrow"
+            ),
             battery_size=self._read_float_pv(pv_properties.battery_size_entity_id, 0.0) or 0.0,
             battery_target=battery_target,
             price_difference_threshold=self._read_float_pv(
@@ -954,12 +1078,16 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             return None
 
     def _read_consumption_daytime_adjusted(self) -> float | None:
+        return self._read_consumption("daytime_average_adjusted")
+
+    def _read_consumption(self, attribute: str) -> float | None:
+        """One of consumption_data's averages (kWh), or None."""
         entity_id = pv_properties.consumption_data_entity_id(self.hass, self._entry)
         state = self.hass.states.get(entity_id) if entity_id else None
         if state is None:
             return None
         try:
-            value = state.attributes.get("daytime_average_adjusted")
+            value = state.attributes.get(attribute)
             return None if value is None else float(value)
         except (TypeError, ValueError):
             return None

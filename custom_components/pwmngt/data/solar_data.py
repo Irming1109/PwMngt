@@ -145,6 +145,9 @@ PwM_SOLAR_DATA_ATTRIBUTES: dict[str, tuple[str, int, int] | tuple[str, int, int,
     # Node-RED sensor -- issue #43: the charge decision takes the middle
     # between this and pv_forecast_8_16_tomorrow.
     "pv_forecast_8_16_tomorrow_p10": ("tomorrow", 8, 16, "pv_estimate10"),
+    # 17-21 tomorrow. Not a Node-RED sensor -- issue #50: the charge
+    # decision takes it off the evening hours tonight's grid charge covers.
+    "pv_forecast_17_21_tomorrow": ("tomorrow", 17, 21),
 }
 
 PwM_SOLAR_DATA_SENSORS: list[SensorEntityDescription] = [
@@ -185,7 +188,7 @@ _LEGACY_UNIQUE_ID_SUFFIXES: list[str] = [
 # Node-RED fallbacks / limits.
 _DEFAULT_NIGHT_CONSUMPTION = 5.0   # "|| 5" when the average is missing or 0
 _MIN_NIGHT_CONSUMPTION = 2.0       # used when the average is negative
-_TARGET_MARGIN = 1.07
+TARGET_MARGIN = 1.07
 _TARGET_CEILING = 95
 
 # Triggers.
@@ -294,7 +297,7 @@ def calculate_solar_data(inputs: SolarInputs) -> dict[str, float | None]:
 
     # Unrounded, as in Node-RED.
     pv_17_21_today = sum_pv_forecast(inputs.today_hourly, 17, 21)
-    target_kwh = (night - pv_17_21_today) * _TARGET_MARGIN
+    target_kwh = (night - pv_17_21_today) * TARGET_MARGIN
     if target_kwh <= 0:
         target_kwh = 0.0
     # Node-RED's own second term ("+ night - tomorrow's forecast, only if

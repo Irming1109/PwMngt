@@ -723,7 +723,7 @@ const PWM_BATTERY_TEXTS = {
     status: {
       yes_today: "Battery charges today in these hours",
       yes_tomorrow: "Battery charges tomorrow in these hours",
-      no_price: "Battery is not charged tonight, price difference too small",
+      no_price: "Battery is not charged tonight, no evening hour is expensive enough",
       no_surplus: "Battery is not charged tonight, PV surplus tomorrow",
       no_charge_needed: "Battery is not charged tonight, no charge needed",
       no_deferred: "Charging postponed one day",
@@ -743,9 +743,15 @@ const PWM_BATTERY_TEXTS = {
       `Charges to ${pct}% from the grid - tomorrow's PV (${kwh} surplus expected) fills it up to the target of ${target}%`,
     fullCharge: (pct, kwh) =>
       `Charges all the way to ${pct}% from the grid - tomorrow's PV surplus is only ${kwh}`,
+    fullChargeNoSurplus: (pct) => `Charges all the way to ${pct}% from the grid - no PV surplus expected tomorrow`,
     chargeTo: (pct) => `Charges to ${pct}% from the grid`,
     surplusCovers: (target, kwh) =>
       `Tomorrow's PV surplus (${kwh}, cautious estimate) covers the target of ${target}%`,
+    price: (value) => `${value.toFixed(2)} kr`,
+    worthHours: (hours, price) =>
+      `Covers ${hours}, where power costs at least ${price} - the rest of the night isn't worth charging for`,
+    surplusCoversWorth: (hours, kwh) =>
+      `Tomorrow's PV surplus (${kwh}, cautious estimate) covers ${hours}, the hours worth charging for`,
     manualTitle: "Manual battery control",
     chargeNow: (pct) => `Charge now ${pct}%`,
     stop: "Stop charging",
@@ -770,7 +776,7 @@ const PWM_BATTERY_TEXTS = {
     status: {
       yes_today: "Batteri lades i dag i disse timer",
       yes_tomorrow: "Batteri lades i morgen i disse timer",
-      no_price: "Batteri lades ikke i nat, prisforskel for lav",
+      no_price: "Batteri lades ikke i nat, ingen aftentime er dyr nok",
       no_surplus: "Batteri lades ikke i nat, PV-overskud i morgen",
       no_charge_needed: "Batteri lades ikke i nat, intet ladebehov",
       no_deferred: "Ladning udskudt 1 dag",
@@ -790,9 +796,15 @@ const PWM_BATTERY_TEXTS = {
       `Lades til ${pct} % fra nettet - solen i morgen (forventet ${kwh} overskud) fylder op til target ${target} %`,
     fullCharge: (pct, kwh) =>
       `Lades helt til ${pct} % fra nettet - forventet sol-overskud i morgen kun ${kwh}`,
+    fullChargeNoSurplus: (pct) => `Lades helt til ${pct} % fra nettet - intet sol-overskud forventet i morgen`,
     chargeTo: (pct) => `Lades til ${pct} % fra nettet`,
     surplusCovers: (target, kwh) =>
       `Forventet sol-overskud i morgen (${kwh}, forsigtigt skøn) dækker target ${target} %`,
+    price: (value) => `${value.toFixed(2).replace(".", ",")} kr`,
+    worthHours: (hours, price) =>
+      `Dækker kl. ${hours}, hvor strømmen koster mindst ${price} - resten af natten kan ikke betale sig at lade til`,
+    surplusCoversWorth: (hours, kwh) =>
+      `Forventet sol-overskud i morgen (${kwh}, forsigtigt skøn) dækker kl. ${hours}, de timer det kan betale sig at lade til`,
     manualTitle: "Manuel betjening af batteri",
     chargeNow: (pct) => `Lad nu ${pct} %`,
     stop: "Afbryd ladning",
@@ -1070,8 +1082,9 @@ class PwMBatteryCard extends HTMLElement {
     // Issue #43: what the decision is based on, and how far tonight's
     // charge goes (a partial charge leaves the rest to tomorrow's PV).
     if (isAuto) {
-      const decision = this._decisionText(t, status);
-      if (decision) content.appendChild(this._note(decision));
+      for (const decision of this._decisionText(t, status)) {
+        content.appendChild(this._note(decision));
+      }
     }
 
     if (manualPct !== null) {
@@ -1227,28 +1240,40 @@ class PwMBatteryCard extends HTMLElement {
   /**
    * Issue #43: the charge decision in words -- the charge target tonight
    * (partial or full) against the nightly target, and tomorrow's cautious
-   * PV surplus it is based on. Null when there is nothing to say.
+   * PV surplus it is based on. Issue #50: and the evening hours worth
+   * charging for. Empty when there is nothing to say.
    */
   _decisionText(t, status) {
     const number = (value) =>
       value === null || value === undefined || !Number.isFinite(Number(value)) ? null : Number(value);
     const surplus = number(status.attributes.expected_pv_surplus);
     const chargeTarget = number(status.attributes.charge_target);
+    const breakEven = number(status.attributes.break_even_price);
+    const worthHours = Array.isArray(status.attributes.worth_hours) ? status.attributes.worth_hours : null;
+    const hours = worthHours && worthHours.length ? pwmHourRanges(worthHours) : null;
     const targetState = this._state("target");
     const target = targetState ? number(targetState.state) : null;
     const kwh = surplus === null ? null : t.kwh(Math.max(surplus, 0));
     if (status.state === "yes_today" || status.state === "yes_tomorrow") {
-      if (chargeTarget === null) return null;
+      if (chargeTarget === null) return [];
       const pct = Math.round(chargeTarget);
+      const lines = [];
       if (target !== null && chargeTarget < target && kwh !== null) {
-        return t.partialCharge(pct, Math.round(target), kwh);
+        lines.push(t.partialCharge(pct, Math.round(target), kwh));
+      } else {
+        // Below 0.05 kWh the surplus reads "0.0 kWh" -- say "none" instead.
+        if (kwh === null) lines.push(t.chargeTo(pct));
+        else if (surplus < 0.05) lines.push(t.fullChargeNoSurplus(pct));
+        else lines.push(t.fullCharge(pct, kwh));
       }
-      return kwh !== null ? t.fullCharge(pct, kwh) : t.chargeTo(pct);
+      if (hours && breakEven !== null) lines.push(t.worthHours(hours, t.price(breakEven)));
+      return lines;
     }
-    if (status.state === "no_surplus" && kwh !== null && target !== null) {
-      return t.surplusCovers(Math.round(target), kwh);
+    if (status.state === "no_surplus" && kwh !== null) {
+      if (hours) return [t.surplusCoversWorth(hours, kwh)];
+      if (target !== null) return [t.surplusCovers(Math.round(target), kwh)];
     }
-    return null;
+    return [];
   }
 
   _note(text) {
@@ -1275,6 +1300,20 @@ class PwMBatteryCard extends HTMLElement {
   }
 }
 pwmDefine("pwm-battery-card", PwMBatteryCard);
+
+/**
+ * Issue #50: hours as clock ranges -- [17, 18, 19, 20, 22] -> "17-21, 22-23".
+ */
+function pwmHourRanges(hours) {
+  const sorted = [...hours].map(Number).sort((a, b) => a - b);
+  const ranges = [];
+  for (const hour of sorted) {
+    const last = ranges[ranges.length - 1];
+    if (last && last[1] === hour) last[1] = hour + 1;
+    else ranges.push([hour, hour + 1]);
+  }
+  return ranges.map(([from, to]) => `${from}-${to}`).join(", ");
+}
 
 /** Battery ring card texts -- same language pick as PWM_BATTERY_TEXTS. */
 const PWM_RING_TEXTS = {
