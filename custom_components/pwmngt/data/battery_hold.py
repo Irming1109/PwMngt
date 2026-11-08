@@ -88,7 +88,10 @@ Deliberate differences from Node-RED (agreed with Claus, issue #12):
   translator held the battery hard until auto was back.
 - Power in W rather than Growatt-%: W per % depends on the inverter
   model, so the conversion lives in the translator. The deadbands are
-  Node-RED's 2 / 1 Growatt-% at its 150 W per %.
+  Node-RED's 2 / 1 Growatt-%, and one % is 1 % of the inverter's max AC
+  output (issue #54) -- Node-RED's 150 W per % fits only Claus's 15 kW
+  WIT. The PV device's "Solar inverter max AC output (kW)" sets it; at
+  0 it falls back to 150 W.
 - Winter (November-January) is read in Home Assistant's own time zone
   rather than a fixed Europe/Copenhagen.
 
@@ -115,7 +118,7 @@ hold with no PV, the WIT takes its own consumption (~275 W) from the
 battery -- 0.9 kWh of the grid charge in one night. A positive remote
 power makes it import (tested: +1 % = ~175 W more from the grid), so the
 hold publishes a negative power for what PV doesn't cover of the
-inverter's standby, in whole 150 W steps rounded up (a little charge
+inverter's standby, in whole 1 % steps rounded up (a little charge
 rather than a discharge). The standby is learned from Battery power
 while PV is ~0 and the last write has settled. Only the power moves, so
 no EEPROM writes are added.
@@ -195,18 +198,20 @@ _BLOCK_GAIN = 0.5
 _BLOCK_CORRECTION_RANGE = (-_BLOCK_LOSS_SHARE, 0.07)
 _LOW_PV_W = 1000  # LAV_PV_W: below this, a hard hold at 0 W (never discharges).
 # Issue #48: the inverter's own consumption covered from the grid in a
-# hard hold -- start value, range and the translator's 150 W per Growatt-%.
+# hard hold -- start value and range.
 _STANDBY_START_W = 275.0
 _STANDBY_RANGE_W = (0.0, 600.0)
-_STANDBY_STEP_W = 150.0
 # Learned only with PV below this (night: Battery power is the standby
 # minus the import) and after the last write has settled.
 _STANDBY_LEARN_PV_W = 30.0
 _STANDBY_LEARN_GAIN = 0.5
 _FULL_SOC = 98  # FULD_SOC: above this, PV surplus may go to the grid.
 _COOLDOWN_SECONDS = 30  # COOLDOWN_MS: the growatt_modbus lock per register.
-_DEADBAND_UP_W = 300  # DEADBAND_OP: 2 Growatt-% at 150 W per %.
-_DEADBAND_DOWN_W = 150  # DEADBAND_NED: 1 % -- quicker, to avoid discharging.
+# Issue #54: one Growatt-% in W is 1 % of the inverter's max AC output;
+# this is Node-RED's value (Claus's 15 kW WIT), used while that isn't set.
+_DEFAULT_STEP_W = 150.0
+_DEADBAND_UP_STEPS = 2  # DEADBAND_OP: 2 Growatt-%.
+_DEADBAND_DOWN_STEPS = 1  # DEADBAND_NED: 1 % -- quicker, to avoid discharging.
 _HYSTERESIS = 5  # HYSTERESE: points above the limit before releasing.
 _MIN_SWITCH_SECONDS = 10 * 60  # MIN_SKIFT_MS: spares the inverter's EEPROM.
 _DISCHARGE_W = 100  # AFLAD_W: discharging above this counts as "drawing".
@@ -335,6 +340,8 @@ class BatteryHoldInputs:
     # battery_data's behind_charge_curve: the PV surplus goes to the
     # battery first while a car charges.
     behind_charge_curve: bool = False
+    # Issue #54: one Growatt-% in W -- the deadbands and the standby steps.
+    step_w: float = _DEFAULT_STEP_W
 
 
 @dataclass
@@ -373,29 +380,31 @@ def _block_margin(st: BatteryHoldState, inputs: BatteryHoldInputs, feedback: boo
     return max(_MARGIN_W, pv_power * (_BLOCK_LOSS_SHARE + st.block_correction))
 
 
-def _publish_power(st: BatteryHoldState, target: float, now: float) -> float:
+def _publish_power(st: BatteryHoldState, target: float, inputs: BatteryHoldInputs) -> float:
     """Move st.power_w (the published power) towards target, behind the
     deadband and the cooldown. Returns the rounded target."""
+    now = inputs.now
     target = float(round(target))
     # Deadband: quick when the output goes DOWN (towards 0), slower UP.
     if st.power_w is None:
         due = True
     else:
         difference = target - st.power_w
-        due = abs(difference) >= (_DEADBAND_DOWN_W if difference < 0 else _DEADBAND_UP_W)
+        steps = _DEADBAND_DOWN_STEPS if difference < 0 else _DEADBAND_UP_STEPS
+        due = abs(difference) >= steps * inputs.step_w
     if due and now - st.last_write >= _COOLDOWN_SECONDS:
         st.power_w = target
         st.last_write = now
     return target
 
 
-def _start_power(st: BatteryHoldState, target: float, now: float) -> float:
+def _start_power(st: BatteryHoldState, target: float, inputs: BatteryHoldInputs) -> float:
     """Publish target at once when the hold or the block starts (issue
     #31): the start writes the inverter's remote power anyway, so the lock
     starts now -- later changes wait out the cooldown as usual."""
     target = float(round(target))
     st.power_w = target
-    st.last_write = now
+    st.last_write = inputs.now
     return target
 
 
@@ -427,8 +436,8 @@ def _car_target(st: BatteryHoldState, inputs: BatteryHoldInputs, starting: bool)
 
 def _standby_import(st: BatteryHoldState, inputs: BatteryHoldInputs, learn: bool) -> float:
     """Issue #48: the power (W, negative = import) that covers what PV
-    doesn't of the inverter's standby in a hard hold -- whole 150 W steps,
-    rounded up. With learn, the standby is first corrected half-way
+    doesn't of the inverter's standby in a hard hold -- whole steps of
+    inputs.step_w (1 Growatt-%), rounded up. With learn, the standby is first corrected half-way
     towards Battery power minus what was last published (night only)."""
     now = inputs.now
     if (
@@ -447,7 +456,7 @@ def _standby_import(st: BatteryHoldState, inputs: BatteryHoldInputs, learn: bool
     missing = st.standby_w - (inputs.pv_power or 0.0)
     if missing <= 0:
         return 0.0
-    return -math.ceil(missing / _STANDBY_STEP_W) * _STANDBY_STEP_W
+    return -math.ceil(missing / inputs.step_w) * inputs.step_w
 
 
 def _hold_target(soc: float, limit: float, pv_power: float, house_power: float) -> tuple[float, str]:
@@ -509,7 +518,7 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
             # PV is covered by the battery as usual.
             target, status = max(house_power, pv_out), STATUS_BLOCKING_CHARGE
         publish = _start_power if starting else _publish_power
-        return BatteryHoldResult(st, None, status, True, publish(st, target, now))
+        return BatteryHoldResult(st, None, status, True, publish(st, target, inputs))
     if st.blocking:
         st.blocking = False
         st.power_w = 0.0
@@ -665,7 +674,7 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
         else:
             status = hold_status
     publish = _start_power if started_by_other else _publish_power
-    return BatteryHoldResult(st, None, status, active, publish(st, target, now))
+    return BatteryHoldResult(st, None, status, active, publish(st, target, inputs))
 
 
 # ---------------------------------------------------------------------------
@@ -837,8 +846,15 @@ class PwMngtBatteryHoldSensor(RestoreEntity, SensorEntity):
             now=dt_util.utcnow().timestamp(),
             winter=dt_util.now().month in _WINTER_MONTHS,
             pv_big_shifts=self._read_pv_big_shifts(),
+            step_w=self._read_step_w(),
             **self._read_car_charging(),
         )
+
+    def _read_step_w(self) -> float:
+        """Issue #54: 1 % of the inverter's max AC output in W -- Node-RED's
+        150 W while it is 0 or can't be read."""
+        max_kw = self._read(pv_properties.inverter_max_ac_kw_entity_id(self.hass, self._entry))
+        return max_kw * 10.0 if max_kw and max_kw > 0 else _DEFAULT_STEP_W
 
     def _read_car_charging(self) -> dict[str, Any]:
         """Issue #33: car_charging/car_power_w/behind_charge_curve for

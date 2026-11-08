@@ -263,6 +263,7 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
     ),
     # Old key="solar_inverter_max_ac_kw" (input_select.sol_inverter_max)
     # Old name="Sol inverter max ydeevne AC KW"
+    # data/battery_hold.py takes 1 % of it as one Growatt-% (issue #54).
     PwMngtSelectEntityDescription(
         key="solar_inverter_max_ac_kw",
         name="Solar inverter max AC output (kW)",

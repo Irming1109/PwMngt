@@ -107,6 +107,13 @@ def battery_command_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | 
     return _pv_entity_id(hass, entry, "select", "battery_command")
 
 
+def inverter_max_ac_kw_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+    """Entity id of select.<pv>_solar_inverter_max_ac_kw (see
+    PwM_PV_CONFIG_SELECTS in select.py) -- the inverter's max AC output in
+    kW. data/battery_hold.py takes 1 % of it as one Growatt-% (issue #54)."""
+    return _pv_entity_id(hass, entry, "select", "solar_inverter_max_ac_kw")
+
+
 def battery_mode_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
     """Entity id of select.<pv>_battery_mode (see PwM_PV_CONFIG_SELECTS in
     select.py) -- Old: select.pv_battery_mode ("Auto"/"Manuel"). Not
