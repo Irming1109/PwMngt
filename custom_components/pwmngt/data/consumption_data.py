@@ -47,6 +47,11 @@ Deliberate differences from Node-RED (Claus, 2026-11-03):
   Node-RED only corrected the daytime, so a night car charge raised
   Battery nightly target -- but the battery is never meant to cover a
   car charge.
+- late_evening_average (issue #58, Claus 2026-11-09): 21-24 on its own,
+  with and without the chargers. The night charge (data/
+  battery_charge_decision.py) spread the night evenly over 21-06, which
+  underestimated 21-24 by ~30 % where the house uses more before
+  midnight than after (Kasper: ~0.64 vs ~0.35 kWh an hour).
 """
 
 import asyncio
@@ -112,6 +117,10 @@ PwM_CONSUMPTION_DATA_ATTRIBUTES: list[str] = [
     # battery is never meant to cover a car charge, so Battery nightly
     # target (data/solar_data.py) reads this one.
     "nighttime_average_adjusted",
+    # 21-24, as measured and without the chargers -- issue #58, read by
+    # data/battery_charge_decision.py for tomorrow's hours 21-23.
+    "late_evening_average",
+    "late_evening_average_adjusted",
     # 00-24. Old: sensor.dogn_snit.
     "full_day_average",
     # 08-16 -- not implemented yet (no Pool segment).
@@ -154,8 +163,9 @@ _MAX_HISTORY_DAYS = 30
 _MAX_PLAUSIBLE_FULL_DAY_KWH = 250
 
 # Part of the source signature, so a change in what each history entry
-# holds rebuilds the histories from Recorder once. v2: nighttime_adjusted.
-_HISTORY_FORMAT = "v2"
+# holds rebuilds the histories from Recorder once. v2: nighttime_adjusted,
+# v3: late_evening (issue #58).
+_HISTORY_FORMAT = "v3"
 
 # Trimmed averages (see _average()): drop this share of the days at each
 # end -- one day at 7 days of history, two at 14, three at 21-30 -- but
@@ -276,6 +286,7 @@ def _derive_daily_values(v: dict[int, float]) -> dict[str, float]:
         "late_morning": round(v[9] - v[8], 2),
         "daytime": round(v[16] - v[8], 2),
         "evening": round(v[21] - v[17], 2),
+        "late_evening": round(v[24] - v[21], 2),
         "nighttime": round((v[24] - v[17]) + (v[6] - v[0]), 2),
         "full_day": round(v[24] - v[0], 2),
     }
@@ -352,6 +363,10 @@ def calculate_daytime_averages(
         "nighttime_average": _average(history, "nighttime", period_days, newest),
         "nighttime_average_adjusted": _average(
             history, "nighttime_adjusted", period_days, newest
+        ),
+        "late_evening_average": _average(history, "late_evening", period_days, newest),
+        "late_evening_average_adjusted": _average(
+            history, "late_evening_adjusted", period_days, newest
         ),
         "car_charger_consumption": _average(
             history, "car_charger", period_days, newest, trim=False
@@ -433,6 +448,9 @@ def build_day(
     car_charger_night = _charger_consumption(
         series, charger_entity_ids, timestamps, ((17, 24), (0, 6))
     )
+    car_charger_late_evening = _charger_consumption(
+        series, charger_entity_ids, timestamps, ((21, 24),)
+    )
 
     values["car_charger"] = round(car_charger, 2) if car_charger is not None else None
     values["daytime_adjusted"] = (
@@ -441,6 +459,11 @@ def build_day(
     values["nighttime_adjusted"] = (
         round(max(values["nighttime"] - car_charger_night, 0.0), 2)
         if car_charger_night is not None
+        else None
+    )
+    values["late_evening_adjusted"] = (
+        round(max(values["late_evening"] - car_charger_late_evening, 0.0), 2)
+        if car_charger_late_evening is not None
         else None
     )
     values["date"] = day.isoformat()
@@ -701,6 +724,8 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
                 "daytime_adjusted": values["daytime_adjusted"],
                 "nighttime": values["nighttime"],
                 "nighttime_adjusted": values["nighttime_adjusted"],
+                "late_evening": values["late_evening"],
+                "late_evening_adjusted": values["late_evening_adjusted"],
                 "car_charger": values["car_charger"],
             }
         )

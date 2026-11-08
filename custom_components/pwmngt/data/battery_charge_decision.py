@@ -390,6 +390,9 @@ class BatteryChargeInputs:
     night_consumption: float | None = None
     night_consumption_raw: float | None = None
     evening_consumption: float | None = None
+    # Issue #58: consumption_data's 21-24 average (without the chargers
+    # when known, kWh). None = unknown.
+    late_evening_consumption: float | None = None
     pv_forecast_17_21_tomorrow: float | None = None
 
 
@@ -428,7 +431,12 @@ def evening_hour_consumption(inputs: BatteryChargeInputs) -> dict[int, float]:
     average, without the chargers) minus tomorrow's PV 17-21; 21-24 gets the
     rest of the night average spread evenly over its 9 hours. While the
     averages are missing, the night is what the nightly target covers
-    (without its margin and minimum SoC), spread evenly."""
+    (without its margin and minimum SoC), spread evenly.
+
+    DIFF (issue #58, Claus 2026-11-09): 21-24 is its own measured average
+    when consumption_data has it (at most the rest of the night) -- the
+    even spread underestimated it by ~30 % at Kasper's, whose house uses
+    more before midnight than after."""
     night = inputs.night_consumption
     if night is None or night <= 0:
         night = max(inputs.battery_target - inputs.battery_min_soc, 0.0) / 100 * inputs.battery_size / TARGET_MARGIN
@@ -444,6 +452,9 @@ def evening_hour_consumption(inputs: BatteryChargeInputs) -> dict[int, float]:
         pv = max(inputs.pv_forecast_17_21_tomorrow or 0.0, 0.0)
     per_evening_hour = max(evening - pv, 0.0) / len(_EVENING_HOURS)
     per_late_hour = max(night - evening, 0.0) / _REST_OF_NIGHT_HOURS
+    late = inputs.late_evening_consumption
+    if late is not None and late >= 0 and inputs.night_consumption:
+        per_late_hour = min(late, max(night - evening, 0.0)) / len(_LATE_EVENING_HOURS)
     hourly = {hour: per_evening_hour for hour in _EVENING_HOURS}
     hourly.update({hour: per_late_hour for hour in _LATE_EVENING_HOURS})
     return hourly
@@ -1069,6 +1080,9 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             ) or self._read_consumption("nighttime_average"),
             night_consumption_raw=self._read_consumption("nighttime_average"),
             evening_consumption=self._read_consumption("evening_average"),
+            late_evening_consumption=self._read_consumption(
+                "late_evening_average_adjusted"
+            ) or self._read_consumption("late_evening_average"),
             pv_forecast_17_21_tomorrow=self._read_solar_forecast_tomorrow_8_16(
                 "pv_forecast_17_21_tomorrow"
             ),
