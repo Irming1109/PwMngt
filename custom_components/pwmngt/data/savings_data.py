@@ -391,6 +391,8 @@ class BatteryGridBalanceState:
     # actual discharge, carried into the next hour (Node-RED:
     # grid_afladning_rest_kwh) -- see calculate_battery_grid_balance().
     grid_discharge_rest_kwh: float = 0.0
+    # Issue #55: battery_data's grid_opladning_pct_cum at the last run.
+    grid_charge_pct_prev: float | None = None
 
 
 @dataclass
@@ -482,6 +484,7 @@ def period_totals(ledger: SavingsLedger) -> dict[str, float]:
         period_total_key(kind, period): round(
             current[kind] - getattr(ledger.periods[period], kind), 2
         )
+        + 0.0  # Turns round()'s -0.0 into 0.0.
         for kind in SAVINGS_PERIOD_KINDS
         for period in SAVINGS_PERIODS
         if period in ledger.periods
@@ -636,6 +639,7 @@ def calculate_battery_grid_balance(
     battery_discharge: float,
     grid_discharge_pct_cum: float,
     battery_size: float,
+    grid_charge_pct_cum: float | None = None,
 ) -> BatteryGridBalanceState:
     """One run of Node-RED's "Beregn balance på ladning af batteri fra
     grid". Pure -- testable on its own.
@@ -661,7 +665,25 @@ def calculate_battery_grid_balance(
     separately, subtract it from battery_discharge here before running
     today's buy-price valuation on the remainder, and value the
     subtracted (exported) kWh on its own, at the real sale price, into
-    its own sum -- NOT battery_charging_savings."""
+    its own sum -- NOT battery_charging_savings.
+
+    DIFF (issue #55, Claus 2026-11-08): the hour's grid charge is only
+    booked if battery_data saw the SoC rise from the grid in it
+    (grid_charge_pct_cum, its grid_opladning_pct_cum, went up) -- then all
+    of it, losses included, as Node-RED. Otherwise the inverter's own
+    charge counter counted grid power that never reached the battery:
+    e.g. the Growatt's standby covered from the grid in a hard hold
+    (#48) -- 1.6 kWh on a dark day, all booked as a charge that no
+    discharge ever earns back. The same rule for every inverter. Unknown
+    (no previous reading, or battery_data without the attribute): booked
+    as before."""
+    if (
+        grid_charge_pct_cum is not None
+        and state.grid_charge_pct_prev is not None
+        and grid_charge_pct_cum <= state.grid_charge_pct_prev
+    ):
+        battery_grid_charge = 0.0
+
     kwh_per_percent_point = battery_size / 100 if battery_size else 0.0
 
     grid_discharge_pct_this_hour = 0.0
@@ -702,6 +724,7 @@ def calculate_battery_grid_balance(
         battery_charging_savings=battery_charging_savings,
         grid_discharge_pct_prev=grid_discharge_pct_cum,
         grid_discharge_rest_kwh=grid_discharge_rest_kwh,
+        grid_charge_pct_prev=grid_charge_pct_cum,
     )
 
 
@@ -787,6 +810,7 @@ class PwMngtSavingsStoredData(ExtraStoredData):
                 "battery_charging_savings": battery.battery_charging_savings,
                 "grid_discharge_pct_prev": battery.grid_discharge_pct_prev,
                 "grid_discharge_rest_kwh": battery.grid_discharge_rest_kwh,
+                "grid_charge_pct_prev": battery.grid_charge_pct_prev,
             },
             "counters": {
                 "household_consumption": vars(counters.household_consumption),
@@ -827,6 +851,7 @@ class PwMngtSavingsStoredData(ExtraStoredData):
                     battery_charging_savings=battery_raw.get("battery_charging_savings", 0.0),
                     grid_discharge_pct_prev=battery_raw.get("grid_discharge_pct_prev"),
                     grid_discharge_rest_kwh=battery_raw.get("grid_discharge_rest_kwh", 0.0),
+                    grid_charge_pct_prev=battery_raw.get("grid_charge_pct_prev"),
                 ),
                 counters=HourlyCountersState(
                     household_consumption=_counter_from_restored(
@@ -1055,8 +1080,7 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
             # the very first hourly cycle since startup) -- nothing to
             # price this hour's energy at. Node-RED: global.get() returns
             # undefined here too before its own first run.
-            roll_periods(self._ledger, dt_util.now())
-            self._write_state()
+            self._roll_periods_and_write()
             return
 
         counters = self._ledger.counters
@@ -1108,6 +1132,7 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
                 battery_discharge,
                 grid_discharge_pct_cum,
                 battery_size,
+                self._read_grid_charge_pct_cum(),
             )
         else:
             LOGGER.debug(
@@ -1117,9 +1142,23 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
 
         # Issue #53: after the booking, so the hour just booked counts in
         # the period it belongs to.
-        roll_periods(self._ledger, dt_util.now())
-        self._write_state()
+        self._roll_periods_and_write()
         self._dispatch_headline_values()
+
+    def _roll_periods_and_write(self) -> None:
+        """Issue #53: when a period is about to roll over, first write its
+        final total -- with the hour just booked (23-24 at 00:01) -- so the
+        period sensors show it and Home Assistant's statistics count it
+        before last_reset moves. Otherwise that hour only reached the
+        month/year totals (seen on Claus's HA, 2026-11-08)."""
+        now = dt_util.now()
+        if any(
+            self._ledger.periods.get(period, PeriodBaseline()).period_id != period_id
+            for period, period_id in period_ids(now).items()
+        ):
+            self._write_state()
+            roll_periods(self._ledger, now)
+        self._write_state()
 
     # -- reads ---------------------------------------------------------------
 
@@ -1166,6 +1205,13 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         grid = _read_float_attribute(state, "grid_afladning_pct_cum") or 0.0
         total = _read_float_attribute(state, "total_afladning_pct_cum") or 0.0
         return grid, total
+
+    def _read_grid_charge_pct_cum(self) -> float | None:
+        """Issue #55: battery_data's grid_opladning_pct_cum -- None while
+        it isn't there."""
+        entity_id = pv_properties.battery_data_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        return _read_float_attribute(state, "grid_opladning_pct_cum") if state else None
 
     def _read_battery_size(self) -> float:
         entity_id = pv_properties.battery_size_entity_id(self.hass, self._entry)

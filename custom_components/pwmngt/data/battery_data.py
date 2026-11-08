@@ -168,6 +168,10 @@ PwM_BATTERY_DATA_ATTRIBUTES: list[str] = [
     # "total_afladning_pct_cum".
     "grid_afladning_pct_cum",
     "total_afladning_pct_cum",
+    # Issue #55: running total of percentage points charged from the grid
+    # (never reset) -- savings_data books an hour's grid charge only if
+    # this rose, see calculate_battery_grid_balance().
+    "grid_opladning_pct_cum",
 ]
 
 PwM_BATTERY_DATA_SENSORS: list[SensorEntityDescription] = [
@@ -329,6 +333,8 @@ class BatteryLedger:
     avg_cheapest_hours: float | None = None
     grid_afladning_pct_cum: float = 0.0
     total_afladning_pct_cum: float = 0.0
+    # Issue #55: see PwM_BATTERY_DATA_ATTRIBUTES.
+    grid_opladning_pct_cum: float = 0.0
     # The "restart plan" (Node-RED: context 'plan_genstart'). None = no
     # plan recorded yet. plan_date is a "YYYY-MM-DD" local-date string.
     plan_date: str | None = None
@@ -364,6 +370,7 @@ class BatteryLedger:
             "avg_cheapest_hours": self.avg_cheapest_hours,
             "grid_afladning_pct_cum": self.grid_afladning_pct_cum,
             "total_afladning_pct_cum": self.total_afladning_pct_cum,
+            "grid_opladning_pct_cum": self.grid_opladning_pct_cum,
             "plan_date": self.plan_date,
             "plan_start_minutes": self.plan_start_minutes,
             "plan_start_soc": self.plan_start_soc,
@@ -387,6 +394,7 @@ class BatteryLedger:
             avg_cheapest_hours=restored.get("avg_cheapest_hours"),
             grid_afladning_pct_cum=float(restored.get("grid_afladning_pct_cum") or 0.0),
             total_afladning_pct_cum=float(restored.get("total_afladning_pct_cum") or 0.0),
+            grid_opladning_pct_cum=float(restored.get("grid_opladning_pct_cum") or 0.0),
             plan_date=restored.get("plan_date"),
             plan_start_minutes=restored.get("plan_start_minutes"),
             plan_start_soc=restored.get("plan_start_soc"),
@@ -623,6 +631,7 @@ def calculate_battery_data(
     cells = _sort_cells(list(previous.soc_cells))
     grid_afladning_pct_cum = previous.grid_afladning_pct_cum
     total_afladning_pct_cum = previous.total_afladning_pct_cum
+    grid_opladning_pct_cum = previous.grid_opladning_pct_cum
 
     # ---- Grid counter (literal: no reset-handling, see module docstring) --
     grid_now = inputs.grid_charged_day
@@ -685,6 +694,7 @@ def calculate_battery_data(
         points_added = soc - soc_previous
         if rise_is_grid:
             soc_grid += points_added
+            grid_opladning_pct_cum += points_added
         else:
             soc_pv += points_added
         # Node-RED's "for (i = 0; i < points; i++)" -- a fractional
@@ -895,6 +905,7 @@ def calculate_battery_data(
         avg_cheapest_hours=avg_cheapest_hours,
         grid_afladning_pct_cum=grid_afladning_pct_cum,
         total_afladning_pct_cum=total_afladning_pct_cum,
+        grid_opladning_pct_cum=grid_opladning_pct_cum,
         plan_date=plan_date,
         plan_start_minutes=plan_start_minutes,
         plan_start_soc=plan_start_soc,
@@ -1260,6 +1271,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             "grid_charge_previous": ledger.grid_charge_previous,
             "grid_afladning_pct_cum": round(ledger.grid_afladning_pct_cum, 2),
             "total_afladning_pct_cum": round(ledger.total_afladning_pct_cum, 2),
+            "grid_opladning_pct_cum": round(ledger.grid_opladning_pct_cum, 2),
         }
         self._attr_available = True
         self.async_write_ha_state()
