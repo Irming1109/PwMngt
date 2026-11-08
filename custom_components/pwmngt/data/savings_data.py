@@ -393,6 +393,11 @@ class BatteryGridBalanceState:
     grid_discharge_rest_kwh: float = 0.0
     # Issue #55: battery_data's grid_opladning_pct_cum at the last run.
     grid_charge_pct_prev: float | None = None
+    # Issue #56: this run's booked grid charge and grid-share discharge
+    # (kWh) -- read by calculate_purchase_prices() in the same hour, not
+    # stored.
+    hour_grid_charge_kwh: float = 0.0
+    hour_discharge_from_grid_kwh: float = 0.0
 
 
 @dataclass
@@ -569,6 +574,8 @@ def calculate_purchase_prices(
     tax_reduced_enabled: bool,
     tax_threshold_kwh: float,
     current_tax_period_id: str,
+    battery_grid_charge_kwh: float = 0.0,
+    battery_discharge_from_grid_kwh: float = 0.0,
 ) -> PurchasePriceState:
     """One run of Node-RED's "Beregn indkøbspris med og uden PV". Pure --
     testable on its own. See module docstring for 2026-10-16's rework of
@@ -590,7 +597,23 @@ def calculate_purchase_prices(
     discharging it later, are already tracked correctly and separately in
     BatteryGridBalanceState/calculate_battery_grid_balance() below --
     that's a different question (battery arbitrage savings) from this
-    one (total real spend vs. the hypothetical no-PV spend)."""
+    one (total real spend vs. the hypothetical no-PV spend).
+
+    DIFF again (issue #56, Claus 2026-11-08): a night's grid charge is not
+    own production -- "Own production savings" fell by it (Rene,
+    2026-11-08: -9.34 DKK in 02-06), because grid_import counts the
+    charge too. Node-RED counted it twice instead: in strom_indkob when
+    bought, and again as afladning x grid share. Now the two savings are
+    kept apart: the house's real purchase is grid_import minus the hour's
+    booked grid charge of the battery (calculate_battery_grid_balance(),
+    after #55), plus the grid-share discharge -- grid power the house
+    used via the battery, priced at the hour it was used, as Node-RED's
+    second term. Own production is then what PV covered, directly or via
+    the battery; buying cheap and using dear stays in
+    battery_charging_savings."""
+    house_grid_purchase = (
+        max(0.0, grid_import - battery_grid_charge_kwh) + battery_discharge_from_grid_kwh
+    )
     # Tax period rolled over (new month/quarter) since the last run --
     # start this period's cumulative back at 0.
     period_consumption_before = (
@@ -616,7 +639,7 @@ def calculate_purchase_prices(
         2,
     )
     purchase_price_real = round(
-        state.purchase_price_real + grid_import * last_hour_real_price, 2
+        state.purchase_price_real + house_grid_purchase * last_hour_real_price, 2
     )
 
     own_production_savings = state.own_production_savings
@@ -725,6 +748,8 @@ def calculate_battery_grid_balance(
         grid_discharge_pct_prev=grid_discharge_pct_cum,
         grid_discharge_rest_kwh=grid_discharge_rest_kwh,
         grid_charge_pct_prev=grid_charge_pct_cum,
+        hour_grid_charge_kwh=battery_grid_charge,
+        hour_discharge_from_grid_kwh=battery_discharge_from_grid,
     )
 
 
@@ -1099,6 +1124,29 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         grid_discharge_pct_cum, _total_discharge_pct_cum = self._read_discharge_pct_cum()
         battery_size = self._read_battery_size()
 
+        # Issue #56: the battery first -- the purchase run takes the house's
+        # grid purchase net of this hour's battery charge and discharge.
+        battery_hour = (0.0, 0.0)
+        if battery_grid_charge is not None and battery_discharge is not None:
+            self._ledger.battery = calculate_battery_grid_balance(
+                self._ledger.battery,
+                last_hour_real_price,
+                battery_grid_charge,
+                battery_discharge,
+                grid_discharge_pct_cum,
+                battery_size,
+                self._read_grid_charge_pct_cum(),
+            )
+            battery_hour = (
+                self._ledger.battery.hour_grid_charge_kwh,
+                self._ledger.battery.hour_discharge_from_grid_kwh,
+            )
+        else:
+            LOGGER.debug(
+                "PwMngt: savings_data skipping this hour's battery-grid-"
+                "balance run -- a required hourly reading is missing"
+            )
+
         if household_consumption is not None and grid_import is not None:
             tax_full_rate = self._read_tax_full_rate()
             tax_reduced_enabled = hub_properties.electricity_tax_reduced_enabled(
@@ -1117,27 +1165,12 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
                 tax_reduced_enabled,
                 tax_threshold_kwh,
                 current_tax_period_id,
+                *battery_hour,
             )
         else:
             LOGGER.debug(
                 "PwMngt: savings_data skipping this hour's purchase-price "
                 "run -- a required hourly reading is missing"
-            )
-
-        if battery_grid_charge is not None and battery_discharge is not None:
-            self._ledger.battery = calculate_battery_grid_balance(
-                self._ledger.battery,
-                last_hour_real_price,
-                battery_grid_charge,
-                battery_discharge,
-                grid_discharge_pct_cum,
-                battery_size,
-                self._read_grid_charge_pct_cum(),
-            )
-        else:
-            LOGGER.debug(
-                "PwMngt: savings_data skipping this hour's battery-grid-"
-                "balance run -- a required hourly reading is missing"
             )
 
         # Issue #53: after the booking, so the hour just booked counts in
