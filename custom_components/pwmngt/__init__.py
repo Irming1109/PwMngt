@@ -26,6 +26,9 @@ LOGGER = logging.getLogger(__name__)
 # Registered once per Home Assistant instance in _async_register_frontend().
 FRONTEND_URL_BASE = "/pwmngt_frontend"
 FRONTEND_JS_FILENAME = "pwm-cards.js"
+# Issue #57: the dashboard resource is this small loader, which loads
+# FRONTEND_JS_FILENAME and retries when that fails -- see the file itself.
+FRONTEND_LOADER_FILENAME = "pwm-cards-loader.js"
 # Issue #47: the copy under <config>/www, served as /local/pwmngt/ -- see
 # _async_register_frontend().
 LOCAL_FRONTEND_DIR = "pwmngt"
@@ -159,6 +162,9 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     # HACS update is picked up instead of a stale cached copy of the JS.
     url = f"{base}/{FRONTEND_JS_FILENAME}?v={integration.version}"
     add_extra_js_url(hass, url)
+    # Issue #57: the resource is the loader (same folder and version),
+    # which retries the cards when the app's first attempt fails.
+    loader_url = f"{base}/{FRONTEND_LOADER_FILENAME}?v={integration.version}"
 
     # The companion app (iOS and Android) doesn't reliably load extra JS
     # URLs -- every PwM card showed "Configuration error" there, while the
@@ -167,11 +173,11 @@ async def _async_register_frontend(hass: HomeAssistant) -> None:
     # a dashboard resource; www/pwm-cards.js copes with being loaded twice.
     # The resources are only ready once Home Assistant has started.
     if hass.is_running:
-        await _async_register_lovelace_resource(hass, url)
+        await _async_register_lovelace_resource(hass, loader_url)
     else:
 
         async def _register_when_started(_event) -> None:
-            await _async_register_lovelace_resource(hass, url)
+            await _async_register_lovelace_resource(hass, loader_url)
 
         hass.bus.async_listen_once(EVENT_HOMEASSISTANT_STARTED, _register_when_started)
 
@@ -188,11 +194,12 @@ def _copy_cards_to_local_www(hass: HomeAssistant, www_path: Path) -> bool:
     try:
         target_dir = local_www / LOCAL_FRONTEND_DIR
         target_dir.mkdir(parents=True, exist_ok=True)
-        source = www_path / FRONTEND_JS_FILENAME
-        target = target_dir / FRONTEND_JS_FILENAME
-        content = source.read_bytes()
-        if not target.is_file() or target.read_bytes() != content:
-            target.write_bytes(content)
+        for filename in (FRONTEND_JS_FILENAME, FRONTEND_LOADER_FILENAME):
+            source = www_path / filename
+            target = target_dir / filename
+            content = source.read_bytes()
+            if not target.is_file() or target.read_bytes() != content:
+                target.write_bytes(content)
     except OSError:
         LOGGER.warning("PwMngt: could not copy the cards to %s", local_www, exc_info=True)
         return False
@@ -220,10 +227,12 @@ async def _async_register_lovelace_resource(hass: HomeAssistant, url: str) -> No
         # Loads the stored resources first; async_items() alone doesn't.
         await resources.async_get_info()
 
-        # Both addresses (issue #47) -- the old one is moved to the new.
+        # Both addresses (issue #47), and the cards themselves as well as
+        # the loader (issue #57) -- an older one is moved to the new.
         paths = {
-            f"{FRONTEND_URL_BASE}/{FRONTEND_JS_FILENAME}",
-            f"{LOCAL_URL_BASE}/{FRONTEND_JS_FILENAME}",
+            f"{base}/{filename}"
+            for base in (FRONTEND_URL_BASE, LOCAL_URL_BASE)
+            for filename in (FRONTEND_JS_FILENAME, FRONTEND_LOADER_FILENAME)
         }
         ours = [item for item in resources.async_items() if item.get("url", "").split("?")[0] in paths]
         if not ours:
