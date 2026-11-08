@@ -120,6 +120,10 @@ from .pv_shift_data import PvShiftState, step_pv_shift_detection
 LOGGER = logging.getLogger(__name__)
 
 KEY_BATTERY_NIGHTLY_TARGET = "battery_nightly_target"
+# Issue #59: tomorrow's forecast (kWh, Solcast's normal estimate) for each
+# hour 06, 07 ... 16 -- a list, read by data/battery_charge_decision.py.
+KEY_PV_FORECAST_HOURLY_6_17_TOMORROW = "pv_forecast_hourly_6_17_tomorrow"
+PV_FORECAST_DAY_HOURS = range(6, 17)
 
 # Old key="udsving_60min" (sensor.udsving_60min) -- see data/pv_shift_data.py.
 # Lives as a solar_data attribute instead of its own sensor, same reasoning
@@ -286,6 +290,11 @@ def calculate_solar_data(inputs: SolarInputs) -> dict[str, float | None]:
         key: _js_round(sum_pv_forecast(hourly[day], start, end, *estimate), 1)
         for key, (day, start, end, *estimate) in PwM_SOLAR_DATA_ATTRIBUTES.items()
     }
+
+    values[KEY_PV_FORECAST_HOURLY_6_17_TOMORROW] = [
+        round(sum_pv_forecast(inputs.tomorrow_hourly, hour, hour + 1), 2)
+        for hour in PV_FORECAST_DAY_HOURS
+    ]
 
     night = inputs.night_consumption
     # Node-RED: parseFloat(...) || 5 -- missing *and* exactly 0 both give 5.
@@ -591,6 +600,9 @@ class PwMngtSolarDataSensor(RestoreEntity, _PwMngtSolarEntity):
         attributes = {key: data.get(key) for key in PwM_SOLAR_DATA_ATTRIBUTES}
         attributes[KEY_PV_BIG_SHIFTS_LAST_60MIN] = data.get(
             KEY_PV_BIG_SHIFTS_LAST_60MIN
+        )
+        attributes[KEY_PV_FORECAST_HOURLY_6_17_TOMORROW] = data.get(
+            KEY_PV_FORECAST_HOURLY_6_17_TOMORROW
         )
         return attributes
 

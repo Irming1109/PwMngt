@@ -723,7 +723,7 @@ const PWM_BATTERY_TEXTS = {
     status: {
       yes_today: "Battery charges today in these hours",
       yes_tomorrow: "Battery charges tomorrow in these hours",
-      no_price: "Battery is not charged tonight, no evening hour is expensive enough",
+      no_price: "Battery is not charged tonight, no hour tomorrow is expensive enough",
       no_surplus: "Battery is not charged tonight, PV surplus tomorrow",
       no_charge_needed: "Battery is not charged tonight, no charge needed",
       no_deferred: "Charging postponed one day",
@@ -748,6 +748,8 @@ const PWM_BATTERY_TEXTS = {
     surplusCovers: (target, kwh) =>
       `Tomorrow's PV surplus (${kwh}, cautious estimate) covers the target of ${target}%`,
     chargeCovers: (pct, hours) => `Charges to ${pct}% from the grid - enough for ${hours}`,
+    dayHours: (kwh, hours, reserve) =>
+      `Of which about ${kwh} for the daytime hours ${hours} - the battery keeps ${reserve}% for the evening`,
     pvFills: (kwh, target) => `Tomorrow's PV (${kwh} surplus expected) fills it up towards the target of ${target}%`,
     surplusCoversWorth: (hours, kwh) =>
       `Tomorrow's PV surplus (${kwh}, cautious estimate) covers ${hours}, the hours tonight's charge would cover`,
@@ -775,7 +777,7 @@ const PWM_BATTERY_TEXTS = {
     status: {
       yes_today: "Batteri lades i dag i disse timer",
       yes_tomorrow: "Batteri lades i morgen i disse timer",
-      no_price: "Batteri lades ikke i nat, ingen aftentime er dyr nok",
+      no_price: "Batteri lades ikke i nat, ingen time i morgen er dyr nok",
       no_surplus: "Batteri lades ikke i nat, PV-overskud i morgen",
       no_charge_needed: "Batteri lades ikke i nat, intet ladebehov",
       no_deferred: "Ladning udskudt 1 dag",
@@ -800,6 +802,8 @@ const PWM_BATTERY_TEXTS = {
     surplusCovers: (target, kwh) =>
       `Forventet sol-overskud i morgen (${kwh}, forsigtigt skøn) dækker target ${target} %`,
     chargeCovers: (pct, hours) => `Lades til ${pct} % fra nettet - nok til kl. ${hours}`,
+    dayHours: (kwh, hours, reserve) =>
+      `Heraf ca. ${kwh} til dagtimerne kl. ${hours} - batteriet gemmer ${reserve} % til aftenen`,
     pvFills: (kwh, target) => `Solen i morgen (forventet ${kwh} overskud) fylder op mod target ${target} %`,
     surplusCoversWorth: (hours, kwh) =>
       `Forventet sol-overskud i morgen (${kwh}, forsigtigt skøn) dækker kl. ${hours}, de timer natladningen skulle dække`,
@@ -1258,6 +1262,14 @@ class PwMBatteryCard extends HTMLElement {
       if (hours) {
         // Issue #50: the charge covers these hours; PV (if any) tops up.
         lines.push(t.chargeCovers(pct, hours));
+        // Issue #59: and the expensive daytime hours, down to the evening
+        // reserve.
+        const dayHours = Array.isArray(status.attributes.day_hours) ? status.attributes.day_hours : [];
+        const dayKwh = number(status.attributes.day_kwh);
+        const reserve = number(status.attributes.evening_reserve_soc);
+        if (dayHours.length && dayKwh !== null && reserve !== null) {
+          lines.push(t.dayHours(t.kwh(dayKwh), pwmHourRanges(dayHours), Math.round(reserve)));
+        }
         if (surplus !== null && surplus >= 0.05 && target !== null && chargeTarget < target) {
           lines.push(t.pvFills(kwh, Math.round(target)));
         }

@@ -93,6 +93,16 @@ Deliberate differences from Node-RED:
   aren't set by anything yet. Not on a Growatt: there data/battery_hold.py
   lets the battery cover the house without the car instead.
 
+- DIFF (issue #59, Claus 2026-11-09): in today's daytime hours the night
+  charge also covered (data/battery_charge_decision.py: day_hours,
+  evening_reserve_soc), min_soc is the evening reserve -- the battery
+  covers the house down to what the evening needs, never below, and
+  never above the SoC. The plan is remembered for the day once read
+  (the decision moves on to tomorrow after 14:00). Not while a charger
+  charges a car, a grid charge runs or charging is blocked. The target
+  floor is let go in those hours, so it follows the battery down
+  afterwards instead of demanding the energy back.
+
 Triggers (same as Node-RED, see PwMngtBatteryDataSensor): Battery SoC
 changes, Battery nightly target changes (only 00:01-16:59), target end
 time / battery command / either charger's state changes, every 15 min
@@ -313,6 +323,11 @@ class BatteryInputs:
     # the car (any time of day; PV still charges the battery). A Growatt covers the house only instead
     # (data/battery_hold.py), so this stays False there.
     car_charging_lock: bool = False
+    # Issue #59: today's daytime hours the night charge covered and the SoC
+    # (%) kept for the evening in them -- from Battery charge status while
+    # it is "yes_today". None = not known now.
+    day_plan_hours: list[int] | None = None
+    day_plan_reserve: float | None = None
     # The SoC the battery is discharged to (pv_properties.battery_min_soc(),
     # Node-RED: a fixed 5) -- the lowest min_soc, the charge curve's 09:00
     # start, and "battery empty" for the ledger.
@@ -359,6 +374,11 @@ class BatteryLedger:
     # Issue #35: the date a charge_now_* command ran before 06:00 -- "the
     # night charge has started", see calculate_battery_data().
     night_charge_date: str | None = None
+    # Issue #59: today's day plan, remembered for the day (see
+    # BatteryInputs.day_plan_hours).
+    day_plan_date: str | None = None
+    day_plan_hours: list[int] = field(default_factory=list)
+    day_plan_reserve: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -381,6 +401,9 @@ class BatteryLedger:
             "charging_previous": self.charging_previous,
             "car_lock": self.car_lock,
             "night_charge_date": self.night_charge_date,
+            "day_plan_date": self.day_plan_date,
+            "day_plan_hours": list(self.day_plan_hours),
+            "day_plan_reserve": self.day_plan_reserve,
         }
 
     @classmethod
@@ -405,6 +428,9 @@ class BatteryLedger:
             charging_previous=bool(restored.get("charging_previous", False)),
             car_lock=restored.get("car_lock"),
             night_charge_date=restored.get("night_charge_date"),
+            day_plan_date=restored.get("day_plan_date"),
+            day_plan_hours=[int(h) for h in restored.get("day_plan_hours") or []],
+            day_plan_reserve=restored.get("day_plan_reserve"),
         )
 
 
@@ -859,6 +885,28 @@ def calculate_battery_data(
     if vinter:
         min_soc = max(empty_soc, min(min_soc, soc))
 
+    # ---- Daytime hours the night charge covered (issue #59) -------------
+    day_plan_date = previous.day_plan_date
+    day_plan_hours = list(previous.day_plan_hours)
+    day_plan_reserve = previous.day_plan_reserve
+    if inputs.day_plan_hours is not None and inputs.day_plan_reserve is not None:
+        day_plan_date, day_plan_hours, day_plan_reserve = (
+            today,
+            [int(h) for h in inputs.day_plan_hours],
+            float(inputs.day_plan_reserve),
+        )
+    if day_plan_date != today:
+        day_plan_date, day_plan_hours, day_plan_reserve = None, [], None
+    if (
+        day_plan_reserve is not None
+        and hour in day_plan_hours
+        and not manual_charger_active
+        and not charging
+        and not charging_blocked
+    ):
+        min_soc = max(empty_soc, min(day_plan_reserve, soc))
+        target_floor_date, target_floor = None, None
+
     # An active charge_now_* command counts as forced grid charging too,
     # even when min_soc > soc isn't itself true (most commonly while
     # grid_charge_planned_today already held min_soc at soc above).
@@ -916,6 +964,9 @@ def calculate_battery_data(
         charging_previous=charging,
         night_charge_date=night_charge_date,
         car_lock=car_lock,
+        day_plan_date=day_plan_date,
+        day_plan_hours=day_plan_hours,
+        day_plan_reserve=day_plan_reserve,
     )
     return min_soc_rounded, ledger, forced_charge, behind_charge_curve
 
@@ -1236,6 +1287,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             ],
             battery_min_soc=battery_min_soc,
             car_charging_lock=self._update_car_charging_lock(),
+            **self._read_day_plan(),
         )
 
         min_soc, ledger, forced_charge, behind_charge_curve = calculate_battery_data(
@@ -1275,6 +1327,25 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         }
         self._attr_available = True
         self.async_write_ha_state()
+
+    def _read_day_plan(self) -> dict[str, Any]:
+        """Issue #59: day_plan_hours/day_plan_reserve for BatteryInputs,
+        from Battery charge status while it is "yes_today"."""
+        entity_id = pv_properties.battery_charge_status_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state != _CHARGE_STATUS_YES_TODAY:
+            return {}
+        hours = state.attributes.get("day_hours")
+        reserve = state.attributes.get("evening_reserve_soc")
+        if not isinstance(hours, list):
+            return {}
+        try:
+            return {
+                "day_plan_hours": [int(hour) for hour in hours],
+                "day_plan_reserve": None if reserve is None else float(reserve),
+            }
+        except (TypeError, ValueError):
+            return {}
 
     def _retry_soon(self, startup_only: bool = False) -> None:
         """Run again in _NOT_READY_RETRY_SECONDS instead of waiting for the

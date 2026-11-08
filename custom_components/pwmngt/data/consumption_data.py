@@ -52,6 +52,9 @@ Deliberate differences from Node-RED (Claus, 2026-11-03):
   battery_charge_decision.py) spread the night evenly over 21-06, which
   underestimated 21-24 by ~30 % where the house uses more before
   midnight than after (Kasper: ~0.64 vs ~0.35 kWh an hour).
+- day_hourly_average_adjusted (issue #59, Claus 2026-11-09): each hour
+  06-17 on its own, without the chargers -- the night charge can then
+  cover the expensive daytime hours too (data/battery_charge_decision.py).
 """
 
 import asyncio
@@ -121,6 +124,10 @@ PwM_CONSUMPTION_DATA_ATTRIBUTES: list[str] = [
     # data/battery_charge_decision.py for tomorrow's hours 21-23.
     "late_evening_average",
     "late_evening_average_adjusted",
+    # Issue #59: a list, one average per hour CONSUMPTION_DAY_HOURS (06,
+    # 07 ... 16), without the chargers -- read by
+    # data/battery_charge_decision.py for tomorrow's daytime hours.
+    "day_hourly_average_adjusted",
     # 00-24. Old: sensor.dogn_snit.
     "full_day_average",
     # 08-16 -- not implemented yet (no Pool segment).
@@ -151,7 +158,11 @@ PwM_CONSUMPTION_DATA_SENSORS: list[SensorEntityDescription] = [
 # The local clock hours each day's values are read at -- see
 # _derive_daily_values() for how they combine. 24 means the following
 # midnight.
-_BOUNDARY_HOURS: tuple[int, ...] = (0, 6, 7, 8, 9, 16, 17, 21, 24)
+_BOUNDARY_HOURS: tuple[int, ...] = (0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 21, 24)
+
+# Issue #59: the hours day_hourly_average_adjusted has one value for (the
+# hour starting at each).
+CONSUMPTION_DAY_HOURS = range(6, 17)
 
 # How many calendar days back the histories reach, no matter what
 # select.pwm_pv_history_period_days is set to -- same "30" Node-RED capped
@@ -164,8 +175,8 @@ _MAX_PLAUSIBLE_FULL_DAY_KWH = 250
 
 # Part of the source signature, so a change in what each history entry
 # holds rebuilds the histories from Recorder once. v2: nighttime_adjusted,
-# v3: late_evening (issue #58).
-_HISTORY_FORMAT = "v3"
+# v3: late_evening (issue #58), v4: the day's single hours (issue #59).
+_HISTORY_FORMAT = "v4"
 
 # Trimmed averages (see _average()): drop this share of the days at each
 # end -- one day at 7 days of history, two at 14, three at 21-30 -- but
@@ -368,6 +379,10 @@ def calculate_daytime_averages(
         "late_evening_average_adjusted": _average(
             history, "late_evening_adjusted", period_days, newest
         ),
+        "day_hourly_average_adjusted": [
+            _average(history, f"hour_{hour}_adjusted", period_days, newest)
+            for hour in CONSUMPTION_DAY_HOURS
+        ],
         "car_charger_consumption": _average(
             history, "car_charger", period_days, newest, trim=False
         ),
@@ -466,6 +481,16 @@ def build_day(
         if car_charger_late_evening is not None
         else None
     )
+    # Issue #59: each daytime hour without the chargers.
+    for hour in CONSUMPTION_DAY_HOURS:
+        chargers = _charger_consumption(
+            series, charger_entity_ids, timestamps, ((hour, hour + 1),)
+        )
+        values[f"hour_{hour}_adjusted"] = (
+            round(max(values_at[hour + 1] - values_at[hour] - chargers, 0.0), 2)
+            if chargers is not None
+            else None
+        )
     values["date"] = day.isoformat()
     return values
 
@@ -726,6 +751,10 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
                 "nighttime_adjusted": values["nighttime_adjusted"],
                 "late_evening": values["late_evening"],
                 "late_evening_adjusted": values["late_evening_adjusted"],
+                **{
+                    f"hour_{hour}_adjusted": values[f"hour_{hour}_adjusted"]
+                    for hour in CONSUMPTION_DAY_HOURS
+                },
                 "car_charger": values["car_charger"],
             }
         )
