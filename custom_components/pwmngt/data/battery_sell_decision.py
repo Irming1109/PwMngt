@@ -152,6 +152,7 @@ _DEFAULT_TARGET_END_TIME = "16:45"      # Node-RED: batteri_target_sluttid || "1
 
 _COMMAND_INTERNAL = "internal"           # Old: "Intern".
 _COMMAND_BLOCK_CHARGING = "block_charging"  # Old: "Bloker ladning".
+_DISCHARGE_COMMAND_PREFIX = "discharge_now_"  # Old: "Aflad nu - X% effekt".
 # battery_command options meaning tonight's grid charge
 # (data/battery_charge_level.py) is actively running -- Node-RED's own
 # top guard returns null outright while any of these is set.
@@ -288,6 +289,12 @@ def calculate_battery_sell_decision(inputs: BatterySellInputs) -> str | None:
 
     if inputs.battery_command in _ACTIVE_CHARGE_COMMANDS:
         # Node-RED's own top guard.
+        return None
+    if (inputs.battery_command or "").startswith(_DISCHARGE_COMMAND_PREFIX):
+        # DIFF (issue #64, Claus 2026-11-09): a sale from the battery
+        # (data/battery_data.py) -- or a manual "discharge now" -- outranks
+        # block_charging; both mean "don't charge the battery", and the
+        # sale earns the most.
         return None
 
     slut_hour = 14 if inputs.battery_target_end_time == "13:30" else 17

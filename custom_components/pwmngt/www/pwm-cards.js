@@ -698,6 +698,12 @@ class PwMPvCard extends PwMngtBaseCard {
         icon: "mdi:currency-usd",
         type: "select",
       },
+      {
+        device: "pv", key: "pv_battery_sell_price_difference",
+        label: "PV battery sell price difference",
+        icon: "mdi:cash-plus",
+        type: "select",
+      },
     ];
     super.setConfig(config || {});
   }
@@ -753,6 +759,10 @@ const PWM_BATTERY_TEXTS = {
     dayPlanToday: (hours, reserve) =>
       `Today the battery covers the house at ${hours} - down to ${reserve}%, the rest is kept for the evening`,
     dayPlanFromToday: "Worked out from today's prices and what the battery's grid power cost",
+    saleTonight: (kwh, hours, profit) =>
+      `Plus about ${kwh} for selling at ${hours} - expected profit about ${profit} kr`,
+    saleToday: (hours) => `Today the battery sells at ${hours}`,
+    sellingNow: "The battery is selling to the grid now",
     pvFills: (kwh, target) => `Tomorrow's PV (${kwh} surplus expected) fills it up towards the target of ${target}%`,
     surplusCoversWorth: (hours, kwh) =>
       `Tomorrow's PV surplus (${kwh}, cautious estimate) covers ${hours}, the hours tonight's charge would cover`,
@@ -810,6 +820,10 @@ const PWM_BATTERY_TEXTS = {
     dayPlanToday: (hours, reserve) =>
       `I dag dækker batteriet huset kl. ${hours} - ned til ${reserve} %, resten gemmes til aftenen`,
     dayPlanFromToday: "Beregnet ud fra dagens priser og hvad netstrømmen i batteriet kostede",
+    saleTonight: (kwh, hours, profit) =>
+      `Plus ca. ${kwh} til salg kl. ${hours} - forventet gevinst ca. ${profit} kr`,
+    saleToday: (hours) => `I dag sælger batteriet kl. ${hours}`,
+    sellingNow: "Batteriet sælger til nettet nu",
     pvFills: (kwh, target) => `Solen i morgen (forventet ${kwh} overskud) fylder op mod target ${target} %`,
     surplusCoversWorth: (hours, kwh) =>
       `Forventet sol-overskud i morgen (${kwh}, forsigtigt skøn) dækker kl. ${hours}, de timer natladningen skulle dække`,
@@ -1036,7 +1050,13 @@ class PwMBatteryCard extends HTMLElement {
     const data = this._state("data");
     parts.push(
       data
-        ? JSON.stringify([data.attributes.day_plan_hours, data.attributes.day_plan_reserve, data.attributes.day_plan_source])
+        ? JSON.stringify([
+            data.attributes.day_plan_hours,
+            data.attributes.day_plan_reserve,
+            data.attributes.day_plan_source,
+            data.attributes.sale_hours,
+            data.attributes.selling,
+          ])
         : "-"
     );
     parts.push(this._texts().title, pwmBatteryRecheckHours(), new Date().getHours());
@@ -1168,6 +1188,13 @@ class PwMBatteryCard extends HTMLElement {
       content.appendChild(this._banner("ok", t.dayPlanToday(pwmHourRanges(dayPlan.hours), dayPlan.reserve)));
       if (dayPlan.source === "today") content.appendChild(this._note(t.dayPlanFromToday));
     }
+    // Issue #64: selling now, or today's sale hours still ahead.
+    const sale = this._saleToday();
+    if (isAuto && sale) {
+      content.appendChild(
+        this._banner("ok", sale.selling ? t.sellingNow : t.saleToday(pwmHourRanges(sale.hours)))
+      );
+    }
 
     // Manual control.
     const title = document.createElement("div");
@@ -1296,6 +1323,7 @@ class PwMBatteryCard extends HTMLElement {
         if (surplus !== null && surplus >= 0.05 && target !== null && chargeTarget < target) {
           lines.push(t.pvFills(kwh, Math.round(target)));
         }
+        this._pushSaleLine(t, status, lines);
         return lines;
       }
       if (target !== null && chargeTarget < target && kwh !== null) {
@@ -1306,6 +1334,7 @@ class PwMBatteryCard extends HTMLElement {
         else if (surplus < 0.05) lines.push(t.fullChargeNoSurplus(pct));
         else lines.push(t.fullCharge(pct, kwh));
       }
+      this._pushSaleLine(t, status, lines);
       return lines;
     }
     if (status.state === "no_surplus" && kwh !== null) {
@@ -1313,6 +1342,30 @@ class PwMBatteryCard extends HTMLElement {
       if (target !== null) return [t.surplusCovers(Math.round(target), kwh)];
     }
     return [];
+  }
+
+  /** Issue #64: the night charge's sale hours, kWh and expected profit. */
+  _pushSaleLine(t, status, lines) {
+    const hours = Array.isArray(status.attributes.sale_hours) ? status.attributes.sale_hours : [];
+    const kwh = Number(status.attributes.sale_kwh);
+    const profit = Number(status.attributes.sale_profit);
+    if (!hours.length || !Number.isFinite(kwh) || !Number.isFinite(profit)) return;
+    lines.push(t.saleTonight(t.kwh(kwh), pwmHourRanges(hours), Math.round(profit)));
+  }
+
+  /**
+   * Issue #64: battery_data's sales today -- {hours (the ones still ahead),
+   * selling} -- or null.
+   */
+  _saleToday() {
+    const data = this._state("data");
+    if (!data) return null;
+    const hours = Array.isArray(data.attributes.sale_hours) ? data.attributes.sale_hours : [];
+    const now = new Date().getHours();
+    const ahead = hours.map(Number).filter((hour) => hour >= now);
+    const selling = data.attributes.selling === true;
+    if (!ahead.length && !selling) return null;
+    return { hours: ahead, selling };
   }
 
   /**

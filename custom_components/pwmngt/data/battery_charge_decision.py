@@ -137,6 +137,18 @@ Deliberate differences from Node-RED (each marked "DIFF" below):
   before solar_data had computed anything read target as 0 and
   incorrectly locked in "no_charge_needed" (0% of any battery needs 0
   charge time).
+- NEW (issue #64, Claus 2026-11-09, no Node-RED counterpart): with
+  select.<pv>_pv_battery_sell_price_difference above 0, tonight's charge
+  also fills the room left above the house's own plan (up to 95 %) for
+  selling in tomorrow's dear hours: an hour 06-22 counts when its sale
+  price (Strømligning's spot price without VAT) minus the charge price
+  (the purchase price of the extra charge hours, incl. everything, plus
+  _SALE_CHARGE_LOSS) is at least that threshold. The best hours first, each
+  at most the battery's max power for an hour minus what the house takes
+  of it, and only after the last charge hour. Tomorrow's PV is not
+  counted on -- it comes on top. sale_hours/sale_floors (the SoC each sale
+  hour stops at -- what the house still needs after it) are carried into
+  "yes_today" for data/battery_data.py, which runs the sale.
 Node-RED inputs not carried over because PwMngt doesn't have an
 abstracted equivalent yet, or because they're honestly unused:
 (none -- every input this function's result actually depends on now has
@@ -226,6 +238,13 @@ PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES: list[str] = [
     "day_hours",
     "day_kwh",
     "evening_reserve_soc",
+    # Issue #64: tomorrow's hours the battery sells in, the SoC (%) each of
+    # them stops at (same order), the energy (kWh) expected sold and the
+    # expected profit (kr). Carried into "yes_today" (data/battery_data.py).
+    "sale_hours",
+    "sale_floors",
+    "sale_kwh",
+    "sale_profit",
 ]
 
 PwM_BATTERY_CHARGE_DECISION_SENSORS: list[SensorEntityDescription] = [
@@ -292,6 +311,13 @@ _STROMLIGNING_TOMORROW_TRANSLATION_KEY = "tomorrow_available_vat"
 _DAY_HOURS = range(6, 17)
 _DAY_CHARGE_CEILING = 95
 
+# Issue #64: the hours the battery may sell in (not 23, so a sale never
+# runs over midnight into the next day's books), the charge loss the sale
+# must pay for, and Strømligning's tomorrow spot price without VAT.
+_SALE_HOURS = range(6, 23)
+_SALE_CHARGE_LOSS = 0.10
+_STROMLIGNING_TOMORROW_SPOT_EX_VAT_TRANSLATION_KEY = "tomorrow_spotprice_ex_vat"
+
 # Triggers.
 _EVENING_WINDOW_START = (18, 0)
 _EVENING_WINDOW_END = (23, 30)
@@ -323,6 +349,10 @@ _CARRIED_TO_TODAY = frozenset(
         "day_hours",
         "day_kwh",
         "evening_reserve_soc",
+        "sale_hours",
+        "sale_floors",
+        "sale_kwh",
+        "sale_profit",
     }
 )
 _HOURLY_RECHECK_WINDOW_START = (14, 0)
@@ -366,7 +396,9 @@ def signal_battery_charge_target_reached(entry_id: str) -> str:
     return f"{DOMAIN}_{entry_id}_battery_charge_target_reached"
 
 
-def _auto_detect_tomorrow_prices_entity_id(hass: HomeAssistant) -> str | None:
+def _auto_detect_tomorrow_prices_entity_id(
+    hass: HomeAssistant, translation_key: str = _STROMLIGNING_TOMORROW_TRANSLATION_KEY
+) -> str | None:
     """Find the single Strømligning entity exposing tomorrow's prices
     (binary_sensor, "prices" attribute when "on"). Only ever
     auto-detected -- see the module docstring. None unless exactly one
@@ -376,7 +408,7 @@ def _auto_detect_tomorrow_prices_entity_id(hass: HomeAssistant) -> str | None:
         entry.entity_id
         for entry in registry.entities.values()
         if entry.platform == DEPENDENCY_STROMLIGNING
-        and entry.translation_key == _STROMLIGNING_TOMORROW_TRANSLATION_KEY
+        and entry.translation_key == translation_key
     ]
     return matches[0] if len(matches) == 1 else None
 
@@ -425,6 +457,10 @@ class BatteryChargeInputs:
     day_hourly_consumption: list[float | None] | None = None
     pv_hourly_tomorrow: list[float | None] | None = None
     pv_forecast_17_21_tomorrow: float | None = None
+    # Issue #64: tomorrow's sale prices (spot without VAT, kr/kWh, hour
+    # 0-23; None = unknown) and the sale threshold (kr/kWh, 0 = off).
+    sale_prices_tomorrow: list[float] | None = None
+    sale_price_difference: float = 0.0
 
 
 def _average(values: list[float]) -> float:
@@ -556,6 +592,83 @@ def worth_day_hours(
     return hours, total
 
 
+def day_hour_needs(
+    consumption: list[float | None] | None, pv: list[float | None] | None
+) -> dict[int, float]:
+    """Issue #64: the energy (kWh) the battery is expected to cover in each
+    _DAY_HOURS hour tomorrow -- the house's average minus the normal PV
+    forecast, as worth_day_hours(). Empty while the consumption is unknown."""
+    if not consumption or len(consumption) != len(_DAY_HOURS):
+        return {}
+    pv_known = bool(pv) and len(pv) == len(_DAY_HOURS)
+    needs: dict[int, float] = {}
+    for index, hour in enumerate(_DAY_HOURS):
+        used = consumption[index]
+        if used is None:
+            continue
+        sun = (pv[index] or 0.0) if pv_known else 0.0
+        needs[hour] = max(used - sun, 0.0)
+    return needs
+
+
+def plan_sale(
+    sale_prices: list[float],
+    charge_price: float,
+    threshold: float,
+    max_power_kw: float,
+    house_kwh: dict[int, float],
+    room_kwh: float,
+    candidates: list[int],
+) -> tuple[list[int], float, float, dict[int, float]]:
+    """Issue #64: (the sale hours, kWh sold in all, expected profit in kr,
+    kWh sold per hour). An hour counts when its sale price minus what a
+    sold kWh cost (charge_price plus the charge loss) is at least
+    threshold; the best first, each at most max_power_kw for an hour minus
+    the house's own use in it, until room_kwh is used."""
+    cost = charge_price / (1 - _SALE_CHARGE_LOSS)
+    margins = {hour: sale_prices[hour] - cost for hour in candidates}
+    left = room_kwh
+    sold: dict[int, float] = {}
+    for hour in sorted(margins, key=lambda h: (-margins[h], h)):
+        if margins[hour] < threshold or left <= 0.05:
+            break
+        energy = min(max(max_power_kw - house_kwh.get(hour, 0.0), 0.0), left)
+        if energy <= 0:
+            continue
+        sold[hour] = energy
+        left -= energy
+    hours = sorted(sold)
+    total = sum(sold.values())
+    profit = sum(energy * margins[hour] for hour, energy in sold.items())
+    return hours, total, profit, sold
+
+
+def sale_floors(
+    hours: list[int],
+    house_kwh: dict[int, float],
+    covered: list[int],
+    battery_min_soc: float,
+    battery_size: float,
+    sold: dict[int, float] | None = None,
+) -> list[int]:
+    """Issue #64: the SoC (%) each sale hour stops at -- what the house
+    still needs from the battery in the planned hours after it (the
+    covered day and evening hours) and what the later sale hours sell, on
+    top of the minimum SoC."""
+    floors = []
+    sold = sold or {}
+    for hour in hours:
+        later = sum(house_kwh.get(h, 0.0) for h in covered if h > hour)
+        later += sum(energy for h, energy in sold.items() if h > hour)
+        floors.append(
+            min(
+                _DAY_CHARGE_CEILING,
+                int(battery_min_soc + math.ceil(later * TARGET_MARGIN / battery_size * 100)),
+            )
+        )
+    return floors
+
+
 def calculate_battery_charge_decision(
     inputs: BatteryChargeInputs,
 ) -> tuple[str, dict[str, Any]]:
@@ -646,6 +759,69 @@ def calculate_battery_charge_decision(
         worth_target, inputs.battery_size, expected_surplus, inputs.battery_min_soc
     )
 
+    # Issue #64: the room left above the house's own plan, filled for
+    # selling -- see the module docstring.
+    sale_hours: list[int] = []
+    sale_kwh = 0.0
+    sale_profit = 0.0
+    floors: list[int] = []
+    if (
+        inputs.sale_price_difference > 0
+        and inputs.sale_prices_tomorrow
+        and len(inputs.sale_prices_tomorrow) == 24
+        and inputs.battery_size > 0
+    ):
+        house_target = charge_target
+        house_kwh = dict(day_hour_needs(inputs.day_hourly_consumption, inputs.pv_hourly_tomorrow))
+        house_kwh.update(evening_hourly)
+        base_hours = max(hours_needed(house_target), 0)
+        # The extra charge hours after the house's own, cheapest first --
+        # each charges what hours_needed() counts on per hour.
+        extra = [price for _hour, price in prices_sorted_day[base_hours:]]
+        kwh_per_charge_hour = battery_max_charge / 1000 / _CHARGETIME_SAFETY_MARGIN / TARGET_MARGIN
+        room_kwh = max(_DAY_CHARGE_CEILING - house_target, 0.0) / 100 * inputs.battery_size / TARGET_MARGIN
+        max_power_kw = (
+            inputs.battery_max_charge_raw
+            if inputs.battery_max_charge_raw is not None
+            else _BATTERY_MAX_CHARGE_FALLBACK
+        ) / 1000
+        covered_later = sorted(set(day_hours) | set(covered_hours))
+        candidates = list(_SALE_HOURS)
+
+        def best_sale(hours_allowed: list[int]) -> tuple[list[int], float, float, dict[int, float]]:
+            """The most profitable number of extra charge hours: each one
+            more adds energy, but at its own (higher) price."""
+            best: tuple[list[int], float, float, dict[int, float]] = ([], 0.0, 0.0, {})
+            for count in range(1, len(extra) + 1):
+                result = plan_sale(
+                    inputs.sale_prices_tomorrow,
+                    _average(extra[:count]),
+                    inputs.sale_price_difference,
+                    max_power_kw,
+                    house_kwh,
+                    min(room_kwh, count * kwh_per_charge_hour),
+                    hours_allowed,
+                )
+                if result[2] > best[2]:
+                    best = result
+            return best
+
+        for _attempt in range(3):
+            sale_hours, sale_kwh, sale_profit, sold = best_sale(candidates)
+            sale_pct = math.ceil(sale_kwh * TARGET_MARGIN / inputs.battery_size * 100) if sale_kwh > 0 else 0
+            charge_target = min(_DAY_CHARGE_CEILING, house_target + sale_pct)
+            charge_hours = [hour for hour, _price in prices_sorted_day[: max(hours_needed(charge_target), 1)]]
+            last_charge_hour = max(charge_hours)
+            if not sale_hours or min(sale_hours) > last_charge_hour:
+                break
+            # The battery must be charged before it can sell.
+            candidates = [hour for hour in candidates if hour > last_charge_hour]
+            sale_hours, sale_kwh, sale_profit, sold = [], 0.0, 0.0, {}
+            charge_target = house_target
+        floors = sale_floors(
+            sale_hours, house_kwh, covered_later, inputs.battery_min_soc, inputs.battery_size, sold
+        )
+
     cheapest_hours = prices_sorted_day[: max(hours_needed(charge_target), 1)]
     most_expensive_hours = prices_sorted_evening[:_NUM_MOST_EXPENSIVE_HOURS]
 
@@ -669,6 +845,10 @@ def calculate_battery_charge_decision(
         "day_hours": day_hours,
         "day_kwh": round(day_kwh, 2),
         "evening_reserve_soc": evening_reserve if day_hours else None,
+        "sale_hours": sale_hours,
+        "sale_floors": floors,
+        "sale_kwh": round(sale_kwh, 2),
+        "sale_profit": round(sale_profit, 2),
     }
     for hour in range(24):
         attributes[f"hour_{hour}"] = hour in cheapest_hour_set
@@ -677,11 +857,11 @@ def calculate_battery_charge_decision(
         status = "no_price"
     elif inputs.previous_status == _STATUS_DEFERRED:
         status = _STATUS_DEFERRED
-    elif not worth_hours and not day_hours:
+    elif not worth_hours and not day_hours and not sale_hours:
         # Issue #50: no evening hour pays for the charge -- issue #59: and
-        # no daytime hour either.
+        # no daytime hour either -- issue #64: and no sale.
         status = "no_price"
-    elif expected_surplus is not None and expected_surplus >= min(
+    elif not sale_hours and expected_surplus is not None and expected_surplus >= min(
         battery_kwh, (covered_kwh + day_kwh) * TARGET_MARGIN
     ):
         # Issue #43: the cautious surplus (Node-RED: the normal forecast)
@@ -1198,6 +1378,10 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
                 pv_properties.battery_price_difference_entity_id, _PRICE_DIFFERENCE_FALLBACK
             ),
             previous_status=self._attr_native_value or "not_calculated",
+            sale_prices_tomorrow=self._read_sale_prices_tomorrow(),
+            sale_price_difference=self._read_float_pv(
+                pv_properties.battery_sell_price_difference_entity_id, 0.0
+            ) or 0.0,
         )
 
         status, attributes = calculate_battery_charge_decision(inputs)
@@ -1246,6 +1430,27 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             return None if value is None else float(value)
         except (TypeError, ValueError):
             return None
+
+    def _read_sale_prices_tomorrow(self) -> list[float] | None:
+        """Issue #64: Strømligning's spot prices without VAT for tomorrow
+        (kr/kWh, hour 0-23), or None. Only while the sensor is "on" -- an
+        "off" one carries forecast prices (Strømligning, 2026-11)."""
+        entity_id = _auto_detect_tomorrow_prices_entity_id(
+            self.hass, _STROMLIGNING_TOMORROW_SPOT_EX_VAT_TRANSLATION_KEY
+        )
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state != "on":
+            return None
+        raw = state.attributes.get("prices")
+        if not isinstance(raw, list) or len(raw) < 23:
+            return None
+        try:
+            prices = [round(float(item["price"]), 2) for item in raw[:24]]
+        except (TypeError, KeyError, ValueError):
+            return None
+        if len(prices) == 23:
+            prices.append(prices[22])  # DST, as the purchase prices.
+        return prices
 
     def _read_consumption_daytime_adjusted(self) -> float | None:
         return self._read_consumption("daytime_average_adjusted")

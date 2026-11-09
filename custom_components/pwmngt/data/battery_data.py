@@ -121,6 +121,16 @@ Deliberate differences from Node-RED:
   as PV, so that grid energy was used first as free PV and was missing
   from the battery's books.
 
+- NEW (issue #64, Claus 2026-11-09): the battery sells in the night
+  charge's sale hours (data/battery_charge_decision.py: sale_hours,
+  sale_floors, remembered for the day like the day plan): min_soc is the
+  hour's floor (never above the SoC, held exactly on a Kostal --
+  kostal_lock()), and battery_command is set to discharge_now_100 while
+  the SoC is above it -- back to "internal" when the floor or the end of
+  the hour is reached. Only a discharge_now_100 this module set is taken
+  back. Not while a car charges, a grid charge runs or the battery mode is
+  manual. The inverter translators (Node-RED) carry it out.
+
 Triggers (same as Node-RED, see PwMngtBatteryDataSensor): Battery SoC
 changes, Battery nightly target changes (only 00:01-16:59), target end
 time / battery command / either charger's state changes, every 15 min
@@ -146,6 +156,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import event, restore_state
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 
 from ..const import (
@@ -161,6 +172,7 @@ from ..const import (
 from ..devices import CHARGERS, pv_device_info
 from ..helpers.state_helper import read_float_state
 from ..properties import charger_properties, hub_properties, pv_properties
+from ..select import signal_set_battery_command
 from .battery_charge_decision import evening_hourly_need, worth_charging
 from .solar_data import TARGET_MARGIN
 
@@ -267,6 +279,9 @@ _ACTIVE_CHARGE_COMMANDS = frozenset(
 # Battery charge status (sensor.py, "battery_charge_status") meaning a grid
 # charge is planned later today. Old: "Ja (i dag)".
 _CHARGE_STATUS_YES_TODAY = "yes_today"
+# Issue #64: the command the battery sells with, and the one it goes back to.
+COMMAND_SELL = "discharge_now_100"
+_COMMAND_INTERNAL = "internal"
 # Issue #62: the share of the battery's charge power the house must buy
 # from the grid for a rise to count as grid -- with PV short, the grid
 # feeds the charge; with a PV surplus the house buys nothing.
@@ -366,6 +381,11 @@ class BatteryInputs:
     # Issue #62: the house buys from the grid what the battery charges
     # right now (grid_feeds_battery()).
     grid_feeds_battery: bool = False
+    # Issue #64: today's sale hours and the SoC (%) each stops at (same
+    # order) -- from Battery charge status while it is "yes_today". None =
+    # not known now.
+    sale_hours: list[int] | None = None
+    sale_floors: list[float] | None = None
     # The SoC the battery is discharged to (pv_properties.battery_min_soc(),
     # Node-RED: a fixed 5) -- the lowest min_soc, the charge curve's 09:00
     # start, and "battery empty" for the ledger.
@@ -418,6 +438,14 @@ class BatteryLedger:
     day_plan_hours: list[int] = field(default_factory=list)
     day_plan_reserve: float | None = None
     day_plan_from_charge: bool = False
+    # Issue #64: today's sale plan, remembered for the day, whether the
+    # battery sells right now (this module set discharge_now_100), and the
+    # floor it sells down to (held exactly on a Kostal, kostal_lock()).
+    sale_date: str | None = None
+    sale_hours: list[int] = field(default_factory=list)
+    sale_floors: list[float] = field(default_factory=list)
+    selling: bool = False
+    sale_lock: float | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -444,6 +472,11 @@ class BatteryLedger:
             "day_plan_hours": list(self.day_plan_hours),
             "day_plan_reserve": self.day_plan_reserve,
             "day_plan_from_charge": self.day_plan_from_charge,
+            "sale_date": self.sale_date,
+            "sale_hours": list(self.sale_hours),
+            "sale_floors": list(self.sale_floors),
+            "selling": self.selling,
+            "sale_lock": self.sale_lock,
         }
 
     @classmethod
@@ -472,6 +505,11 @@ class BatteryLedger:
             day_plan_hours=[int(h) for h in restored.get("day_plan_hours") or []],
             day_plan_reserve=restored.get("day_plan_reserve"),
             day_plan_from_charge=bool(restored.get("day_plan_from_charge")),
+            sale_date=restored.get("sale_date"),
+            sale_hours=[int(h) for h in restored.get("sale_hours") or []],
+            sale_floors=[float(v) for v in restored.get("sale_floors") or []],
+            selling=bool(restored.get("selling")),
+            sale_lock=restored.get("sale_lock"),
         )
 
 
@@ -719,7 +757,10 @@ def _float_or_none(value: Any) -> float | None:
 
 def kostal_lock(ledger: "BatteryLedger") -> float | None:
     """The level kostal_min_soc_step() holds exactly: the higher of the
-    charge lock (#45) and the car lock (#33), or None."""
+    charge lock (#45) and the car lock (#33), or None -- issue #64: while
+    the battery sells, its floor alone."""
+    if ledger.selling and ledger.sale_lock is not None:
+        return ledger.sale_lock
     locks = [v for v in (ledger.charge_lock, ledger.car_lock) if v is not None]
     return max(locks) if locks else None
 
@@ -1013,6 +1054,29 @@ def calculate_battery_data(
         min_soc = max(empty_soc, min(day_plan_reserve, soc))
         target_floor_date, target_floor = None, None
 
+    # ---- Sale hours (issue #64) ------------------------------------------
+    sale_date = previous.sale_date
+    sale_hours = list(previous.sale_hours)
+    sale_floors = list(previous.sale_floors)
+    if sale_date != today:
+        sale_date, sale_hours, sale_floors = None, [], []
+    if (
+        inputs.sale_hours is not None
+        and inputs.sale_floors is not None
+        and len(inputs.sale_hours) == len(inputs.sale_floors)
+    ):
+        sale_date = today
+        sale_hours = [int(h) for h in inputs.sale_hours]
+        sale_floors = [float(v) for v in inputs.sale_floors]
+    selling = False
+    sale_lock = None
+    if hour in sale_hours and not manual_charger_active and not charging:
+        floor = max(empty_soc, sale_floors[sale_hours.index(hour)])
+        min_soc = max(empty_soc, min(floor, soc))
+        target_floor_date, target_floor = None, None
+        selling = soc > floor
+        sale_lock = floor if selling else None
+
     # An active charge_now_* command counts as forced grid charging too,
     # even when min_soc > soc isn't itself true (most commonly while
     # grid_charge_planned_today already held min_soc at soc above).
@@ -1074,6 +1138,11 @@ def calculate_battery_data(
         day_plan_hours=day_plan_hours,
         day_plan_reserve=day_plan_reserve,
         day_plan_from_charge=day_plan_from_charge,
+        sale_date=sale_date,
+        sale_hours=sale_hours,
+        sale_floors=sale_floors,
+        selling=selling,
+        sale_lock=sale_lock,
     )
     return min_soc_rounded, ledger, forced_charge, behind_charge_curve
 
@@ -1409,11 +1478,15 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
                 self._read_power(ENTITY_KEY_BATTERY_POWER),
             ),
             **self._read_day_plan(),
+            **self._read_sale_plan(),
         )
 
+        was_selling = self._ledger.selling
         min_soc, ledger, forced_charge, behind_charge_curve = calculate_battery_data(
             inputs, self._ledger
         )
+        if pv_properties.is_battery_mode_manual(self.hass, self._entry):
+            ledger.selling = False
         self._ledger = ledger
 
         # Issue #1: a Kostal gets the minimum SoC in steps of 10 -- see
@@ -1456,9 +1529,49 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
                 if ledger.day_plan_date is None
                 else "charge" if ledger.day_plan_from_charge else "today"
             ),
+            # Issue #64: today's sale hours, the SoC each stops at, and
+            # whether the battery sells right now.
+            "sale_hours": list(ledger.sale_hours),
+            "sale_floors": list(ledger.sale_floors),
+            "selling": ledger.selling,
         }
         self._attr_available = True
         self.async_write_ha_state()
+
+        # Last: the select's state change re-triggers this sensor.
+        self._apply_sale_command(inputs.battery_command, was_selling, ledger.selling)
+
+    def _apply_sale_command(self, command: str, was_selling: bool, selling: bool) -> None:
+        """Issue #64: discharge_now_100 while the battery sells, "internal"
+        again once it stops -- only a discharge_now_100 set here is taken
+        back, and a grid charge or a manual command is never overruled."""
+        if selling and command != COMMAND_SELL and command not in _ACTIVE_CHARGE_COMMANDS:
+            option = COMMAND_SELL
+        elif not selling and was_selling and command == COMMAND_SELL:
+            option = _COMMAND_INTERNAL
+        else:
+            return
+        LOGGER.info("PwMngt: battery sale -> battery_command %s", option)
+        async_dispatcher_send(self.hass, signal_set_battery_command(self._entry.entry_id), option)
+
+    def _read_sale_plan(self) -> dict[str, Any]:
+        """Issue #64: sale_hours/sale_floors for BatteryInputs, from Battery
+        charge status while it is "yes_today"."""
+        entity_id = pv_properties.battery_charge_status_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state != _CHARGE_STATUS_YES_TODAY:
+            return {}
+        hours = state.attributes.get("sale_hours")
+        floors = state.attributes.get("sale_floors")
+        if not isinstance(hours, list) or not isinstance(floors, list):
+            return {}
+        try:
+            return {
+                "sale_hours": [int(hour) for hour in hours],
+                "sale_floors": [float(floor) for floor in floors],
+            }
+        except (TypeError, ValueError):
+            return {}
 
     def _read_day_plan(self) -> dict[str, Any]:
         """Issue #59: day_plan_hours/day_plan_reserve for BatteryInputs,

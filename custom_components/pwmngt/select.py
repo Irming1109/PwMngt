@@ -321,6 +321,20 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
                  "1.80", "1.90", "2.00"],
         default_option="0.30",
     ),
+    # New (issue #64, Claus 2026-11-09) -- no Node-RED counterpart: how much
+    # (kr/kWh) an hour's sale price (spot without VAT) must lie above
+    # tonight's charge price (incl. everything and the charge loss) before
+    # the night charge also charges for selling in it. "0.00" = off. See
+    # data/battery_charge_decision.py.
+    PwMngtSelectEntityDescription(
+        key="pv_battery_sell_price_difference",
+        name="PV battery sell price difference",
+        icon="mdi:cash-plus",
+        entity_category=EntityCategory.CONFIG,
+        options=["0.00", "0.25", "0.50", "0.75", "1.00", "1.25", "1.50", "1.75",
+                 "2.00", "2.50", "3.00"],
+        default_option="0.00",
+    ),
     # New -- no "Old key"/"Old name", this field didn't exist before the
     # Options wizard's own "Inverter" page (config_flow.py's
     # async_step_pv_inverter). Same convenience-mirror pattern as

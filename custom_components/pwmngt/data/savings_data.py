@@ -143,7 +143,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -162,6 +162,7 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     CONF_ENTITY_MAP,
+    DEPENDENCY_STROMLIGNING,
     DOMAIN,
     ENTITY_KEY_BATTERY_DISCHARGE_HOURLY,
     ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY,
@@ -339,6 +340,10 @@ ADJUSTABLE_SAVINGS_TOTALS: dict[str, tuple[str, str]] = {
 }
 
 
+# Issue #64: Strømligning's spot price without VAT (today's "prices").
+_STROMLIGNING_SPOT_EX_VAT_TRANSLATION_KEY = "spotprice_ex_vat"
+
+
 def signal_savings_update(entry_id: str) -> str:
     """Dispatcher signal PwMngtSavingsDataSensor sends after every +75 s
     run -- the two headline sensors listen and update themselves. Payload:
@@ -398,6 +403,10 @@ class BatteryGridBalanceState:
     # stored.
     hour_grid_charge_kwh: float = 0.0
     hour_discharge_from_grid_kwh: float = 0.0
+    # Issue #64: the battery's grid power sold in its sale hours -- kWh
+    # and revenue (kr, spot without VAT), running totals for display.
+    battery_sale_kwh: float = 0.0
+    battery_sale_revenue: float = 0.0
 
 
 @dataclass
@@ -682,32 +691,21 @@ def calculate_battery_grid_balance(
     grid_discharge_pct_cum: float,
     battery_size: float,
     grid_charge_pct_cum: float | None = None,
+    sold_kwh: float = 0.0,
+    sale_price: float | None = None,
 ) -> BatteryGridBalanceState:
     """One run of Node-RED's "Beregn balance på ladning af batteri fra
     grid". Pure -- testable on its own.
 
-    TODO (Claus, 2026-10-16): battery_discharge (ENTITY_KEY_BATTERY_
-    DISCHARGE_HOURLY, "Battery discharge to house") is, as a matter of
-    fact about the underlying sensor, ALL discharge from the battery --
-    there is no way to tell from it alone whether a given kWh went to
-    the house or was sold to the grid. Right now that's harmless, since
-    Claus has no grid-export logic yet, so 100% of discharge really does
-    go to the house. It stops being harmless the day he builds battery-
-    to-grid selling (when the price is good): this function would keep
-    valuing the whole discharge at last_hour_real_price (the PURCHASE
-    price, i.e. "what we avoided buying"), which is wrong for any kWh
-    that was actually sold -- that portion only earned the sale price,
-    not the (usually much higher, tax-inclusive) purchase price, and
-    crediting it as a purchase-avoidance savings would overstate
-    battery_charging_savings.
-
-    Fix, once that feature exists: it's the export logic itself that
-    knows how many kWh it commanded sold this hour (the raw counter
-    can't be fixed to tell the two apart) -- have it report that figure
-    separately, subtract it from battery_discharge here before running
-    today's buy-price valuation on the remainder, and value the
-    subtracted (exported) kWh on its own, at the real sale price, into
-    its own sum -- NOT battery_charging_savings.
+    battery_discharge (ENTITY_KEY_BATTERY_DISCHARGE_HOURLY) is ALL
+    discharge from the battery -- the counter can't tell the house's part
+    from a sale. Issue #64 (Claus 2026-11-09): in a sale hour the caller
+    passes the kWh sold (the discharge beyond the house's consumption)
+    and the hour's sale price (spot without VAT); that part of the grid-
+    share discharge is valued at the sale price instead of the purchase
+    price, still into battery_charging_savings (the night charge it came
+    from is booked there too), and kept out of the house's purchase
+    (hour_discharge_from_grid_kwh is the house's part only).
 
     DIFF (issue #55, Claus 2026-11-08): the hour's grid charge is only
     booked if battery_data saw the SoC rise from the grid in it
@@ -751,8 +749,15 @@ def calculate_battery_grid_balance(
     battery_grid_charge_sum = round(
         state.battery_grid_charge_sum + battery_grid_charge * last_hour_real_price, 2
     )
+    # Issue #64: the part of the grid-share discharge that was sold.
+    sold_from_grid = (
+        min(max(sold_kwh, 0.0), battery_discharge_from_grid) if sale_price is not None else 0.0
+    )
+    house_from_grid = battery_discharge_from_grid - sold_from_grid
     battery_grid_discharge_sum = round(
-        state.battery_grid_discharge_sum + battery_discharge_from_grid * last_hour_real_price,
+        state.battery_grid_discharge_sum
+        + house_from_grid * last_hour_real_price
+        + sold_from_grid * (sale_price or 0.0),
         2,
     )
 
@@ -768,7 +773,11 @@ def calculate_battery_grid_balance(
         grid_discharge_rest_kwh=grid_discharge_rest_kwh,
         grid_charge_pct_prev=grid_charge_pct_cum,
         hour_grid_charge_kwh=battery_grid_charge,
-        hour_discharge_from_grid_kwh=battery_discharge_from_grid,
+        hour_discharge_from_grid_kwh=house_from_grid,
+        battery_sale_kwh=round(state.battery_sale_kwh + sold_from_grid, 3),
+        battery_sale_revenue=round(
+            state.battery_sale_revenue + sold_from_grid * (sale_price or 0.0), 2
+        ),
     )
 
 
@@ -855,6 +864,8 @@ class PwMngtSavingsStoredData(ExtraStoredData):
                 "grid_discharge_pct_prev": battery.grid_discharge_pct_prev,
                 "grid_discharge_rest_kwh": battery.grid_discharge_rest_kwh,
                 "grid_charge_pct_prev": battery.grid_charge_pct_prev,
+                "battery_sale_kwh": battery.battery_sale_kwh,
+                "battery_sale_revenue": battery.battery_sale_revenue,
             },
             "counters": {
                 "household_consumption": vars(counters.household_consumption),
@@ -896,6 +907,8 @@ class PwMngtSavingsStoredData(ExtraStoredData):
                     grid_discharge_pct_prev=battery_raw.get("grid_discharge_pct_prev"),
                     grid_discharge_rest_kwh=battery_raw.get("grid_discharge_rest_kwh", 0.0),
                     grid_charge_pct_prev=battery_raw.get("grid_charge_pct_prev"),
+                    battery_sale_kwh=float(battery_raw.get("battery_sale_kwh") or 0.0),
+                    battery_sale_revenue=float(battery_raw.get("battery_sale_revenue") or 0.0),
                 ),
                 counters=HourlyCountersState(
                     household_consumption=_counter_from_restored(
@@ -1169,6 +1182,7 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
                 grid_discharge_pct_cum,
                 battery_size,
                 self._read_grid_charge_pct_cum(),
+                *self._read_last_hour_sale(battery_discharge, household_consumption),
             )
             battery_hour = (
                 self._ledger.battery.hour_grid_charge_kwh,
@@ -1272,6 +1286,48 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         total = _read_float_attribute(state, "total_afladning_pct_cum") or 0.0
         return grid, total
 
+    def _read_last_hour_sale(
+        self, battery_discharge: float | None, household_consumption: float | None
+    ) -> tuple[float, float | None]:
+        """Issue #64: (kWh sold, sale price) for the hour just ended -- the
+        discharge beyond the house's consumption, when it was one of
+        battery_data's sale hours today -- or (0, None)."""
+        last = dt_util.now() - timedelta(hours=1)
+        if last.date() != dt_util.now().date() or battery_discharge is None or household_consumption is None:
+            return 0.0, None
+        entity_id = pv_properties.battery_data_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        hours = state.attributes.get("sale_hours") if state is not None else None
+        if not isinstance(hours, list) or last.hour not in hours:
+            return 0.0, None
+        price = self._read_spot_price_ex_vat(last)
+        if price is None:
+            return 0.0, None
+        return max(battery_discharge - household_consumption, 0.0), price
+
+    def _read_spot_price_ex_vat(self, when) -> float | None:
+        """Issue #64: Strømligning's spot price without VAT (kr/kWh) for the
+        hour starting at `when`, from its "prices" attribute."""
+        registry = er.async_get(self.hass)
+        matches = [
+            entry.entity_id
+            for entry in registry.entities.values()
+            if entry.platform == DEPENDENCY_STROMLIGNING
+            and entry.translation_key == _STROMLIGNING_SPOT_EX_VAT_TRANSLATION_KEY
+        ]
+        state = self.hass.states.get(matches[0]) if len(matches) == 1 else None
+        prices = state.attributes.get("prices") if state is not None else None
+        if not isinstance(prices, list):
+            return None
+        for item in prices:
+            try:
+                start = dt_util.parse_datetime(str(item["start"]))
+                if start is not None and dt_util.as_local(start).replace(minute=0, second=0, microsecond=0) == when.replace(minute=0, second=0, microsecond=0):
+                    return float(item["price"])
+            except (TypeError, KeyError, ValueError):
+                continue
+        return None
+
     def _read_grid_charge_pct_cum(self) -> float | None:
         """Issue #55: battery_data's grid_opladning_pct_cum -- None while
         it isn't there."""
@@ -1310,6 +1366,9 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
             # that class's own async_added_to_hass()).
             "own_production_savings": purchase.own_production_savings,
             "battery_charging_savings": battery.battery_charging_savings,
+            # Issue #64: the battery's sales, in all.
+            "battery_sale_kwh": round(battery.battery_sale_kwh, 2),
+            "battery_sale_revenue": battery.battery_sale_revenue,
         }
         # Issue #53: the period totals and each period's id.
         totals = period_totals(self._ledger)
