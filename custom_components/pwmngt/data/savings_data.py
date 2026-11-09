@@ -1127,26 +1127,40 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
             self._roll_periods_and_write()
             return
 
+        # Issue #63: each pair of counters moves its baselines only when
+        # the pair is booked. With one of them missing (e.g. unavailable
+        # for a while after a restart), both keep their baselines, so the
+        # next hour books both hours of both -- otherwise the missing
+        # one's partner lost its hour (2026-11-09: an hour's grid purchase
+        # never booked, own production 11 kr too high).
         counters = self._ledger.counters
-        household_consumption, counters.household_consumption = self._read_counter(
+        household_consumption, household_state = self._read_counter(
             self._household_consumption_entity_id, counters.household_consumption
         )
-        grid_import, counters.grid_import = self._read_counter(
+        grid_import, grid_import_state = self._read_counter(
             self._grid_import_entity_id, counters.grid_import
         )
-        battery_grid_charge, counters.battery_grid_charge = self._read_counter(
+        purchase_ready = household_consumption is not None and grid_import is not None
+        if purchase_ready:
+            counters.household_consumption = household_state
+            counters.grid_import = grid_import_state
+        battery_grid_charge, battery_grid_charge_state = self._read_counter(
             self._battery_grid_charge_entity_id, counters.battery_grid_charge
         )
-        battery_discharge, counters.battery_discharge = self._read_counter(
+        battery_discharge, battery_discharge_state = self._read_counter(
             self._battery_discharge_entity_id, counters.battery_discharge
         )
+        battery_ready = battery_grid_charge is not None and battery_discharge is not None
+        if battery_ready:
+            counters.battery_grid_charge = battery_grid_charge_state
+            counters.battery_discharge = battery_discharge_state
         grid_discharge_pct_cum, _total_discharge_pct_cum = self._read_discharge_pct_cum()
         battery_size = self._read_battery_size()
 
         # Issue #56: the battery first -- the purchase run takes the house's
         # grid purchase net of this hour's battery charge and discharge.
         battery_hour = (0.0, 0.0)
-        if battery_grid_charge is not None and battery_discharge is not None:
+        if battery_ready:
             self._ledger.battery = calculate_battery_grid_balance(
                 self._ledger.battery,
                 last_hour_real_price,
@@ -1166,7 +1180,7 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
                 "balance run -- a required hourly reading is missing"
             )
 
-        if household_consumption is not None and grid_import is not None:
+        if purchase_ready:
             tax_full_rate = self._read_tax_full_rate()
             tax_reduced_enabled = hub_properties.electricity_tax_reduced_enabled(
                 self.hass, self._entry
