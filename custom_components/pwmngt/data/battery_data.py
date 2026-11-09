@@ -112,6 +112,14 @@ Deliberate differences from Node-RED:
   worth_charging(), on today's prices and today's PV 17-21). Only while
   the battery holds grid energy; a plan from the night charge always
   wins.
+- DIFF (issue #62, Claus 2026-11-09): outside 23:00-04:59 a SoC rise is
+  also booked as grid while a grid charge runs (a charge_now_* command),
+  or while the house buys at least half the battery's charge power from
+  the grid (grid_feeds_battery()). Node-RED only looks at the "charged
+  from grid" counter there, but a Kostal's lags up to an hour: Rene's
+  charge 85 -> 100 % at 05:02-05:21 on 2026-11-09 was booked about half
+  as PV, so that grid energy was used first as free PV and was missing
+  from the battery's books.
 
 Triggers (same as Node-RED, see PwMngtBatteryDataSensor): Battery SoC
 changes, Battery nightly target changes (only 00:01-16:59), target end
@@ -145,7 +153,9 @@ from ..const import (
     DEFAULT_BATTERY_MIN_SOC,
     DOMAIN,
     ENTITY_KEY_BATTERY_GRID_CHARGED_DAY,
+    ENTITY_KEY_BATTERY_POWER,
     ENTITY_KEY_BATTERY_SOC,
+    ENTITY_KEY_GRID_POWER,
     INVERTER_TYPE_KOSTAL,
 )
 from ..devices import CHARGERS, pv_device_info
@@ -257,6 +267,10 @@ _ACTIVE_CHARGE_COMMANDS = frozenset(
 # Battery charge status (sensor.py, "battery_charge_status") meaning a grid
 # charge is planned later today. Old: "Ja (i dag)".
 _CHARGE_STATUS_YES_TODAY = "yes_today"
+# Issue #62: the share of the battery's charge power the house must buy
+# from the grid for a rise to count as grid -- with PV short, the grid
+# feeds the charge; with a PV surplus the house buys nothing.
+_GRID_FEED_SHARE = 0.5
 
 # Minimum SoC ceiling. (The floor is BatteryInputs.battery_min_soc.) The
 # ceiling was 90 in Node-RED's original port; DIFF (Claus, 19-10-2026):
@@ -349,6 +363,9 @@ class BatteryInputs:
     # Issue #61: False when the plan above was worked out from today
     # (fallback_day_plan()), which never replaces one from the night charge.
     day_plan_from_charge: bool = True
+    # Issue #62: the house buys from the grid what the battery charges
+    # right now (grid_feeds_battery()).
+    grid_feeds_battery: bool = False
     # The SoC the battery is discharged to (pv_properties.battery_min_soc(),
     # Node-RED: a fixed 5) -- the lowest min_soc, the charge curve's 09:00
     # start, and "battery empty" for the ledger.
@@ -517,6 +534,17 @@ def wanted_charge_now(
         multiplier = (multiplier - _CHARGE_CURVE[0]) / (1 - _CHARGE_CURVE[0])
 
     return (target - start_soc) * multiplier + start_soc
+
+
+def grid_feeds_battery(grid_power: float | None, battery_power: float | None) -> bool:
+    """Issue #62: True while the battery charges and the house buys at
+    least _GRID_FEED_SHARE of that charge power from the grid -- the
+    charge comes from the grid, not PV. Powers in W, normalized (grid
+    positive = buying, battery positive = discharging). False while
+    either is unknown."""
+    if grid_power is None or battery_power is None or battery_power >= 0:
+        return False
+    return grid_power >= -battery_power * _GRID_FEED_SHARE
 
 
 def _discharge_cells(
@@ -781,6 +809,9 @@ def calculate_battery_data(
         if hour >= 23 or hour <= 4:
             rise_is_grid = True
         elif grid_now > grid_prev:
+            rise_is_grid = True
+        elif inputs.battery_command in _ACTIVE_CHARGE_COMMANDS or inputs.grid_feeds_battery:
+            # Issue #62: the counter can lag the charge (see module docstring).
             rise_is_grid = True
 
     if soc_rose:
@@ -1193,6 +1224,16 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             self._pending_run = None
         await super().async_will_remove_from_hass()
 
+    def _read_power(self, entity_map_key: str) -> float | None:
+        """A power field from the wizard's entity map (W), normalized with
+        the wizard's "invert sign" (pv_properties.power_sign()); None
+        when unmapped or unknown."""
+        entity_id = self._entry.options.get(CONF_ENTITY_MAP, {}).get(entity_map_key)
+        power = read_float_state(self.hass.states.get(entity_id)) if entity_id else None
+        if power is None:
+            return None
+        return power * pv_properties.power_sign(self._entry, entity_map_key)
+
     def _charger_state_entity_ids(self) -> list[str]:
         """Each charger's State sensor (sensor.py, PwM_CHARGER_SENSORS),
         looked up by unique_id."""
@@ -1363,6 +1404,10 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             ],
             battery_min_soc=battery_min_soc,
             car_charging_lock=self._update_car_charging_lock(),
+            grid_feeds_battery=grid_feeds_battery(
+                self._read_power(ENTITY_KEY_GRID_POWER),
+                self._read_power(ENTITY_KEY_BATTERY_POWER),
+            ),
             **self._read_day_plan(),
         )
 
