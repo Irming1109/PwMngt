@@ -94,6 +94,14 @@ Deliberate differences from Node-RED (agreed with Claus, issue #12):
   0 it falls back to 150 W.
 - Winter (November-January) is read in Home Assistant's own time zone
   rather than a fixed Europe/Copenhagen.
+- DIFF (issue #60, Claus 2026-11-09): the winter rule (hold only from a
+  limit of 20 %) only applies while the battery holds no grid-bought
+  energy (battery_data's soc_grid). It is there so the battery doesn't
+  go into a hard hold nearly every winter day over a little PV -- but
+  the night charge now only charges what the evening (#50) and the
+  expensive daytime hours (#59) need, so a limit of 16 % can be a grid
+  charge: on 2026-11-09 the hold let go of it at 04:30 and the battery
+  covered the house with it before 06:00.
 
 New logic with no Node-RED counterpart (Claus, issue #14):
 - The wait at the limit is 3 minutes, but 6 with 3 or more big PV shifts
@@ -175,7 +183,7 @@ _POWER_COMMANDS = frozenset({COMMAND_HOLD, COMMAND_BLOCK_CHARGING})
 
 # Node-RED's settings, same names translated.
 _FLOOR_LIMIT = 10  # BUND: Growatt's lowest cutoff -- a limit at or below means no hold.
-_WINTER_MIN_LIMIT = 20  # VINTER_MIN: Nov-Jan, hold only from a limit of 20 %.
+_WINTER_MIN_LIMIT = 20  # VINTER_MIN: Nov-Jan, hold only from a limit of 20 % (not grid energy, #60).
 _WINTER_MONTHS = (11, 12, 1)
 _MARGIN_W = 300  # MARGIN_W: safety margin at the limit (clouds).
 # Issue #30: under "Bloker ladning" the margin also covers the inverter's
@@ -332,6 +340,9 @@ class BatteryHoldInputs:
     battery_mode_manual: bool
     now: float  # Epoch seconds.
     winter: bool
+    # Issue #60: battery_data's soc_grid > 0 -- the battery holds
+    # grid-bought energy, which the winter rule doesn't release.
+    grid_energy: bool = False
     pv_big_shifts: int = 0  # solar_data's pv_big_shifts_last_60min.
     # Issue #33: a car is charging, and with how much (W; None = unknown,
     # the charger has no power sensor).
@@ -592,7 +603,11 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
             should_hold = True
         else:
             status = STATUS_WAITING_MIN_SWITCH_TIME
-    elif (limit < _WINTER_MIN_LIMIT) if inputs.winter else (limit <= _FLOOR_LIMIT):
+    elif (
+        (limit < _WINTER_MIN_LIMIT and not inputs.grid_energy)
+        if inputs.winter
+        else (limit <= _FLOOR_LIMIT)
+    ) or limit <= _FLOOR_LIMIT:
         # No (relevant) limit: always normal operation, at once.
         should_hold = False
         status = (
@@ -649,7 +664,7 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
             if hold_status in _STANDBY_STATUSES:
                 target = _standby_import(st, inputs, learn=False)
         return BatteryHoldResult(
-            st, COMMAND_HOLD, STATUS_HOLD_STARTED, True, _start_power(st, target, now)
+            st, COMMAND_HOLD, STATUS_HOLD_STARTED, True, _start_power(st, target, inputs)
         )
     if not should_hold and active:
         st.holding = False
@@ -845,6 +860,7 @@ class PwMngtBatteryHoldSensor(RestoreEntity, SensorEntity):
             battery_mode_manual=pv_properties.is_battery_mode_manual(self.hass, self._entry),
             now=dt_util.utcnow().timestamp(),
             winter=dt_util.now().month in _WINTER_MONTHS,
+            grid_energy=self._read_grid_energy(),
             pv_big_shifts=self._read_pv_big_shifts(),
             step_w=self._read_step_w(),
             **self._read_car_charging(),
@@ -867,6 +883,16 @@ class PwMngtBatteryHoldSensor(RestoreEntity, SensorEntity):
             "car_power_w": car.power_w,
             "behind_charge_curve": bool(state and state.attributes.get("behind_charge_curve")),
         }
+
+    def _read_grid_energy(self) -> bool:
+        """Issue #60: whether battery_data's ledger holds grid-bought
+        energy (soc_grid > 0). False while it isn't there."""
+        entity_id = pv_properties.battery_data_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        try:
+            return bool(state and float(state.attributes.get("soc_grid") or 0) > 0)
+        except (TypeError, ValueError):
+            return False
 
     def _read_pv_big_shifts(self) -> int:
         """solar_data's pv_big_shifts_last_60min -- 0 (the normal wait)
