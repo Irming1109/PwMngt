@@ -1530,6 +1530,8 @@ const PWM_RING_CIRCUMFERENCE = 2 * Math.PI * PWM_RING_RADIUS;
 const PWM_RING_ARC = PWM_RING_CIRCUMFERENCE * 0.75;
 // Below this (W) the battery counts as idle.
 const PWM_RING_IDLE_W = 50;
+// select.<pv>_battery_min_soc's default (const.DEFAULT_BATTERY_MIN_SOC).
+const PWM_RING_DEFAULT_EMPTY_SOC = 5;
 
 /**
  * Battery ring (issue #32): SoC split into the share charged from PV and
@@ -1581,6 +1583,7 @@ class PwMBatteryRingCard extends HTMLElement {
       data: pwmFindEntityId(this._hass, "pv", "sensor", "battery_data"),
       target: pwmFindEntityId(this._hass, "pv", "sensor", "battery_nightly_target"),
       size: pwmFindEntityId(this._hass, "pv", "select", "battery_size"),
+      empty: pwmFindEntityId(this._hass, "pv", "select", "battery_min_soc"),
       command: pwmFindEntityId(this._hass, "pv", "select", "battery_command"),
       hold: pwmFindEntityId(this._hass, "pv", "sensor", "battery_hold_power"),
     };
@@ -1634,10 +1637,14 @@ class PwMBatteryRingCard extends HTMLElement {
     const minSoc = this._number("data");
     const target = this._number("target");
     const size = this._number("size");
+    // The SoC the battery can't be discharged below -- the kWh shown is
+    // what's usable above it (same default as const.DEFAULT_BATTERY_MIN_SOC).
+    const emptyRaw = this._number("empty");
+    const empty = Number.isFinite(emptyRaw) ? emptyRaw : PWM_RING_DEFAULT_EMPTY_SOC;
     // Normalized by PwMngt (pv_properties.power_sign()): + = discharging.
     const power = this._number("power") || 0;
 
-    card.appendChild(this._ring(t, soc, pv, grid, minSoc, target, size, power));
+    card.appendChild(this._ring(t, soc, pv, grid, minSoc, target, size, power, empty));
     card.appendChild(this._chips(t, soc, pv, grid, minSoc, target, size, power));
     const status = this._statusText(t);
     if (status) {
@@ -1648,7 +1655,7 @@ class PwMBatteryRingCard extends HTMLElement {
     }
   }
 
-  _ring(t, soc, pv, grid, minSoc, target, size, power) {
+  _ring(t, soc, pv, grid, minSoc, target, size, power, empty) {
     const charging = power < -PWM_RING_IDLE_W;
     const discharging = power > PWM_RING_IDLE_W;
     const pvShare = Number.isFinite(pv) ? pv : 0;
@@ -1659,7 +1666,8 @@ class PwMBatteryRingCard extends HTMLElement {
     const kw = pwmFormatKw(Math.abs(power));
     const powerColor = charging ? "#43a047" : discharging ? "#fb8c00" : "var(--secondary-text-color)";
     const powerText = charging ? t.charging(kw) : discharging ? t.discharging(kw) : t.idle;
-    const kwh = Number.isFinite(size) ? `${pwmFormatDecimal((soc * size) / 100)} kWh` : "";
+    const usable = (Math.max(0, soc - empty) * size) / 100;
+    const kwh = Number.isFinite(size) ? `${pwmFormatDecimal(usable)} kWh` : "";
 
     const wrap = document.createElement("div");
     wrap.innerHTML = `
