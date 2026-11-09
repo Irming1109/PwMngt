@@ -129,3 +129,29 @@ def electricity_price(hass: HomeAssistant, entry: ConfigEntry) -> float | None:
         return None
     surcharge = entry.options.get(CONF_ELECTRICITY_PRICE_SURCHARGE, 0.0) or 0.0
     return base_price + surcharge
+
+
+def electricity_prices_today(hass: HomeAssistant, entry: ConfigEntry, today: str) -> dict[int, float]:
+    """Issue #61: today's hourly prices (hour -> kr/kWh) from the same
+    entity as electricity_price() -- its "prices" attribute (Strømligning:
+    [{"start", "price"}, ...]), filtered to today ("YYYY-MM-DD", local),
+    plus the same surcharge. Empty when not available."""
+    entity_map = entry.options.get(CONF_ENTITY_MAP, {})
+    entity_id = entity_map.get(ENTITY_KEY_SPOT_ELECTRICITY_PRICE) or None
+    state = hass.states.get(entity_id) if entity_id else None
+    entries = state.attributes.get("prices") if state is not None else None
+    if not isinstance(entries, list):
+        return {}
+    surcharge = entry.options.get(CONF_ELECTRICITY_PRICE_SURCHARGE, 0.0) or 0.0
+    prices: dict[int, float] = {}
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        start = str(item.get("start") or "")
+        if start[:10] != today:
+            continue
+        try:
+            prices[int(start[11:13])] = float(item["price"]) + surcharge
+        except (KeyError, TypeError, ValueError):
+            continue
+    return prices

@@ -457,6 +457,29 @@ def partial_charge_target(
 
 
 def evening_hour_consumption(inputs: BatteryChargeInputs) -> dict[int, float]:
+    """See evening_hourly_need() -- for tomorrow's evening."""
+    return evening_hourly_need(
+        night_consumption=inputs.night_consumption,
+        night_consumption_raw=inputs.night_consumption_raw,
+        evening_consumption=inputs.evening_consumption,
+        late_evening_consumption=inputs.late_evening_consumption,
+        pv_17_21=inputs.pv_forecast_17_21_tomorrow,
+        battery_target=inputs.battery_target,
+        battery_min_soc=inputs.battery_min_soc,
+        battery_size=inputs.battery_size,
+    )
+
+
+def evening_hourly_need(
+    night_consumption: float | None,
+    night_consumption_raw: float | None,
+    evening_consumption: float | None,
+    late_evening_consumption: float | None,
+    pv_17_21: float | None,
+    battery_target: float,
+    battery_min_soc: float,
+    battery_size: float,
+) -> dict[int, float]:
     """Issue #50: the energy (kWh) the battery is expected to cover in each
     hour 17-23 tomorrow. 17-21 is the evening average (scaled like the night
     average, without the chargers) minus tomorrow's PV 17-21; 21-24 gets the
@@ -468,23 +491,23 @@ def evening_hour_consumption(inputs: BatteryChargeInputs) -> dict[int, float]:
     when consumption_data has it (at most the rest of the night) -- the
     even spread underestimated it by ~30 % at Kasper's, whose house uses
     more before midnight than after."""
-    night = inputs.night_consumption
+    night = night_consumption
     if night is None or night <= 0:
-        night = max(inputs.battery_target - inputs.battery_min_soc, 0.0) / 100 * inputs.battery_size / TARGET_MARGIN
+        night = max(battery_target - battery_min_soc, 0.0) / 100 * battery_size / TARGET_MARGIN
         evening = night * len(_EVENING_HOURS) / _NIGHT_HOURS
         pv = 0.0
     else:
-        raw = inputs.night_consumption_raw
-        if inputs.evening_consumption is not None and raw:
-            evening = inputs.evening_consumption * night / raw
+        raw = night_consumption_raw
+        if evening_consumption is not None and raw:
+            evening = evening_consumption * night / raw
         else:
             evening = night * len(_EVENING_HOURS) / _NIGHT_HOURS
         evening = min(evening, night)
-        pv = max(inputs.pv_forecast_17_21_tomorrow or 0.0, 0.0)
+        pv = max(pv_17_21 or 0.0, 0.0)
     per_evening_hour = max(evening - pv, 0.0) / len(_EVENING_HOURS)
     per_late_hour = max(night - evening, 0.0) / _REST_OF_NIGHT_HOURS
-    late = inputs.late_evening_consumption
-    if late is not None and late >= 0 and inputs.night_consumption:
+    late = late_evening_consumption
+    if late is not None and late >= 0 and night_consumption:
         per_late_hour = min(late, max(night - evening, 0.0)) / len(_LATE_EVENING_HOURS)
     hourly = {hour: per_evening_hour for hour in _EVENING_HOURS}
     hourly.update({hour: per_late_hour for hour in _LATE_EVENING_HOURS})

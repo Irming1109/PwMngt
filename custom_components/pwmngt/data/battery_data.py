@@ -102,6 +102,16 @@ Deliberate differences from Node-RED:
   charges a car, a grid charge runs or charging is blocked. The target
   floor is let go in those hours, so it follows the battery down
   afterwards instead of demanding the energy back.
+- DIFF (issue #61, Claus 2026-11-09): without such a plan for today (a
+  manual charge, a plan from before #59, or simply more grid energy in
+  the battery than planned), the same day plan is worked out from today:
+  the hours 06-16 whose price is at least what the battery's grid energy
+  cost (the grid cells' average price) plus the price difference, and
+  an evening reserve for 17-21 plus the evening hours that price pays
+  for (data/battery_charge_decision.py's evening_hourly_need() and
+  worth_charging(), on today's prices and today's PV 17-21). Only while
+  the battery holds grid energy; a plan from the night charge always
+  wins.
 
 Triggers (same as Node-RED, see PwMngtBatteryDataSensor): Battery SoC
 changes, Battery nightly target changes (only 00:01-16:59), target end
@@ -141,6 +151,8 @@ from ..const import (
 from ..devices import CHARGERS, pv_device_info
 from ..helpers.state_helper import read_float_state
 from ..properties import charger_properties, hub_properties, pv_properties
+from .battery_charge_decision import evening_hourly_need, worth_charging
+from .solar_data import TARGET_MARGIN
 
 LOGGER = logging.getLogger(__name__)
 
@@ -210,6 +222,12 @@ _LEGACY_UNIQUE_ID_SUFFIXES: list[str] = [
 # target falls back to the battery's minimum SoC, see _run().)
 _DEFAULT_TARGET_END_TIME = "16:45"
 _DEFAULT_PRICE = 1.5
+# Issue #61: fallback_day_plan() -- the price difference while its select
+# has no value (the charge decision's own fallback), and the hours it plans.
+_DEFAULT_PRICE_DIFFERENCE = 1.2
+_DAY_PLAN_FIRST_HOUR = 6
+_DAY_PLAN_END_HOUR = 17  # 06-16.
+_DAY_PLAN_EVENING_HOURS = range(17, 21)
 
 # Charger state (sensor.py, PwM_CHARGER_SENSORS "state") that stops the
 # house battery from discharging. Old: "Aktiv - manuel".
@@ -328,6 +346,9 @@ class BatteryInputs:
     # it is "yes_today". None = not known now.
     day_plan_hours: list[int] | None = None
     day_plan_reserve: float | None = None
+    # Issue #61: False when the plan above was worked out from today
+    # (fallback_day_plan()), which never replaces one from the night charge.
+    day_plan_from_charge: bool = True
     # The SoC the battery is discharged to (pv_properties.battery_min_soc(),
     # Node-RED: a fixed 5) -- the lowest min_soc, the charge curve's 09:00
     # start, and "battery empty" for the ledger.
@@ -379,6 +400,7 @@ class BatteryLedger:
     day_plan_date: str | None = None
     day_plan_hours: list[int] = field(default_factory=list)
     day_plan_reserve: float | None = None
+    day_plan_from_charge: bool = False
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -404,6 +426,7 @@ class BatteryLedger:
             "day_plan_date": self.day_plan_date,
             "day_plan_hours": list(self.day_plan_hours),
             "day_plan_reserve": self.day_plan_reserve,
+            "day_plan_from_charge": self.day_plan_from_charge,
         }
 
     @classmethod
@@ -431,6 +454,7 @@ class BatteryLedger:
             day_plan_date=restored.get("day_plan_date"),
             day_plan_hours=[int(h) for h in restored.get("day_plan_hours") or []],
             day_plan_reserve=restored.get("day_plan_reserve"),
+            day_plan_from_charge=bool(restored.get("day_plan_from_charge")),
         )
 
 
@@ -589,6 +613,42 @@ def _target_floor(
     return today, max(kept, new_floor)
 
 
+def fallback_day_plan(
+    prices_today: dict[int, float],
+    grid_cell_prices: list[float],
+    price_difference: float,
+    evening_need: dict[int, float],
+    battery_size: float,
+    battery_target: float,
+    battery_min_soc: float,
+) -> tuple[list[int], float] | None:
+    """Issue #61: (today's daytime hours, evening reserve SoC %) worked out
+    from today, for a battery holding grid energy without a plan from the
+    night charge -- see the module docstring. None when nothing pays for
+    it or something needed is missing."""
+    if not grid_cell_prices or battery_size <= 0:
+        return None
+    if any(hour not in prices_today for hour in range(_DAY_PLAN_FIRST_HOUR, 24)):
+        return None
+    prices = [prices_today.get(hour, 0.0) for hour in range(24)]
+    paid = sum(grid_cell_prices) / len(grid_cell_prices)
+    break_even, worth, covered, covered_kwh = worth_charging(
+        prices, paid, price_difference, evening_need
+    )
+    day_hours = [
+        hour for hour in range(_DAY_PLAN_FIRST_HOUR, _DAY_PLAN_END_HOUR) if prices[hour] >= break_even
+    ]
+    if not day_hours:
+        return None
+    if not covered:
+        covered_kwh = sum(evening_need[hour] for hour in _DAY_PLAN_EVENING_HOURS)
+    reserve = min(
+        battery_target,
+        battery_min_soc + math.ceil(covered_kwh * TARGET_MARGIN / battery_size * 100),
+    )
+    return day_hours, float(reserve)
+
+
 def kostal_min_soc_step(
     min_soc: float, target: float, battery_min_soc: float, lock: float | None = None
 ) -> int:
@@ -620,6 +680,13 @@ def kostal_min_soc_step(
     if lock is not None:
         stepped = max(stepped, min(lock, min_soc))
     return int(round(stepped))
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def kostal_lock(ledger: "BatteryLedger") -> float | None:
@@ -889,14 +956,22 @@ def calculate_battery_data(
     day_plan_date = previous.day_plan_date
     day_plan_hours = list(previous.day_plan_hours)
     day_plan_reserve = previous.day_plan_reserve
-    if inputs.day_plan_hours is not None and inputs.day_plan_reserve is not None:
-        day_plan_date, day_plan_hours, day_plan_reserve = (
+    day_plan_from_charge = previous.day_plan_from_charge
+    if day_plan_date != today:
+        day_plan_date, day_plan_hours, day_plan_reserve, day_plan_from_charge = None, [], None, False
+    # Issue #61: a plan worked out from today never replaces the night
+    # charge's own.
+    if (
+        inputs.day_plan_hours is not None
+        and inputs.day_plan_reserve is not None
+        and (inputs.day_plan_from_charge or not day_plan_from_charge)
+    ):
+        day_plan_date, day_plan_hours, day_plan_reserve, day_plan_from_charge = (
             today,
             [int(h) for h in inputs.day_plan_hours],
             float(inputs.day_plan_reserve),
+            inputs.day_plan_from_charge,
         )
-    if day_plan_date != today:
-        day_plan_date, day_plan_hours, day_plan_reserve = None, [], None
     if (
         day_plan_reserve is not None
         and hour in day_plan_hours
@@ -967,6 +1042,7 @@ def calculate_battery_data(
         day_plan_date=day_plan_date,
         day_plan_hours=day_plan_hours,
         day_plan_reserve=day_plan_reserve,
+        day_plan_from_charge=day_plan_from_charge,
     )
     return min_soc_rounded, ledger, forced_charge, behind_charge_curve
 
@@ -1324,28 +1400,89 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             "grid_afladning_pct_cum": round(ledger.grid_afladning_pct_cum, 2),
             "total_afladning_pct_cum": round(ledger.total_afladning_pct_cum, 2),
             "grid_opladning_pct_cum": round(ledger.grid_opladning_pct_cum, 2),
+            # Issues #59/#61: today's daytime hours the battery may cover,
+            # the SoC it keeps for the evening in them, and whether the
+            # plan came from the night charge ("charge") or from today
+            # ("today").
+            "day_plan_hours": list(ledger.day_plan_hours),
+            "day_plan_reserve": ledger.day_plan_reserve,
+            "day_plan_source": (
+                None
+                if ledger.day_plan_date is None
+                else "charge" if ledger.day_plan_from_charge else "today"
+            ),
         }
         self._attr_available = True
         self.async_write_ha_state()
 
     def _read_day_plan(self) -> dict[str, Any]:
         """Issue #59: day_plan_hours/day_plan_reserve for BatteryInputs,
-        from Battery charge status while it is "yes_today"."""
+        from Battery charge status while it is "yes_today" -- issue #61:
+        otherwise worked out from today (fallback_day_plan())."""
         entity_id = pv_properties.battery_charge_status_entity_id(self.hass, self._entry)
         state = self.hass.states.get(entity_id) if entity_id else None
-        if state is None or state.state != _CHARGE_STATUS_YES_TODAY:
+        if state is not None and state.state == _CHARGE_STATUS_YES_TODAY:
+            hours = state.attributes.get("day_hours")
+            reserve = state.attributes.get("evening_reserve_soc")
+            if isinstance(hours, list) and reserve is not None:
+                try:
+                    return {
+                        "day_plan_hours": [int(hour) for hour in hours],
+                        "day_plan_reserve": float(reserve),
+                        "day_plan_from_charge": True,
+                    }
+                except (TypeError, ValueError):
+                    pass
+        return self._fallback_day_plan()
+
+    def _fallback_day_plan(self) -> dict[str, Any]:
+        """Issue #61: see fallback_day_plan()."""
+        grid_cells = [price for price in self._ledger.soc_cells if price != 0]
+        if not grid_cells:
             return {}
-        hours = state.attributes.get("day_hours")
-        reserve = state.attributes.get("evening_reserve_soc")
-        if not isinstance(hours, list):
+        battery_size = self._read_float_pv(pv_properties.battery_size_entity_id, 0.0)
+        battery_min_soc = pv_properties.battery_min_soc(self.hass, self._entry)
+        battery_target = self._read_float_pv(
+            pv_properties.battery_nightly_target_entity_id, battery_min_soc
+        )
+        consumption = self._attributes_of(pv_properties.consumption_data_entity_id)
+        solar = self._attributes_of(pv_properties.solar_data_entity_id)
+        evening_need = evening_hourly_need(
+            night_consumption=_float_or_none(
+                consumption.get("nighttime_average_adjusted")
+            ) or _float_or_none(consumption.get("nighttime_average")),
+            night_consumption_raw=_float_or_none(consumption.get("nighttime_average")),
+            evening_consumption=_float_or_none(consumption.get("evening_average")),
+            late_evening_consumption=_float_or_none(
+                consumption.get("late_evening_average_adjusted")
+            ) or _float_or_none(consumption.get("late_evening_average")),
+            pv_17_21=_float_or_none(solar.get("pv_forecast_17_21_today")),
+            battery_target=battery_target,
+            battery_min_soc=battery_min_soc,
+            battery_size=battery_size,
+        )
+        plan = fallback_day_plan(
+            hub_properties.electricity_prices_today(
+                self.hass, self._entry, dt_util.now().strftime("%Y-%m-%d")
+            ),
+            grid_cells,
+            self._read_float_pv(
+                pv_properties.battery_price_difference_entity_id, _DEFAULT_PRICE_DIFFERENCE
+            ),
+            evening_need,
+            battery_size,
+            battery_target,
+            battery_min_soc,
+        )
+        if plan is None:
             return {}
-        try:
-            return {
-                "day_plan_hours": [int(hour) for hour in hours],
-                "day_plan_reserve": None if reserve is None else float(reserve),
-            }
-        except (TypeError, ValueError):
-            return {}
+        hours, reserve = plan
+        return {"day_plan_hours": hours, "day_plan_reserve": reserve, "day_plan_from_charge": False}
+
+    def _attributes_of(self, lookup) -> dict[str, Any]:
+        entity_id = lookup(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        return dict(state.attributes) if state is not None else {}
 
     def _retry_soon(self, startup_only: bool = False) -> None:
         """Run again in _NOT_READY_RETRY_SECONDS instead of waiting for the
