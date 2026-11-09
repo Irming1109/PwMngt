@@ -750,6 +750,9 @@ const PWM_BATTERY_TEXTS = {
     chargeCovers: (pct, hours) => `Charges to ${pct}% from the grid - enough for ${hours}`,
     dayHours: (kwh, hours, reserve) =>
       `Of which about ${kwh} for the daytime hours ${hours} - the battery keeps ${reserve}% for the evening`,
+    dayPlanToday: (hours, reserve) =>
+      `Today the battery covers the house at ${hours} - down to ${reserve}%, the rest is kept for the evening`,
+    dayPlanFromToday: "Worked out from today's prices and what the battery's grid power cost",
     pvFills: (kwh, target) => `Tomorrow's PV (${kwh} surplus expected) fills it up towards the target of ${target}%`,
     surplusCoversWorth: (hours, kwh) =>
       `Tomorrow's PV surplus (${kwh}, cautious estimate) covers ${hours}, the hours tonight's charge would cover`,
@@ -804,6 +807,9 @@ const PWM_BATTERY_TEXTS = {
     chargeCovers: (pct, hours) => `Lades til ${pct} % fra nettet - nok til kl. ${hours}`,
     dayHours: (kwh, hours, reserve) =>
       `Heraf ca. ${kwh} til dagtimerne kl. ${hours} - batteriet gemmer ${reserve} % til aftenen`,
+    dayPlanToday: (hours, reserve) =>
+      `I dag dækker batteriet huset kl. ${hours} - ned til ${reserve} %, resten gemmes til aftenen`,
+    dayPlanFromToday: "Beregnet ud fra dagens priser og hvad netstrømmen i batteriet kostede",
     pvFills: (kwh, target) => `Solen i morgen (forventet ${kwh} overskud) fylder op mod target ${target} %`,
     surplusCoversWorth: (hours, kwh) =>
       `Forventet sol-overskud i morgen (${kwh}, forsigtigt skøn) dækker kl. ${hours}, de timer natladningen skulle dække`,
@@ -1008,6 +1014,8 @@ class PwMBatteryCard extends HTMLElement {
       postpone: pwmFindEntityId(this._hass, "pv", "button", "postpone_battery_charge"),
       soc: pwmFindEntityId(this._hass, "pv", "sensor", "battery_soc"),
       target: pwmFindEntityId(this._hass, "pv", "sensor", "battery_nightly_target"),
+      // Issues #59/#61: today's day plan (day_plan_* attributes).
+      data: pwmFindEntityId(this._hass, "pv", "sensor", "battery_data"),
     };
     this._signature = undefined;
   }
@@ -1023,7 +1031,15 @@ class PwMBatteryCard extends HTMLElement {
       const state = this._state(name);
       return state ? `${state.state}|${JSON.stringify(state.attributes)}` : "-";
     });
-    parts.push(this._texts().title, pwmBatteryRecheckHours());
+    // Only the day plan from battery_data -- its other attributes change
+    // with every SoC point.
+    const data = this._state("data");
+    parts.push(
+      data
+        ? JSON.stringify([data.attributes.day_plan_hours, data.attributes.day_plan_reserve, data.attributes.day_plan_source])
+        : "-"
+    );
+    parts.push(this._texts().title, pwmBatteryRecheckHours(), new Date().getHours());
     return parts.join("#");
   }
 
@@ -1144,6 +1160,13 @@ class PwMBatteryCard extends HTMLElement {
         lastCharge.extended_hours || [],
         lastCharge.target_reached ? finished.getHours() : null
       );
+    }
+
+    // Issues #59/#61: today's day plan, while hours of it are still ahead.
+    const dayPlan = this._dayPlanToday();
+    if (isAuto && dayPlan) {
+      content.appendChild(this._banner("ok", t.dayPlanToday(pwmHourRanges(dayPlan.hours), dayPlan.reserve)));
+      if (dayPlan.source === "today") content.appendChild(this._note(t.dayPlanFromToday));
     }
 
     // Manual control.
@@ -1290,6 +1313,21 @@ class PwMBatteryCard extends HTMLElement {
       if (target !== null) return [t.surplusCovers(Math.round(target), kwh)];
     }
     return [];
+  }
+
+  /**
+   * Issues #59/#61: battery_data's plan for today -- {hours (the ones still
+   * ahead), reserve, source} -- or null.
+   */
+  _dayPlanToday() {
+    const data = this._state("data");
+    if (!data) return null;
+    const hours = Array.isArray(data.attributes.day_plan_hours) ? data.attributes.day_plan_hours : [];
+    const reserve = Number(data.attributes.day_plan_reserve);
+    const now = new Date().getHours();
+    const ahead = hours.map(Number).filter((hour) => hour >= now);
+    if (!ahead.length || !Number.isFinite(reserve)) return null;
+    return { hours: ahead, reserve: Math.round(reserve), source: data.attributes.day_plan_source };
   }
 
   _note(text) {
