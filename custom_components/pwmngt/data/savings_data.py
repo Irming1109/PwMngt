@@ -655,6 +655,25 @@ def calculate_purchase_prices(
     )
 
 
+def grid_bought_for_battery(
+    battery_grid_charge: float, grid_import: float | None, household_consumption: float | None
+) -> float:
+    """Issue #56 (Claus 2026-11-09): the energy (kWh) the hour's grid charge
+    actually cost -- what was bought from the grid on top of the house's
+    own consumption, both from the same counters as the purchase prices.
+    The inverter's own "charged from grid" counter can measure the
+    battery side instead: a Kostal's left the charging loss (~9 %, Rene
+    2026-11-09: 8.2 kWh counted, 9.0 kWh bought) in the house's purchase,
+    so own production fell a little in every charge hour, and it lags the
+    hour by up to an hour. A Growatt's counts the grid side already, so
+    nothing changes there. The inverter's counter is used while either
+    reading is missing. calculate_battery_grid_balance() still books it
+    only in hours the battery rose from the grid (#55)."""
+    if grid_import is None or household_consumption is None:
+        return battery_grid_charge
+    return max(grid_import - household_consumption, 0.0)
+
+
 def calculate_battery_grid_balance(
     state: BatteryGridBalanceState,
     last_hour_real_price: float,
@@ -1131,7 +1150,7 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
             self._ledger.battery = calculate_battery_grid_balance(
                 self._ledger.battery,
                 last_hour_real_price,
-                battery_grid_charge,
+                grid_bought_for_battery(battery_grid_charge, grid_import, household_consumption),
                 battery_discharge,
                 grid_discharge_pct_cum,
                 battery_size,
