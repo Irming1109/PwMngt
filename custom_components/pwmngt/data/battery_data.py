@@ -132,6 +132,8 @@ Deliberate differences from Node-RED:
   manual. The inverter translators (Node-RED) carry it out. The night
   charge for a sale goes above battery_nightly_target (charge_target);
   that level is the target until the last sale hour (effective_target()).
+  While selling, the export the battery delivers is metered every 30 s
+  (sale_kwh per hour, read by data/savings_data.py at the hour's close).
 
 Triggers (same as Node-RED, see PwMngtBatteryDataSensor): Battery SoC
 changes, Battery nightly target changes (only 00:01-16:59), target end
@@ -283,6 +285,8 @@ _ACTIVE_CHARGE_COMMANDS = frozenset(
 _CHARGE_STATUS_YES_TODAY = "yes_today"
 # Issue #64: the command the battery sells with, and the one it goes back to.
 COMMAND_SELL = "discharge_now_100"
+# How often the sale meter reads the export while the battery sells.
+_SALE_METER_INTERVAL = timedelta(seconds=30)
 _COMMAND_INTERNAL = "internal"
 # Issue #62: the share of the battery's charge power the house must buy
 # from the grid for a rise to count as grid -- with PV short, the grid
@@ -458,6 +462,11 @@ class BatteryLedger:
     # again that hour when the battery hold lifts the SoC a point (Claus
     # 2026-11-10: 08:08 floor reached, 08:40 a 26 s sale again).
     sale_done_hour: int | None = None
+    # The kWh the battery sent to the grid while selling, per hour today
+    # ("8": 9.4) -- metered here (add_sale_export()), since the hourly
+    # counters can't tell it from the house's own use: on 2026-11-10 the
+    # house bought 3 kWh in the sale hour, more than the 2.4 kWh discharge.
+    sale_kwh: dict[str, float] = field(default_factory=dict)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -491,6 +500,7 @@ class BatteryLedger:
             "sale_lock": self.sale_lock,
             "sale_target": self.sale_target,
             "sale_done_hour": self.sale_done_hour,
+            "sale_kwh": dict(self.sale_kwh),
         }
 
     @classmethod
@@ -526,6 +536,7 @@ class BatteryLedger:
             sale_lock=restored.get("sale_lock"),
             sale_target=restored.get("sale_target"),
             sale_done_hour=restored.get("sale_done_hour"),
+            sale_kwh={str(k): float(v) for k, v in (restored.get("sale_kwh") or {}).items()},
         )
 
 
@@ -785,6 +796,28 @@ def effective_target(target: float, ledger: "BatteryLedger", now: datetime) -> f
     ):
         return target
     return max(target, ledger.sale_target)
+
+
+def sale_export_w(grid_power: float | None, battery_power: float | None) -> float:
+    """Issue #64: the battery's power going out to the grid (W) -- the
+    export (grid_power negative), but never more than the battery delivers,
+    so PV going out at the same time isn't counted as sold."""
+    if grid_power is None or battery_power is None:
+        return 0.0
+    return max(0.0, min(-grid_power, battery_power))
+
+
+def add_sale_export(
+    sale_kwh: dict[str, float], hour: int, export_w: float, seconds: float
+) -> dict[str, float]:
+    """Issue #64: sale_kwh with export_w for `seconds` added to `hour`."""
+    if export_w <= 0 or seconds <= 0:
+        return sale_kwh
+    key = str(hour)
+    result = dict(sale_kwh)
+    # Unrounded: rounding every 30 s sample adds up (round for display).
+    result[key] = result.get(key, 0.0) + export_w * seconds / 3_600_000
+    return result
 
 
 def kostal_lock(ledger: "BatteryLedger") -> float | None:
@@ -1115,6 +1148,7 @@ def calculate_battery_data(
     selling = False
     sale_lock = None
     sale_done_hour = previous.sale_done_hour if previous.sale_date == today else None
+    sale_kwh = dict(previous.sale_kwh) if previous.sale_date == today else {}
     if hour in sale_hours and not manual_charger_active and not charging:
         floor = max(empty_soc, sale_floors[sale_hours.index(hour)])
         min_soc = max(empty_soc, min(floor, soc))
@@ -1192,6 +1226,7 @@ def calculate_battery_data(
         sale_lock=sale_lock,
         sale_target=sale_target,
         sale_done_hour=sale_done_hour,
+        sale_kwh=sale_kwh,
     )
     return min_soc_rounded, ledger, forced_charge, behind_charge_curve
 
@@ -1252,6 +1287,10 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         # when that grace runs out.
         self._car_stopped_since: datetime | None = None
         self._car_recheck: Any = None
+        # Issue #64: the sale meter -- the last sample (time, W) and the
+        # cancel callback of its timer, which only runs while selling.
+        self._sale_sample: tuple[datetime, float] | None = None
+        self._sale_meter: Any = None
 
         if not self._soc_entity_id:
             LOGGER.warning(
@@ -1337,6 +1376,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
 
     async def async_will_remove_from_hass(self) -> None:
         self._cancel_car_recheck()
+        self._stop_sale_meter()
         if self._pending_run is not None:
             self._pending_run()
             self._pending_run = None
@@ -1464,6 +1504,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
     def _run(self) -> None:
         """Read the inputs, calculate, write the result out."""
         self._last_run = dt_util.utcnow()
+        self._sample_sale()
 
         soc = read_float_state(self.hass.states.get(self._soc_entity_id))
         if soc is None:
@@ -1586,9 +1627,15 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             "sale_hours": list(ledger.sale_hours),
             "sale_floors": list(ledger.sale_floors),
             "selling": ledger.selling,
+            "sale_kwh": {hour: round(kwh, 3) for hour, kwh in ledger.sale_kwh.items()},
         }
         self._attr_available = True
         self.async_write_ha_state()
+
+        if ledger.selling:
+            self._start_sale_meter()
+        else:
+            self._stop_sale_meter()
 
         # Last: the select's state change re-triggers this sensor.
         self._apply_sale_command(
@@ -1614,6 +1661,51 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             return
         LOGGER.info("PwMngt: battery sale -> battery_command %s", option)
         async_dispatcher_send(self.hass, signal_set_battery_command(self._entry.entry_id), option)
+
+    # -- sale meter (issue #64) -------------------------------------------
+
+    def _sample_sale(self) -> None:
+        """Adds the export since the last sample to the ledger's sale_kwh
+        (the power read then, held until now), and takes a new sample while
+        the battery sells."""
+        now = dt_util.now()
+        if self._sale_sample is not None and self._ledger.selling:
+            started, export_w = self._sale_sample
+            self._ledger.sale_kwh = add_sale_export(
+                self._ledger.sale_kwh,
+                started.hour,
+                export_w,
+                (now - started).total_seconds(),
+            )
+        self._sale_sample = (
+            (
+                now,
+                sale_export_w(
+                    self._read_power(ENTITY_KEY_GRID_POWER),
+                    self._read_power(ENTITY_KEY_BATTERY_POWER),
+                ),
+            )
+            if self._ledger.selling
+            else None
+        )
+
+    def _start_sale_meter(self) -> None:
+        if self._sale_sample is None:
+            self._sample_sale()
+        if self._sale_meter is None:
+            self._sale_meter = event.async_track_time_interval(
+                self.hass, self._handle_sale_meter, _SALE_METER_INTERVAL
+            )
+
+    def _stop_sale_meter(self) -> None:
+        self._sale_sample = None
+        if self._sale_meter is not None:
+            self._sale_meter()
+            self._sale_meter = None
+
+    @callback
+    def _handle_sale_meter(self, _now) -> None:
+        self._sample_sale()
 
     def _read_sale_plan(self) -> dict[str, Any]:
         """Issue #64: sale_hours/sale_floors for BatteryInputs, from Battery

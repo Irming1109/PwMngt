@@ -1182,7 +1182,7 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
                 grid_discharge_pct_cum,
                 battery_size,
                 self._read_grid_charge_pct_cum(),
-                *self._read_last_hour_sale(battery_discharge, household_consumption),
+                *self._read_last_hour_sale(),
             )
             battery_hour = (
                 self._ledger.battery.hour_grid_charge_kwh,
@@ -1286,24 +1286,28 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         total = _read_float_attribute(state, "total_afladning_pct_cum") or 0.0
         return grid, total
 
-    def _read_last_hour_sale(
-        self, battery_discharge: float | None, household_consumption: float | None
-    ) -> tuple[float, float | None]:
-        """Issue #64: (kWh sold, sale price) for the hour just ended -- the
-        discharge beyond the house's consumption, when it was one of
-        battery_data's sale hours today -- or (0, None)."""
+    def _read_last_hour_sale(self) -> tuple[float, float | None]:
+        """Issue #64: (kWh sold, sale price) for the hour just ended --
+        battery_data's own meter of the export while it sold (sale_kwh) --
+        or (0, None). Not the discharge minus the house's consumption: the
+        house buys from the grid in the rest of the sale hour, which hid a
+        whole sale on 2026-11-10."""
         last = dt_util.now() - timedelta(hours=1)
-        if last.date() != dt_util.now().date() or battery_discharge is None or household_consumption is None:
+        if last.date() != dt_util.now().date():
             return 0.0, None
         entity_id = pv_properties.battery_data_entity_id(self.hass, self._entry)
         state = self.hass.states.get(entity_id) if entity_id else None
-        hours = state.attributes.get("sale_hours") if state is not None else None
-        if not isinstance(hours, list) or last.hour not in hours:
+        sold = state.attributes.get("sale_kwh") if state is not None else None
+        try:
+            kwh = float((sold or {}).get(str(last.hour)) or 0.0)
+        except (AttributeError, TypeError, ValueError):
+            return 0.0, None
+        if kwh <= 0:
             return 0.0, None
         price = self._read_spot_price_ex_vat(last)
         if price is None:
             return 0.0, None
-        return max(battery_discharge - household_consumption, 0.0), price
+        return kwh, price
 
     def _read_spot_price_ex_vat(self, when) -> float | None:
         """Issue #64: Strømligning's spot price without VAT (kr/kWh) for the
