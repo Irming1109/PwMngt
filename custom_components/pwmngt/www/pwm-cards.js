@@ -866,6 +866,24 @@ const PWM_BATTERY_CARD_STYLE = `
   ha-card {
     padding: 16px;
   }
+  .pwm-group {
+    background: var(--secondary-background-color);
+    border: 1px solid var(--divider-color);
+    border-radius: 12px;
+    padding: 10px;
+    margin-bottom: 10px;
+  }
+  .pwm-group:last-child,
+  .pwm-group > :last-child {
+    margin-bottom: 0;
+  }
+  .pwm-group .pwm-section-title {
+    margin-top: 0;
+  }
+  /* The buttons sit on the group's own background -- set them apart. */
+  .pwm-group .pwm-buttons button {
+    background: color-mix(in srgb, var(--primary-text-color) 6%, var(--secondary-background-color));
+  }
   .pwm-banner {
     padding: 12px;
     border-radius: 8px;
@@ -1095,18 +1113,26 @@ class PwMBatteryCard extends HTMLElement {
     const manualPct = manualMatch ? Number(manualMatch[1]) : null;
     const planned = status.state === "yes_today" || status.state === "yes_tomorrow";
 
+    // The card's four parts, each in its own rounded group: the status, the
+    // night charge, today's plan and the manual control. Empty groups are
+    // left out.
+    const statusGroup = this._group();
+    const nightGroup = this._group();
+    const todayGroup = this._group();
+    const manualGroup = this._group();
+
     // Issue #37: the charge watchdog -- the battery didn't follow a charge
     // command.
     const watchdog = status.attributes.charge_watchdog;
     if (watchdog && watchdog.failed) {
-      content.appendChild(this._banner("bad", t.chargeNotResponding));
+      statusGroup.appendChild(this._banner("bad", t.chargeNotResponding));
     } else if (watchdog && watchdog.retries > 0) {
-      content.appendChild(this._note(t.chargeRetry(watchdog.retries, watchdog.max_retries)));
+      statusGroup.appendChild(this._note(t.chargeRetry(watchdog.retries, watchdog.max_retries)));
     }
 
     // Banners -- same order and conditions as the Node-RED card.
     if (!isAuto) {
-      content.appendChild(this._banner("bad", t.manual));
+      statusGroup.appendChild(this._banner("bad", t.manual));
     } else if (chargingPct === null || !planned) {
       const key =
         status.state === "not_calculated" && pwmBatteryRecheckHours()
@@ -1114,30 +1140,30 @@ class PwMBatteryCard extends HTMLElement {
           : status.state;
       const text = t.status[key];
       if (text) {
-        content.appendChild(this._banner(PWM_BATTERY_STATUS_TONE[status.state], text));
+        statusGroup.appendChild(this._banner(PWM_BATTERY_STATUS_TONE[status.state], text));
       }
     }
     // Issue #43: what the decision is based on, and how far tonight's
     // charge goes (a partial charge leaves the rest to tomorrow's PV).
     if (isAuto) {
       for (const decision of this._decisionText(t, status)) {
-        content.appendChild(this._note(decision));
+        statusGroup.appendChild(this._note(decision));
       }
     }
 
     if (manualPct !== null) {
       if (chargingPct === null) {
-        content.appendChild(this._banner("warn", t.pausedByFuse(manualPct)));
+        statusGroup.appendChild(this._banner("warn", t.pausedByFuse(manualPct)));
       } else {
-        content.appendChild(this._banner("ok", t.manualCharging(chargingPct)));
+        statusGroup.appendChild(this._banner("ok", t.manualCharging(chargingPct)));
       }
-      content.appendChild(
+      statusGroup.appendChild(
         this._note(chargingPct !== null && chargingPct < manualPct ? t.reducedByFuse(manualPct) : t.manualRuns)
       );
     } else if (chargingPct !== null) {
-      content.appendChild(this._banner("ok", t.charging(chargingPct)));
+      statusGroup.appendChild(this._banner("ok", t.charging(chargingPct)));
       if (isAuto && status.state === "yes_today") {
-        content.appendChild(this._note(t.autoControls));
+        statusGroup.appendChild(this._note(t.autoControls));
       }
     }
 
@@ -1150,7 +1176,7 @@ class PwMBatteryCard extends HTMLElement {
         if (status.attributes[`hour_${hour}`] === true) plannedHours.push(hour);
       }
       this._hourTiles(
-        content,
+        nightGroup,
         t,
         plannedHours,
         status.attributes.skipped_hours || [],
@@ -1167,13 +1193,13 @@ class PwMBatteryCard extends HTMLElement {
         finished.getMinutes()).padStart(2, "0")}`;
       const target = Number.isFinite(Number(lastCharge.target)) && lastCharge.target !== null
         ? Math.round(Number(lastCharge.target)) : null;
-      content.appendChild(
+      nightGroup.appendChild(
         lastCharge.target_reached
           ? this._banner("ok", t.lastChargeDone(time, target))
           : this._banner("warn", t.lastChargeStopped(time))
       );
       this._hourTiles(
-        content,
+        nightGroup,
         t,
         lastCharge.hours || [],
         lastCharge.skipped_hours || [],
@@ -1185,13 +1211,13 @@ class PwMBatteryCard extends HTMLElement {
     // Issues #59/#61: today's day plan, while hours of it are still ahead.
     const dayPlan = this._dayPlanToday();
     if (isAuto && dayPlan) {
-      content.appendChild(this._banner("ok", t.dayPlanToday(pwmHourRanges(dayPlan.hours), dayPlan.reserve)));
-      if (dayPlan.source === "today") content.appendChild(this._note(t.dayPlanFromToday));
+      todayGroup.appendChild(this._banner("ok", t.dayPlanToday(pwmHourRanges(dayPlan.hours), dayPlan.reserve)));
+      if (dayPlan.source === "today") todayGroup.appendChild(this._note(t.dayPlanFromToday));
     }
     // Issue #64: selling now, or today's sale hours still ahead.
     const sale = this._saleToday();
     if (isAuto && sale) {
-      content.appendChild(
+      todayGroup.appendChild(
         this._banner("ok", sale.selling ? t.sellingNow : t.saleToday(pwmHourRanges(sale.hours)))
       );
     }
@@ -1200,7 +1226,7 @@ class PwMBatteryCard extends HTMLElement {
     const title = document.createElement("div");
     title.className = "pwm-section-title";
     title.textContent = t.manualTitle;
-    content.appendChild(title);
+    manualGroup.appendChild(title);
 
     const buttons = document.createElement("div");
     buttons.className = "pwm-buttons";
@@ -1228,7 +1254,7 @@ class PwMBatteryCard extends HTMLElement {
     } else {
       buttons.appendChild(this._button(t.enableAuto, () => this._setMode("auto")));
     }
-    content.appendChild(buttons);
+    manualGroup.appendChild(buttons);
 
     // SoC while charging (Node-RED: the gauge under "Lad nu").
     const soc = this._state("soc");
@@ -1250,8 +1276,18 @@ class PwMBatteryCard extends HTMLElement {
       fill.style.width = `${Math.min(Math.max(socValue, 0), 100)}%`;
       bar.appendChild(fill);
       wrap.append(label, bar);
-      content.appendChild(wrap);
+      manualGroup.appendChild(wrap);
     }
+
+    for (const group of [statusGroup, nightGroup, todayGroup, manualGroup]) {
+      if (group.childElementCount) content.appendChild(group);
+    }
+  }
+
+  _group() {
+    const group = document.createElement("div");
+    group.className = "pwm-group";
+    return group;
   }
 
   _banner(tone, text) {
