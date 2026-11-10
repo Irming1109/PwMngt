@@ -446,6 +446,10 @@ class BatteryLedger:
     day_plan_hours: list[int] = field(default_factory=list)
     day_plan_reserve: float | None = None
     day_plan_from_charge: bool = False
+    # Issue #67: the level the day plan lets the battery down to in this
+    # hour, held exactly on a Kostal (kostal_lock()) -- the step of 10
+    # below it would give the evening's reserve away. None outside them.
+    plan_lock: float | None = None
     # Issue #64: today's sale plan, remembered for the day, whether the
     # battery sells right now (this module set discharge_now_100), and the
     # floor it sells down to (held exactly on a Kostal, kostal_lock()).
@@ -498,6 +502,7 @@ class BatteryLedger:
             "sale_floors": list(self.sale_floors),
             "selling": self.selling,
             "sale_lock": self.sale_lock,
+            "plan_lock": self.plan_lock,
             "sale_target": self.sale_target,
             "sale_done_hour": self.sale_done_hour,
             "sale_kwh": dict(self.sale_kwh),
@@ -534,6 +539,7 @@ class BatteryLedger:
             sale_floors=[float(v) for v in restored.get("sale_floors") or []],
             selling=bool(restored.get("selling")),
             sale_lock=restored.get("sale_lock"),
+            plan_lock=restored.get("plan_lock"),
             sale_target=restored.get("sale_target"),
             sale_done_hour=restored.get("sale_done_hour"),
             sale_kwh={str(k): float(v) for k, v in (restored.get("sale_kwh") or {}).items()},
@@ -823,9 +829,12 @@ def add_sale_export(
 def kostal_lock(ledger: "BatteryLedger") -> float | None:
     """The level kostal_min_soc_step() holds exactly: the higher of the
     charge lock (#45) and the car lock (#33), or None -- issue #64: while
-    the battery sells, its floor alone."""
+    the battery sells, its floor alone; issue #67: in a day-plan hour, the
+    level the plan lets it down to."""
     if ledger.selling and ledger.sale_lock is not None:
         return ledger.sale_lock
+    if ledger.plan_lock is not None:
+        return ledger.plan_lock
     locks = [v for v in (ledger.charge_lock, ledger.car_lock) if v is not None]
     return max(locks) if locks else None
 
@@ -1134,6 +1143,10 @@ def calculate_battery_data(
             float(inputs.day_plan_reserve),
             inputs.day_plan_from_charge,
         )
+    # True when the day plan or a sale lets the battery below the SoC on
+    # purpose -- it ends the charge lock below (issue #67).
+    released = False
+    plan_lock = None
     if (
         day_plan_reserve is not None
         and hour in day_plan_hours
@@ -1143,6 +1156,8 @@ def calculate_battery_data(
     ):
         min_soc = max(empty_soc, min(day_plan_reserve, soc))
         target_floor_date, target_floor = None, None
+        released = True
+        plan_lock = min_soc
 
     # ---- Sale hours (issue #64) ------------------------------------------
     selling = False
@@ -1153,6 +1168,7 @@ def calculate_battery_data(
         floor = max(empty_soc, sale_floors[sale_hours.index(hour)])
         min_soc = max(empty_soc, min(floor, soc))
         target_floor_date, target_floor = None, None
+        released = True
         selling = soc > floor and sale_done_hour != hour
         if previous.selling and not selling:
             sale_done_hour = hour
@@ -1173,9 +1189,17 @@ def calculate_battery_data(
     # Taken when a charge_now_* command stops while the protection after
     # the grid charge holds -- the level that part of the charge reached.
     # A later block (say 02-04, then 11-12) takes it again at its own end.
-    # Cleared when the protection ends.
+    # Cleared when the protection ends -- and issue #67 (Kasper
+    # 2026-11-10): when the day plan or a sale lets the battery below it.
+    # The lock has done its job then; kept, it passed every point of the
+    # SoC below it through (min(lock, min_soc) in kostal_min_soc_step()):
+    # 82, 83, 84 ... one EEPROM write each, after a 93 % charge and a day
+    # plan down to 35. Not cleared when min_soc merely dips below it -- a
+    # point of noise would step the battery down to the 10 below (#45).
     charge_lock_date, charge_lock = previous.charge_lock_date, previous.charge_lock
     if not target_protection_active or charge_lock_date != today:
+        charge_lock_date, charge_lock = None, None
+    if released and charge_lock is not None and min_soc_rounded < charge_lock:
         charge_lock_date, charge_lock = None, None
     if target_protection_active and previous.charging_previous and not charging:
         charge_lock_date, charge_lock = today, float(min_soc_rounded)
@@ -1224,6 +1248,7 @@ def calculate_battery_data(
         sale_floors=sale_floors,
         selling=selling,
         sale_lock=sale_lock,
+        plan_lock=plan_lock,
         sale_target=sale_target,
         sale_done_hour=sale_done_hour,
         sale_kwh=sale_kwh,
