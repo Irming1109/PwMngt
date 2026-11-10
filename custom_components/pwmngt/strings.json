@@ -364,7 +364,11 @@
               "holding_at_limit": "Holding at the limit",
               "normal_operation": "Released (normal operation)",
               "blocking_charge": "Blocking charge - PV exported, battery not charging",
-              "blocking_charge_at_limit": "Blocking charge at the limit - battery idle"
+              "blocking_charge_at_limit": "Blocking charge at the limit - battery idle",
+              "covering_house_car_charging": "Car charging - battery covers the house only",
+              "car_charging_pv_to_car": "Car charging - PV to the house and the car",
+              "car_charging_pv_to_battery": "Car charging - PV surplus into the battery",
+              "car_charging_on_surplus": "Car charging on PV surplus - released"
             }
           },
           "target_power": {

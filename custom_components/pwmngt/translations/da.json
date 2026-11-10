@@ -350,7 +350,11 @@
               "holding_at_limit": "Lås ved grænsen",
               "normal_operation": "Frigivet (normal drift)",
               "blocking_charge": "Bloker ladning - PV ud, batteriet lader ikke",
-              "blocking_charge_at_limit": "Bloker ladning ved grænsen - batteriet i ro"
+              "blocking_charge_at_limit": "Bloker ladning ved grænsen - batteriet i ro",
+              "covering_house_car_charging": "Bil lader - batteriet dækker kun huset",
+              "car_charging_pv_to_car": "Bil lader - PV til huset og bilen",
+              "car_charging_pv_to_battery": "Bil lader - PV-overskud i batteriet",
+              "car_charging_on_surplus": "Bil lader på PV-overskud - frigivet"
             }
           },
           "target_power": {

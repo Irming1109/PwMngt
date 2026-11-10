@@ -40,7 +40,10 @@ up to the cooldown before the power follows.
 
 Car charging (issue #33, new in PwMngt -- the battery must never cover a
 car charge, any time of day, Claus 2026-11-04): while a charger charges a
-car (charger_properties.car_charging()) and SoC is above the limit, the
+car (charger_properties.car_charging()), SoC is above the limit and the
+battery has discharged for 80 s in a row (Claus 2026-11-10: a car charged
+on PV surplus mustn't lock the battery -- the battery covering it is what
+counts, whether the charge is manual or not), the
 hold is on with Battery hold power = max(House Consumption minus the car,
 PV minus the loss margin) -- PV goes to the house and the car, the battery
 covers at most the house's own deficit, the grid the rest. Behind today's
@@ -48,7 +51,9 @@ charge curve (battery_data's behind_charge_curve) the PV surplus charges
 the battery first: the power is the house without the car. At or below
 the limit the normal rules apply. The minimum switch time also
 applies here, so a car charge costs at most the hold's usual two EEPROM
-writes; following the car's power only moves the remote power. A charger
+writes per hold. The hold lets go again once PV has covered the house and
+the car with 300 W to spare for 2 minutes -- the surplus then charges the
+battery. Following the car's power only moves the remote power. A charger
 without a power sensor: the battery idles (0 W). A Kostal can't be steered
 like this -- data/battery_data.py holds its SoC instead.
 
@@ -239,6 +244,17 @@ _DISCHARGE_SECONDS_UNSTABLE = 6 * 60
 # New (issue #14): while waiting, SoC this many points below the limit
 # locks at once after all.
 _WAIT_MAX_POINTS_BELOW = 2
+# Issue #33 (Claus 2026-11-10): a car charging locks the battery only once
+# it has discharged this long in a row -- a car charged on PV surplus
+# doesn't need it. Growatt's Battery power comes every ~20 s, and the
+# chargers' surplus control steps the car up 1-2 kW at a time, which the
+# battery takes for one or two readings (25 of 51 discharges in 9 days
+# while a car charged were 40 s or less); 80 s is four readings.
+_CAR_DISCHARGE_SECONDS = 80
+# ... and the car's hold lets go again once PV has covered the house and
+# the car with this much to spare (W, exported) for this long.
+_CAR_RELEASE_SURPLUS_W = 300
+_CAR_RELEASE_SECONDS = 2 * 60
 
 _RUN_INTERVAL_SECONDS = 60  # Node-RED inject "1 Minut".
 # Issue #42: the house power is the median of this many House Consumption
@@ -277,6 +293,8 @@ _STANDBY_STATUSES = frozenset({STATUS_HARD_HOLD_LOW_PV, STATUS_CATCHING_UP})
 STATUS_COVERING_HOUSE_CAR_CHARGING = "covering_house_car_charging"
 STATUS_CAR_CHARGING_PV_TO_CAR = "car_charging_pv_to_car"
 STATUS_CAR_CHARGING_PV_TO_BATTERY = "car_charging_pv_to_battery"
+# Issue #33: the car charges on PV surplus -- the hold has let go.
+STATUS_CAR_CHARGING_ON_SURPLUS = "car_charging_on_surplus"
 
 PwM_BATTERY_HOLD_SENSORS: list[SensorEntityDescription] = [
     # New in PwMngt -- Node-RED wrote this straight to
@@ -371,6 +389,9 @@ class BatteryHoldState:
     # it was last learned.
     standby_w: float = _STANDBY_START_W
     last_standby_learn: float = 0.0
+    # Issue #33: since when PV has covered the house and the car with
+    # _CAR_RELEASE_SURPLUS_W to spare during a car's hold; 0 = not now.
+    car_surplus_start: float = 0.0
 
 
 @dataclass
@@ -638,10 +659,40 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
     # never covers the car (_car_target()). At or below the limit
     # the normal rules apply. Starting and stopping keep the minimum switch
     # time: they are the hold's only EEPROM writes.
-    car_cover = inputs.car_charging and soc > limit
+    # Issue #33 (Claus 2026-11-10): only once the battery has covered the
+    # car for _CAR_DISCHARGE_SECONDS (an active hold keeps covering) --
+    # behind the charge curve at once, so the surplus charges the battery.
+    car_cover = (
+        inputs.car_charging
+        and soc > limit
+        and (
+            active
+            or inputs.behind_charge_curve
+            or discharge_seconds >= _CAR_DISCHARGE_SECONDS
+        )
+    )
+    # ... and lets go again while PV covers the house and the car with
+    # room to spare -- the surplus then charges the battery.
+    car_surplus = (
+        car_cover
+        and active
+        and not inputs.behind_charge_curve
+        and max(0.0, pv_power - _block_margin(st, inputs, False)) - house_power
+        >= _CAR_RELEASE_SURPLUS_W
+    )
+    if not car_surplus:
+        st.car_surplus_start = 0.0
+    elif not st.car_surplus_start:
+        st.car_surplus_start = now
 
     if car_cover:
-        if active:
+        if car_surplus and now - st.car_surplus_start >= _CAR_RELEASE_SECONDS:
+            if switch_ok:
+                should_hold = False
+                status = STATUS_CAR_CHARGING_ON_SURPLUS
+            else:
+                status = STATUS_WAITING_MIN_SWITCH_TIME
+        elif active:
             should_hold = True
         elif switch_ok:
             should_hold = True
@@ -711,6 +762,7 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
             st, COMMAND_HOLD, STATUS_HOLD_STARTED, True, _start_power(st, target, inputs)
         )
     if not should_hold and active:
+        st.car_surplus_start = 0.0
         st.holding = False
         st.power_w = 0.0
         st.last_write = now
@@ -719,6 +771,8 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
 
     st.holding = active
     if not active:
+        if status is None and inputs.car_charging and soc > limit:
+            status = STATUS_CAR_CHARGING_ON_SURPLUS
         return BatteryHoldResult(st, None, status or STATUS_NORMAL_OPERATION, active, None)
 
     # The power while the hold is active.
@@ -769,6 +823,7 @@ class PwMngtBatteryHoldStoredData(ExtraStoredData):
                 last_block_correction=float(restored.get("last_block_correction") or 0.0),
                 standby_w=float(restored.get("standby_w") or _STANDBY_START_W),
                 last_standby_learn=float(restored.get("last_standby_learn") or 0.0),
+                car_surplus_start=float(restored.get("car_surplus_start") or 0.0),
             )
         )
 

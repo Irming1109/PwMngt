@@ -91,7 +91,10 @@ Deliberate differences from Node-RED:
   any time of day, found from the chargers' own power sensors
   (properties/charger_properties.py) -- PwMngt's charger State sensors
   aren't set by anything yet. Not on a Growatt: there data/battery_hold.py
-  lets the battery cover the house without the car instead.
+  lets the battery cover the house without the car instead. Only once the
+  battery has discharged for 80 s in a row while the car charges (Claus
+  2026-11-10): a car charged on PV surplus doesn't lock it; the lock then
+  stays until the car stops (PV still charges the battery under it).
 
 - DIFF (issue #59, Claus 2026-11-09): in today's daytime hours the night
   charge also covered (data/battery_charge_decision.py: day_hours,
@@ -267,6 +270,15 @@ _CAR_POWER_UNAVAILABLE_HOLD = timedelta(minutes=10)
 # mid-session (Kasper, 2026-11-07: 90 s), and each unlock/relock is an
 # inverter write.
 _CAR_PAUSE_HOLD = timedelta(minutes=3)
+# Issue #33 (Claus 2026-11-10): a car charging locks the battery only once
+# it has discharged (Battery power above _CAR_DISCHARGE_W) this long in a
+# row -- a car charged on PV surplus doesn't need it, and the chargers'
+# surplus control steps the car up 1-2 kW at a time, which the battery
+# takes for a reading or two. The same 80 s as data/battery_hold.py.
+_CAR_DISCHARGE_W = 100.0
+_CAR_DISCHARGE_HOLD = timedelta(seconds=80)
+# How often Battery power is looked at while a car charges unlocked.
+_CAR_DISCHARGE_POLL_SECONDS = 20
 # Battery command (select.py, "battery_command") that pauses charging.
 # Old: "Bloker ladning". Node-RED also checked "Bloker batteri", which
 # PwMngt doesn't offer (removed, issue #29).
@@ -1311,6 +1323,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         # kept (issue #33), or None; and the cancel callback of the re-check
         # when that grace runs out.
         self._car_stopped_since: datetime | None = None
+        self._car_discharge_since: datetime | None = None
         self._car_recheck: Any = None
         # Issue #64: the sale meter -- the last sample (time, W) and the
         # cancel callback of its timer, which only runs while selling.
@@ -1467,11 +1480,13 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         if battery_hold_supported(self.hass):
             return False
         car = charger_properties.car_charging(self.hass, self._entry)
-        if car.charging or not self._last_car_charging_lock:
+        now = dt_util.utcnow()
+        if not self._last_car_charging_lock:
+            return self._car_discharge_lock(car.charging, now)
+        if car.charging:
             self._car_stopped_since = None
             self._cancel_car_recheck()
-            return car.charging
-        now = dt_util.utcnow()
+            return True
         if self._car_stopped_since is None:
             self._car_stopped_since = now
         hold = _CAR_POWER_UNAVAILABLE_HOLD if car.power_unavailable else _CAR_PAUSE_HOLD
@@ -1483,6 +1498,30 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             )
             return True
         self._car_stopped_since = None
+        return False
+
+    def _car_discharge_lock(self, car_charging: bool, now: datetime) -> bool:
+        """Issue #33 (Claus 2026-11-10): whether a car charging, not yet
+        locked, locks now -- once the battery has discharged for
+        _CAR_DISCHARGE_HOLD in a row. Looked at again every
+        _CAR_DISCHARGE_POLL_SECONDS while the car charges."""
+        self._car_stopped_since = None
+        self._cancel_car_recheck()
+        power = self._read_power(ENTITY_KEY_BATTERY_POWER) if car_charging else None
+        if power is None or power <= _CAR_DISCHARGE_W:
+            self._car_discharge_since = None
+        elif self._car_discharge_since is None:
+            self._car_discharge_since = now
+        if (
+            self._car_discharge_since is not None
+            and now - self._car_discharge_since >= _CAR_DISCHARGE_HOLD
+        ):
+            self._car_discharge_since = None
+            return True
+        if car_charging:
+            self._car_recheck = event.async_call_later(
+                self.hass, _CAR_DISCHARGE_POLL_SECONDS, self._handle_car_recheck
+            )
         return False
 
     @callback
