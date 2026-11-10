@@ -129,7 +129,9 @@ Deliberate differences from Node-RED:
   the SoC is above it -- back to "internal" when the floor or the end of
   the hour is reached. Only a discharge_now_100 this module set is taken
   back. Not while a car charges, a grid charge runs or the battery mode is
-  manual. The inverter translators (Node-RED) carry it out.
+  manual. The inverter translators (Node-RED) carry it out. The night
+  charge for a sale goes above battery_nightly_target (charge_target);
+  that level is the target until the last sale hour (effective_target()).
 
 Triggers (same as Node-RED, see PwMngtBatteryDataSensor): Battery SoC
 changes, Battery nightly target changes (only 00:01-16:59), target end
@@ -386,6 +388,8 @@ class BatteryInputs:
     # not known now.
     sale_hours: list[int] | None = None
     sale_floors: list[float] | None = None
+    # The charge decision's charge_target, when it includes a sale.
+    sale_target: float | None = None
     # The SoC the battery is discharged to (pv_properties.battery_min_soc(),
     # Node-RED: a fixed 5) -- the lowest min_soc, the charge curve's 09:00
     # start, and "battery empty" for the ledger.
@@ -446,6 +450,14 @@ class BatteryLedger:
     sale_floors: list[float] = field(default_factory=list)
     selling: bool = False
     sale_lock: float | None = None
+    # Tonight's charge target with the sale's extra charge (above the
+    # battery_nightly_target) -- held as target until the last sale hour,
+    # effective_target().
+    sale_target: float | None = None
+    # The sale hour whose sale has reached its floor -- it doesn't start
+    # again that hour when the battery hold lifts the SoC a point (Claus
+    # 2026-11-10: 08:08 floor reached, 08:40 a 26 s sale again).
+    sale_done_hour: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -477,6 +489,8 @@ class BatteryLedger:
             "sale_floors": list(self.sale_floors),
             "selling": self.selling,
             "sale_lock": self.sale_lock,
+            "sale_target": self.sale_target,
+            "sale_done_hour": self.sale_done_hour,
         }
 
     @classmethod
@@ -510,6 +524,8 @@ class BatteryLedger:
             sale_floors=[float(v) for v in restored.get("sale_floors") or []],
             selling=bool(restored.get("selling")),
             sale_lock=restored.get("sale_lock"),
+            sale_target=restored.get("sale_target"),
+            sale_done_hour=restored.get("sale_done_hour"),
         )
 
 
@@ -755,6 +771,22 @@ def _float_or_none(value: Any) -> float | None:
         return None
 
 
+def effective_target(target: float, ledger: "BatteryLedger", now: datetime) -> float:
+    """Issue #64 (Claus 2026-11-10): the night charge for a sale goes above
+    battery_nightly_target -- that higher level is the target (the cap on
+    min_soc, the protection of grid power, the Kostal steps) from the
+    charge until the last sale hour, so the extra charge isn't held back
+    or used by the house before it is sold."""
+    if (
+        ledger.sale_target is None
+        or ledger.sale_date != now.date().isoformat()
+        or not ledger.sale_hours
+        or now.hour > max(ledger.sale_hours)
+    ):
+        return target
+    return max(target, ledger.sale_target)
+
+
 def kostal_lock(ledger: "BatteryLedger") -> float | None:
     """The level kostal_min_soc_step() holds exactly: the higher of the
     charge lock (#45) and the car lock (#33), or None -- issue #64: while
@@ -782,7 +814,32 @@ def calculate_battery_data(
     minute = _js_round(inputs.now.minute / 15) * 15
     month = inputs.now.month  # 1-12 (Node-RED's getMonth() is 0-11)
     soc = inputs.battery_soc
-    target = inputs.target
+
+    # Issue #64: today's sale plan, remembered for the day -- read first,
+    # since a sale's extra charge raises the target (effective_target()).
+    today = inputs.now.date().isoformat()
+    sale_date = previous.sale_date
+    sale_hours = list(previous.sale_hours)
+    sale_floors = list(previous.sale_floors)
+    sale_target = previous.sale_target
+    if sale_date != today:
+        sale_date, sale_hours, sale_floors, sale_target = None, [], [], None
+    if (
+        inputs.sale_hours is not None
+        and inputs.sale_floors is not None
+        and len(inputs.sale_hours) == len(inputs.sale_floors)
+    ):
+        sale_date = today
+        sale_hours = [int(h) for h in inputs.sale_hours]
+        sale_floors = [float(v) for v in inputs.sale_floors]
+        sale_target = inputs.sale_target if sale_hours else None
+    target = effective_target(
+        inputs.target,
+        BatteryLedger(
+            sale_date=sale_date, sale_hours=sale_hours, sale_target=sale_target
+        ),
+        inputs.now,
+    )
     price = inputs.electricity_price
     now_minutes = hour * 60 + minute
 
@@ -1055,26 +1112,16 @@ def calculate_battery_data(
         target_floor_date, target_floor = None, None
 
     # ---- Sale hours (issue #64) ------------------------------------------
-    sale_date = previous.sale_date
-    sale_hours = list(previous.sale_hours)
-    sale_floors = list(previous.sale_floors)
-    if sale_date != today:
-        sale_date, sale_hours, sale_floors = None, [], []
-    if (
-        inputs.sale_hours is not None
-        and inputs.sale_floors is not None
-        and len(inputs.sale_hours) == len(inputs.sale_floors)
-    ):
-        sale_date = today
-        sale_hours = [int(h) for h in inputs.sale_hours]
-        sale_floors = [float(v) for v in inputs.sale_floors]
     selling = False
     sale_lock = None
+    sale_done_hour = previous.sale_done_hour if previous.sale_date == today else None
     if hour in sale_hours and not manual_charger_active and not charging:
         floor = max(empty_soc, sale_floors[sale_hours.index(hour)])
         min_soc = max(empty_soc, min(floor, soc))
         target_floor_date, target_floor = None, None
-        selling = soc > floor
+        selling = soc > floor and sale_done_hour != hour
+        if previous.selling and not selling:
+            sale_done_hour = hour
         sale_lock = floor if selling else None
 
     # An active charge_now_* command counts as forced grid charging too,
@@ -1143,6 +1190,8 @@ def calculate_battery_data(
         sale_floors=sale_floors,
         selling=selling,
         sale_lock=sale_lock,
+        sale_target=sale_target,
+        sale_done_hour=sale_done_hour,
     )
     return min_soc_rounded, ledger, forced_charge, behind_charge_curve
 
@@ -1494,7 +1543,10 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         calculated_min_soc = min_soc
         if pv_properties.inverter_type(self.hass, self._entry) == INVERTER_TYPE_KOSTAL:
             min_soc = kostal_min_soc_step(
-                min_soc, inputs.target, inputs.battery_min_soc, kostal_lock(ledger)
+                min_soc,
+                effective_target(inputs.target, ledger, inputs.now),
+                inputs.battery_min_soc,
+                kostal_lock(ledger),
             )
         self._attr_native_value = min_soc
         self._attr_extra_state_attributes = {
@@ -1539,16 +1591,25 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         self.async_write_ha_state()
 
         # Last: the select's state change re-triggers this sensor.
-        self._apply_sale_command(inputs.battery_command, was_selling, ledger.selling)
+        self._apply_sale_command(
+            inputs.battery_command, was_selling, ledger.selling, inputs.battery_soc, min_soc
+        )
 
-    def _apply_sale_command(self, command: str, was_selling: bool, selling: bool) -> None:
+    def _apply_sale_command(
+        self, command: str, was_selling: bool, selling: bool, soc: float, min_soc: float
+    ) -> None:
         """Issue #64: discharge_now_100 while the battery sells, "internal"
-        again once it stops -- only a discharge_now_100 set here is taken
-        back, and a grid charge or a manual command is never overruled."""
+        again once it stops -- or straight to the Growatt hold when it would
+        take over anyway (battery_hold.stop_command()). Only a
+        discharge_now_100 set here is taken back, and a grid charge or a
+        manual command is never overruled."""
         if selling and command != COMMAND_SELL and command not in _ACTIVE_CHARGE_COMMANDS:
             option = COMMAND_SELL
         elif not selling and was_selling and command == COMMAND_SELL:
-            option = _COMMAND_INTERNAL
+            # Imported here: battery_hold imports solar_data (see above).
+            from .battery_hold import stop_command
+
+            option = stop_command(self.hass, self._entry, soc, min_soc)
         else:
             return
         LOGGER.info("PwMngt: battery sale -> battery_command %s", option)
@@ -1569,6 +1630,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             return {
                 "sale_hours": [int(hour) for hour in hours],
                 "sale_floors": [float(floor) for floor in floors],
+                "sale_target": _float_or_none(state.attributes.get("charge_target")),
             }
         except (TypeError, ValueError):
             return {}

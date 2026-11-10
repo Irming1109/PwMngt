@@ -1027,6 +1027,20 @@ class PwMngtBatteryChargeLevelController:
             # Node-RED's "Lader vi ?" gate: only actually stop a charge
             # that's active -- see module docstring.
             return
+        if result == _COMMAND_INTERNAL:
+            # Issue #64 (Claus 2026-11-10): straight to the Growatt hold when
+            # it would take over anyway -- one EEPROM write instead of two.
+            # Imported here: battery_hold imports solar_data, like in
+            # battery_data.
+            from .battery_hold import stop_command
+
+            data_id = pv_properties.battery_data_entity_id(self.hass, self._entry)
+            result = stop_command(
+                self.hass,
+                self._entry,
+                self._read_soc(),
+                read_float_state(self.hass.states.get(data_id)) if data_id else None,
+            )
         self._send_battery_command(result)
 
     def _send_battery_command(self, option: str) -> None:
@@ -1159,11 +1173,14 @@ class PwMngtBatteryChargeLevelController:
             return None
         # Issue #43: tonight's grid charge goes to the charge decision's
         # charge_target (the part of target tomorrow's PV won't cover).
+        # Issue #64: not capped at target -- charge_target is only above it
+        # for a sale from the battery (and is itself capped at 95); the cap
+        # stopped Claus's charge at 47 instead of 55 on 2026-11-10.
         status_id = pv_properties.battery_charge_status_entity_id(self.hass, self._entry)
         status = self.hass.states.get(status_id) if status_id else None
         if status is not None and status.state == "yes_today":
             try:
-                return min(float(status.attributes["charge_target"]), target)
+                return float(status.attributes["charge_target"])
             except (KeyError, TypeError, ValueError):
                 pass
         return target

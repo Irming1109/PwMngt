@@ -131,6 +131,14 @@ rather than a discharge). The standby is learned from Battery power
 while PV is ~0 and the last write has settled. Only the power moves, so
 no EEPROM writes are added.
 
+Straight to the hold (issue #64, Claus 2026-11-10): a grid charge or a
+sale from the battery that ends at or below the limit sets
+"hold_min_soc" itself (stop_command()) instead of "internal" -- the hold
+then takes it over at once like a hold set by hand. One EEPROM write
+(discharge) instead of two (release, then discharge after the wait at
+the limit), and the battery doesn't cover the house below the limit
+during that wait.
+
 Triggers (as Node-RED): every minute, and whenever PV total, battery_data
 or battery_command changes -- plus battery_mode, for the manual pause.
 """
@@ -289,6 +297,42 @@ def battery_hold_supported(hass: HomeAssistant) -> bool:
     growatt_modbus, recognized by its "House Consumption" sensor (the
     hold needs it). Looked up by (platform, name), never by entity_id."""
     return find_entity_by_name(hass, GROWATT_MODBUS_PLATFORM, GROWATT_MODBUS_HOUSE_CONSUMPTION) is not None
+
+
+def hold_engages(limit: float, soc: float, winter: bool, grid_energy: bool) -> bool:
+    """Whether the hold has a limit to keep (the same rules as
+    calculate_battery_hold()) and SoC is at or below it."""
+    if limit <= _FLOOR_LIMIT:
+        return False
+    if winter and limit < _WINTER_MIN_LIMIT and not grid_energy:
+        return False
+    return soc <= limit
+
+
+def stop_command(
+    hass: HomeAssistant, entry: ConfigEntry, soc: float | None, limit: float | None
+) -> str:
+    """The command a grid charge or a sale ends with (Claus 2026-11-10):
+    "hold_min_soc" when the hold would take over anyway -- a Growatt, at
+    or below battery_data's minimum SoC -- otherwise "internal". Straight
+    to the hold is one EEPROM write in the translator (mode discharge)
+    instead of two (release, then discharge three minutes later, while
+    the battery covered the house below the limit)."""
+    if (
+        soc is None
+        or limit is None
+        or not battery_hold_supported(hass)
+        or pv_properties.is_battery_mode_manual(hass, entry)
+    ):
+        return _COMMAND_INTERNAL
+    entity_id = pv_properties.battery_data_entity_id(hass, entry)
+    state = hass.states.get(entity_id) if entity_id else None
+    try:
+        grid_energy = bool(state and float(state.attributes.get("soc_grid") or 0) > 0)
+    except (TypeError, ValueError):
+        grid_energy = False
+    winter = dt_util.now().month in _WINTER_MONTHS
+    return COMMAND_HOLD if hold_engages(limit, soc, winter, grid_energy) else _COMMAND_INTERNAL
 
 
 # ---------------------------------------------------------------------------
