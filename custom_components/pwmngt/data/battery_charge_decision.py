@@ -1015,10 +1015,12 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         self._tomorrow_entity_id = tomorrow_entity_id
 
         # Price-difference threshold change -- unconditional, window-gated
-        # (Node-RED: ha-select "PV batteri ladning pris difference").
+        # (Node-RED: ha-select "PV batteri ladning pris difference"). Issue
+        # #64: the sale threshold too, so a changed sale plan shows at once.
         unconditional_watched = []
         for entity_id in (
             pv_properties.battery_price_difference_entity_id(self.hass, self._entry),
+            pv_properties.battery_sell_price_difference_entity_id(self.hass, self._entry),
         ):
             if entity_id:
                 unconditional_watched.append(entity_id)
