@@ -449,6 +449,10 @@ class BatteryLedger:
     # Kostal holds exactly this while the car charges, see
     # kostal_min_soc_step(). None = no car charging.
     car_lock: float | None = None
+    # Issue #69: the SoC when the winter hold (07-16, outside the day plan
+    # and the sale hours) started -- a Kostal holds exactly this instead of
+    # the step of 10 below it, see kostal_min_soc_step(). None = no hold.
+    hold_lock: float | None = None
     # Issue #35: the date a charge_now_* command ran before 06:00 -- "the
     # night charge has started", see calculate_battery_data().
     night_charge_date: str | None = None
@@ -504,6 +508,7 @@ class BatteryLedger:
             "charge_lock": self.charge_lock,
             "charging_previous": self.charging_previous,
             "car_lock": self.car_lock,
+            "hold_lock": self.hold_lock,
             "night_charge_date": self.night_charge_date,
             "day_plan_date": self.day_plan_date,
             "day_plan_hours": list(self.day_plan_hours),
@@ -541,6 +546,7 @@ class BatteryLedger:
             charge_lock=restored.get("charge_lock"),
             charging_previous=bool(restored.get("charging_previous", False)),
             car_lock=restored.get("car_lock"),
+            hold_lock=restored.get("hold_lock"),
             night_charge_date=restored.get("night_charge_date"),
             day_plan_date=restored.get("day_plan_date"),
             day_plan_hours=[int(h) for h in restored.get("day_plan_hours") or []],
@@ -840,14 +846,17 @@ def add_sale_export(
 
 def kostal_lock(ledger: "BatteryLedger") -> float | None:
     """The level kostal_min_soc_step() holds exactly: the higher of the
-    charge lock (#45) and the car lock (#33), or None -- issue #64: while
+    charge lock (#45), the car lock (#33) and the hold lock (#69), or
+    None -- issue #64: while
     the battery sells, its floor alone; issue #67: in a day-plan hour, the
     level the plan lets it down to."""
     if ledger.selling and ledger.sale_lock is not None:
         return ledger.sale_lock
     if ledger.plan_lock is not None:
         return ledger.plan_lock
-    locks = [v for v in (ledger.charge_lock, ledger.car_lock) if v is not None]
+    locks = [
+        v for v in (ledger.charge_lock, ledger.car_lock, ledger.hold_lock) if v is not None
+    ]
     return max(locks) if locks else None
 
 
@@ -1225,6 +1234,26 @@ def calculate_battery_data(
             previous.car_lock if previous.car_lock is not None else float(min_soc_rounded)
         )
 
+    # ---- Hold lock (issue #69, see kostal_min_soc_step()) ---------------
+    # Kasper 2026-11-11: when the day plan's first block ended at 10:00,
+    # the winter hold set min_soc to the SoC (78), the step rounded it to
+    # 70, and the battery covered the house with what the plan kept for
+    # 13-16. A write is due anyway when the hold starts, so the SoC then is
+    # held exactly (Claus). Kept while the hold lasts -- PV lifting the SoC
+    # doesn't move it (no extra writes) -- cleared when the battery is let
+    # go (day plan, sale, 17:00, the night) or charges.
+    hold_lock = None
+    if (
+        vinter
+        and 7 <= hour <= 16
+        and not released
+        and not charging
+        and min_soc_rounded >= _js_round(soc)
+    ):
+        hold_lock = (
+            previous.hold_lock if previous.hold_lock is not None else float(min_soc_rounded)
+        )
+
     avg_cheapest_hours = (
         inputs.avg_cheapest_hours
         if inputs.avg_cheapest_hours is not None
@@ -1251,6 +1280,7 @@ def calculate_battery_data(
         charging_previous=charging,
         night_charge_date=night_charge_date,
         car_lock=car_lock,
+        hold_lock=hold_lock,
         day_plan_date=day_plan_date,
         day_plan_hours=day_plan_hours,
         day_plan_reserve=day_plan_reserve,
@@ -1662,6 +1692,8 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             "charge_lock": ledger.charge_lock,
             # Issue #33: the SoC a car charge started at, or None.
             "car_lock": ledger.car_lock,
+            # Issue #69: the SoC the winter hold started at, or None.
+            "hold_lock": ledger.hold_lock,
             "soc_grid": round(ledger.soc_grid, 2),
             "soc_pv": round(ledger.soc_pv, 2),
             "soc_cells": [round(v, 4) for v in ledger.soc_cells],
