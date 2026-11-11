@@ -754,6 +754,8 @@ const PWM_BATTERY_TEXTS = {
     surplusCovers: (target, kwh) =>
       `Tomorrow's PV surplus (${kwh}, cautious estimate) covers the target of ${target}%`,
     chargeCovers: (pct, hours) => `Charges to ${pct}% from the grid - enough for ${hours}`,
+    chargeWithPvCovers: (pct, kwh, hours) =>
+      `Charges to ${pct}% from the grid - together with tomorrow's PV (${kwh} surplus expected) it lasts until ${hours}`,
     dayHours: (kwh, hours, reserve) =>
       `Of which about ${kwh} for the daytime hours ${hours} - the battery keeps ${reserve}% for the evening`,
     dayPlanToday: (hours, reserve) =>
@@ -763,7 +765,10 @@ const PWM_BATTERY_TEXTS = {
       `Plus about ${kwh} for selling at ${hours} - expected profit about ${profit} kr`,
     saleToday: (hours) => `Today the battery sells at ${hours}`,
     sellingNow: "The battery is selling to the grid now",
-    pvFills: (kwh, target) => `Tomorrow's PV (${kwh} surplus expected) fills it up towards the target of ${target}%`,
+    pvFills: (target) => `Tomorrow's PV is expected to fill it up to the target of ${target}%`,
+    decimal: ".",
+    notHigher: (price) =>
+      `Not charged higher - only hours priced above ${price} kr/kWh (charge price + price difference) are worth charging for`,
     surplusCoversWorth: (hours, kwh) =>
       `Tomorrow's PV surplus (${kwh}, cautious estimate) covers ${hours}, the hours tonight's charge would cover`,
     manualTitle: "Manual battery control",
@@ -815,6 +820,8 @@ const PWM_BATTERY_TEXTS = {
     surplusCovers: (target, kwh) =>
       `Forventet sol-overskud i morgen (${kwh}, forsigtigt skøn) dækker target ${target} %`,
     chargeCovers: (pct, hours) => `Lades til ${pct} % fra nettet - nok til kl. ${hours}`,
+    chargeWithPvCovers: (pct, kwh, hours) =>
+      `Lades til ${pct} % fra nettet - sammen med solen i morgen (forventet ${kwh} overskud) rækker det til kl. ${hours}`,
     dayHours: (kwh, hours, reserve) =>
       `Heraf ca. ${kwh} til dagtimerne kl. ${hours} - batteriet gemmer ${reserve} % til aftenen`,
     dayPlanToday: (hours, reserve) =>
@@ -824,7 +831,10 @@ const PWM_BATTERY_TEXTS = {
       `Plus ca. ${kwh} til salg kl. ${hours} - forventet gevinst ca. ${profit} kr`,
     saleToday: (hours) => `I dag sælger batteriet kl. ${hours}`,
     sellingNow: "Batteriet sælger til nettet nu",
-    pvFills: (kwh, target) => `Solen i morgen (forventet ${kwh} overskud) fylder op mod target ${target} %`,
+    pvFills: (target) => `Solen i morgen forventes at fylde op til target ${target} %`,
+    decimal: ",",
+    notHigher: (price) =>
+      `Lades ikke højere - kun timer med pris over ${price} kr/kWh (ladepris + prisforskel) er værd at lade til`,
     surplusCoversWorth: (hours, kwh) =>
       `Forventet sol-overskud i morgen (${kwh}, forsigtigt skøn) dækker kl. ${hours}, de timer natladningen skulle dække`,
     manualTitle: "Manuel betjening af batteri",
@@ -1046,6 +1056,7 @@ class PwMBatteryCard extends HTMLElement {
       postpone: pwmFindEntityId(this._hass, "pv", "button", "postpone_battery_charge"),
       soc: pwmFindEntityId(this._hass, "pv", "sensor", "battery_soc"),
       target: pwmFindEntityId(this._hass, "pv", "sensor", "battery_nightly_target"),
+      size: pwmFindEntityId(this._hass, "pv", "select", "battery_size"),
       // Issues #59/#61: today's day plan (day_plan_* attributes).
       data: pwmFindEntityId(this._hass, "pv", "sensor", "battery_data"),
     };
@@ -1346,8 +1357,11 @@ class PwMBatteryCard extends HTMLElement {
       const pct = Math.round(chargeTarget);
       const lines = [];
       if (hours) {
-        // Issue #50: the charge covers these hours; PV (if any) tops up.
-        lines.push(t.chargeCovers(pct, hours));
+        // Issue #50: the grid charge covers these hours -- together with
+        // tomorrow's expected PV surplus when there is one (#43 takes the
+        // surplus off the charge, so the grid share alone is not enough).
+        const withPv = surplus !== null && surplus >= 0.05;
+        lines.push(withPv ? t.chargeWithPvCovers(pct, kwh, hours) : t.chargeCovers(pct, hours));
         // Issue #59: and the expensive daytime hours, down to the evening
         // reserve.
         const dayHours = Array.isArray(status.attributes.day_hours) ? status.attributes.day_hours : [];
@@ -1356,8 +1370,21 @@ class PwMBatteryCard extends HTMLElement {
         if (dayHours.length && dayKwh !== null && reserve !== null) {
           lines.push(t.dayHours(t.kwh(dayKwh), pwmHourRanges(dayHours), Math.round(reserve)));
         }
-        if (surplus !== null && surplus >= 0.05 && target !== null && chargeTarget < target) {
-          lines.push(t.pvFills(kwh, Math.round(target)));
+        // Only when the grid charge plus the PV surplus actually reaches the
+        // target -- the evening-only charge usually stops well below it.
+        const sizeState = this._state("size");
+        const size = sizeState ? number(sizeState.state) : null;
+        if (target !== null && chargeTarget < target) {
+          const pvPct = withPv && size ? (surplus / size) * 100 : 0;
+          const breakEven = number(status.attributes.break_even_price);
+          if (chargeTarget + pvPct >= target) {
+            lines.push(t.pvFills(Math.round(target)));
+          } else if (breakEven !== null) {
+            // Why the battery is not charged further: only hours priced at
+            // or above the break-even pay the charge price plus the price
+            // difference (#50).
+            lines.push(t.notHigher(breakEven.toFixed(2).replace(".", t.decimal)));
+          }
         }
         this._pushSaleLine(t, status, lines);
         return lines;
