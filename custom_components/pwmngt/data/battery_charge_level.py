@@ -752,7 +752,10 @@ class PwMngtBatteryChargeLevelController:
         self._mark_night_hour(inputs.current_hour, result, night_plan)
         if inputs.hour_is_cheap and not self._step_allowed(result):
             return
-        self._apply_result(result)
+        reached = (
+            inputs.battery_soc is not None and inputs.battery_soc >= battery_target
+        )
+        self._apply_result(result, reached_target=battery_target if reached else None)
 
     def _mark_night_hour(self, hour: int | None, result: str, night_plan: str | None) -> None:
         """Issue #24: tells battery_charge_status which planned night hour
@@ -1020,9 +1023,9 @@ class PwMngtBatteryChargeLevelController:
         async_dispatcher_send(
             self.hass, signal_battery_charge_target_reached(self._entry.entry_id)
         )
-        self._apply_result(_COMMAND_INTERNAL)
+        self._apply_result(_COMMAND_INTERNAL, reached_target=battery_target)
 
-    def _apply_result(self, result: str) -> None:
+    def _apply_result(self, result: str, reached_target: float | None = None) -> None:
         if result == _COMMAND_INTERNAL and not currently_charging(self._read_battery_command()):
             # Node-RED's "Lader vi ?" gate: only actually stop a charge
             # that's active -- see module docstring.
@@ -1035,12 +1038,17 @@ class PwMngtBatteryChargeLevelController:
             from .battery_hold import stop_command
 
             data_id = pv_properties.battery_data_entity_id(self.hass, self._entry)
-            result = stop_command(
-                self.hass,
-                self._entry,
-                self._read_soc(),
-                read_float_state(self.hass.states.get(data_id)) if data_id else None,
-            )
+            soc = self._read_soc()
+            limit = read_float_state(self.hass.states.get(data_id)) if data_id else None
+            if reached_target is not None and soc is not None:
+                # The charge stopped at its target: battery_data's
+                # protection after a grid charge holds min(SoC, target), but
+                # runs on the same SoC change and may not have published it
+                # yet -- on 2026-11-11 it still read 49 when the SoC hit 50,
+                # so the charge went to "internal", and the hold followed
+                # 3.5 min (and 1 %) later.
+                limit = max(limit or 0.0, min(soc, reached_target))
+            result = stop_command(self.hass, self._entry, soc, limit)
         self._send_battery_command(result)
 
     def _send_battery_command(self, option: str) -> None:
