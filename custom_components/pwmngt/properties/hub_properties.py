@@ -131,6 +131,32 @@ def electricity_price(hass: HomeAssistant, entry: ConfigEntry) -> float | None:
     return base_price + surcharge
 
 
+def electricity_prices_tomorrow(
+    hass: HomeAssistant, entry: ConfigEntry, entity_id: str | None
+) -> dict[int, float]:
+    """Issue #71: tomorrow's real hourly prices (hour -> kr/kWh) from
+    Strømligning's "tomorrow" binary_sensor (entity_id), plus the same
+    surcharge as electricity_price(). Empty while the sensor is not "on" --
+    before ~13:00 it carries Strømligning's own forecast (forecast_data),
+    which no decision may be based on."""
+    state = hass.states.get(entity_id) if entity_id else None
+    if state is None or state.state != "on" or state.attributes.get("forecast_data"):
+        return {}
+    entries = state.attributes.get("prices")
+    if not isinstance(entries, list):
+        return {}
+    surcharge = entry.options.get(CONF_ELECTRICITY_PRICE_SURCHARGE, 0.0) or 0.0
+    prices: dict[int, float] = {}
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        try:
+            prices[int(str(item.get("start") or "")[11:13])] = float(item["price"]) + surcharge
+        except (KeyError, TypeError, ValueError):
+            continue
+    return prices
+
+
 def electricity_prices_today(hass: HomeAssistant, entry: ConfigEntry, today: str) -> dict[int, float]:
     """Issue #61: today's hourly prices (hour -> kr/kWh) from the same
     entity as electricity_price() -- its "prices" attribute (Strømligning:

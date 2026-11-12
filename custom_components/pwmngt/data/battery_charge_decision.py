@@ -405,7 +405,7 @@ def signal_battery_charge_target_reached(entry_id: str) -> str:
     return f"{DOMAIN}_{entry_id}_battery_charge_target_reached"
 
 
-def _auto_detect_tomorrow_prices_entity_id(
+def auto_detect_tomorrow_prices_entity_id(
     hass: HomeAssistant, translation_key: str = _STROMLIGNING_TOMORROW_TRANSLATION_KEY
 ) -> str | None:
     """Find the single Strømligning entity exposing tomorrow's prices
@@ -1016,7 +1016,7 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             )
         )
 
-        tomorrow_entity_id = _auto_detect_tomorrow_prices_entity_id(self.hass)
+        tomorrow_entity_id = auto_detect_tomorrow_prices_entity_id(self.hass)
         if not tomorrow_entity_id:
             LOGGER.warning(
                 "PwMngt: could not find the Strømligning 'tomorrow prices' "
@@ -1451,7 +1451,7 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         """Issue #64: Strømligning's spot prices without VAT for tomorrow
         (kr/kWh, hour 0-23), or None. Only while the sensor is "on" -- an
         "off" one carries forecast prices (Strømligning, 2026-11)."""
-        entity_id = _auto_detect_tomorrow_prices_entity_id(
+        entity_id = auto_detect_tomorrow_prices_entity_id(
             self.hass, _STROMLIGNING_TOMORROW_SPOT_EX_VAT_TRANSLATION_KEY
         )
         state = self.hass.states.get(entity_id) if entity_id else None

@@ -766,6 +766,13 @@ const PWM_BATTERY_TEXTS = {
     saleTonight: (kwh, hours, profit) =>
       `Plus about ${kwh} for selling at ${hours} - expected profit about ${profit} kr`,
     saleToday: (hours) => `Today the battery sells at ${hours}`,
+    pvRelease: (hours, floor) => `Today the battery uses solar power at ${hours} - down to ${floor}%`,
+    pvReleaseNote: (kwh, instead, gain) =>
+      `About ${kwh} that would otherwise be used at ${instead} - expected gain about ${gain} kr`,
+    pvKept: (kwh) =>
+      `Solar power above the evening reserve (about ${kwh}) is kept for later - today's remaining hours aren't dearer`,
+    pvNight: (hours) => `${hours} tonight`,
+    and: " and ",
     sellingNow: "The battery is selling to the grid now",
     pvFills: (target) => `Tomorrow's PV is expected to fill it up to the target of ${target}%`,
     decimal: ".",
@@ -834,6 +841,13 @@ const PWM_BATTERY_TEXTS = {
     saleTonight: (kwh, hours, profit) =>
       `Plus ca. ${kwh} til salg kl. ${hours} - forventet gevinst ca. ${profit} kr`,
     saleToday: (hours) => `I dag sælger batteriet kl. ${hours}`,
+    pvRelease: (hours, floor) => `I dag bruger batteriet solstrøm kl. ${hours} - ned til ${floor} %`,
+    pvReleaseNote: (kwh, instead, gain) =>
+      `Ca. ${kwh}, der ellers skulle bruges kl. ${instead} - forventet gevinst ca. ${gain} kr`,
+    pvKept: (kwh) =>
+      `Solstrøm over aftenreserven (ca. ${kwh}) gemmes til senere - dagens resterende timer er ikke dyrere`,
+    pvNight: (hours) => `${hours} i nat`,
+    and: " og ",
     sellingNow: "Batteriet sælger til nettet nu",
     pvFills: (target) => `Solen i morgen forventes at fylde op til target ${target} %`,
     decimal: ",",
@@ -1089,6 +1103,11 @@ class PwMBatteryCard extends HTMLElement {
             data.attributes.day_plan_source,
             data.attributes.sale_hours,
             data.attributes.selling,
+            // Issue #71.
+            data.attributes.pv_release_hours,
+            data.attributes.pv_release_floor,
+            data.attributes.pv_release_extra_kwh,
+            data.attributes.pv_release_with_tomorrow,
           ])
         : "-"
     );
@@ -1228,6 +1247,11 @@ class PwMBatteryCard extends HTMLElement {
     if (isAuto && dayPlan) {
       todayGroup.appendChild(this._banner("ok", t.dayPlanToday(pwmHourRanges(dayPlan.hours), dayPlan.reserve)));
       if (dayPlan.source === "today") todayGroup.appendChild(this._note(t.dayPlanFromToday));
+    }
+    // Issue #71: the PV energy above the evening reserve -- used in
+    // today's dearest hours, or why it is kept.
+    if (isAuto) {
+      for (const node of this._pvReleaseToday(t)) todayGroup.appendChild(node);
     }
     // Issue #64: selling now, or today's sale hours still ahead.
     const sale = this._saleToday();
@@ -1436,6 +1460,38 @@ class PwMBatteryCard extends HTMLElement {
     const selling = data.attributes.selling === true;
     if (!ahead.length && !selling) return null;
     return { hours: ahead, selling };
+  }
+
+  /**
+   * Issue #71: battery_data's plan for the PV energy above the evening
+   * reserve, as banner/notes -- empty when there is nothing to say.
+   */
+  _pvReleaseToday(t) {
+    const data = this._state("data");
+    if (!data) return [];
+    const a = data.attributes;
+    const now = new Date().getHours();
+    if (now >= 17) return [];
+    const hours = (Array.isArray(a.pv_release_hours) ? a.pv_release_hours : []).map(Number);
+    const ahead = hours.filter((hour) => hour >= now);
+    const nodes = [];
+    if (ahead.length) {
+      nodes.push(this._banner("ok", t.pvRelease(pwmHourRanges(ahead), Math.round(Number(a.pv_release_floor)))));
+      const instead = (Array.isArray(a.pv_release_instead_hours) ? a.pv_release_instead_hours : []).map(Number);
+      const evening = instead.filter((hour) => hour >= 12);
+      const night = instead.filter((hour) => hour < 12);
+      const parts = [];
+      if (evening.length) parts.push(pwmHourRanges(evening));
+      if (night.length) parts.push(t.pvNight(pwmHourRanges(night)));
+      nodes.push(
+        this._note(t.pvReleaseNote(t.kwh(Number(a.pv_release_kwh) || 0), parts.join(t.and), Math.round(Number(a.pv_release_gain) || 0)))
+      );
+    } else if (Number(a.pv_release_extra_kwh) >= 1) {
+      nodes.push(this._note(t.pvKept(t.kwh(Number(a.pv_release_extra_kwh)))));
+    } else {
+      return [];
+    }
+    return nodes;
   }
 
   /**

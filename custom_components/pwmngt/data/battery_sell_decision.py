@@ -193,7 +193,7 @@ def _auto_detect_spotprice_ex_vat_entity_id(hass: HomeAssistant) -> str | None:
     Only ever auto-detected -- there's no Options wizard field for this,
     see the module docstring. None unless exactly one match exists, same
     reasoning as data/battery_charge_decision.py's own
-    _auto_detect_tomorrow_prices_entity_id."""
+    auto_detect_tomorrow_prices_entity_id."""
     registry = er.async_get(hass)
     matches = [
         entry.entity_id

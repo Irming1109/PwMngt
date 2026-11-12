@@ -138,6 +138,13 @@ Deliberate differences from Node-RED:
   While selling, the export the battery delivers is metered every 30 s
   (sale_kwh per hour, read by data/savings_data.py at the hour's close).
 
+- NEW (issue #71, Claus 2026-11-12): the PV energy above the evening
+  reserve (17-21) is used in today's dearest known daytime hours when they
+  beat the hours after 21:00 it would otherwise cover (plan_pv_release()):
+  min_soc is the plan's floor in those hours (held exactly on a Kostal),
+  never below the reserve. Planned at 06:00, when tomorrow's real prices
+  arrive and when PV has added 1 kWh more -- not every run.
+
 Triggers (same as Node-RED, see PwMngtBatteryDataSensor): Battery SoC
 changes, Battery nightly target changes (only 00:01-16:59), target end
 time / battery command / either charger's state changes, every 15 min
@@ -149,7 +156,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -180,7 +187,11 @@ from ..devices import CHARGERS, pv_device_info
 from ..helpers.state_helper import read_float_state
 from ..properties import charger_properties, hub_properties, pv_properties
 from ..select import signal_set_battery_command
-from .battery_charge_decision import evening_hourly_need, worth_charging
+from .battery_charge_decision import (
+    auto_detect_tomorrow_prices_entity_id,
+    evening_hourly_need,
+    worth_charging,
+)
 from .solar_data import TARGET_MARGIN
 
 LOGGER = logging.getLogger(__name__)
@@ -257,6 +268,16 @@ _DEFAULT_PRICE_DIFFERENCE = 1.2
 _DAY_PLAN_FIRST_HOUR = 6
 _DAY_PLAN_END_HOUR = 17  # 06-16.
 _DAY_PLAN_EVENING_HOURS = range(17, 21)
+# Issue #71: the hours after the evening the extra energy would cover (the
+# night ones are tomorrow's), the least a daytime hour must save per kWh
+# (below it, a switch isn't worth it -- an EEPROM write on a Growatt, a
+# min_soc write on a Kostal), the least energy worth a release, and how
+# much more PV must be there before the plan is made again.
+_PV_RELEASE_LATE_HOURS = (21, 22, 23)
+_PV_RELEASE_NIGHT_HOURS = range(0, 6)
+_PV_RELEASE_MIN_GAIN = 0.10
+_PV_RELEASE_MIN_KWH = 1.0
+_PV_RELEASE_REPLAN_KWH = 1.0
 
 # Charger state (sensor.py, PwM_CHARGER_SENSORS "state") that stops the
 # house battery from discharging. Old: "Aktiv - manuel".
@@ -406,6 +427,8 @@ class BatteryInputs:
     sale_floors: list[float] | None = None
     # The charge decision's charge_target, when it includes a sale.
     sale_target: float | None = None
+    # Issue #71: prices and needs for plan_pv_release(); None = not known.
+    pv_release: "PvReleaseInputs | None" = None
     # The SoC the battery is discharged to (pv_properties.battery_min_soc(),
     # Node-RED: a fixed 5) -- the lowest min_soc, the charge curve's 09:00
     # start, and "battery empty" for the ledger.
@@ -487,6 +510,10 @@ class BatteryLedger:
     # counters can't tell it from the house's own use: on 2026-11-10 the
     # house bought 3 kWh in the sale hour, more than the 2.4 kWh discharge.
     sale_kwh: dict[str, float] = field(default_factory=dict)
+    # Issue #71: today's plan for the PV energy above the evening reserve
+    # (PvReleasePlan as a dict), remembered for the day.
+    pv_release_date: str | None = None
+    pv_release: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -523,6 +550,8 @@ class BatteryLedger:
             "sale_target": self.sale_target,
             "sale_done_hour": self.sale_done_hour,
             "sale_kwh": dict(self.sale_kwh),
+            "pv_release_date": self.pv_release_date,
+            "pv_release": dict(self.pv_release) if self.pv_release else None,
         }
 
     @classmethod
@@ -561,6 +590,8 @@ class BatteryLedger:
             sale_target=restored.get("sale_target"),
             sale_done_hour=restored.get("sale_done_hour"),
             sale_kwh={str(k): float(v) for k, v in (restored.get("sale_kwh") or {}).items()},
+            pv_release_date=restored.get("pv_release_date"),
+            pv_release=restored.get("pv_release") if isinstance(restored.get("pv_release"), dict) else None,
         )
 
 
@@ -764,6 +795,152 @@ def fallback_day_plan(
         battery_min_soc + math.ceil(covered_kwh * TARGET_MARGIN / battery_size * 100),
     )
     return day_hours, float(reserve)
+
+
+@dataclass
+class PvReleaseInputs:
+    """Issue #71: what plan_pv_release() needs besides the ledger -- read
+    by PwMngtBatteryDataSensor._read_pv_release()."""
+
+    prices_today: dict[int, float]
+    # Tomorrow's real prices; empty while only Strømligning's forecast is
+    # out (before ~13:00) -- those hours then don't count.
+    prices_tomorrow: dict[int, float]
+    # kWh the battery covers per hour 17-23 (evening_hourly_need()).
+    evening_need: dict[int, float]
+    # kWh per hour 00-05 the night after.
+    night_need_per_hour: float
+    # The house's average kWh per daytime hour (06-16).
+    day_need: dict[int, float]
+    battery_size: float
+
+
+@dataclass
+class PvReleasePlan:
+    """Issue #71: today's plan for the PV energy above the evening reserve."""
+
+    # The daytime hours the battery covers the house in, down to `floor`.
+    hours: list[int]
+    floor: float
+    # The kWh planned for them, and the later hours (time order; 0-5 = the
+    # night after) they would otherwise have covered.
+    kwh: float
+    instead_hours: list[int]
+    gain: float
+    # The evening reserve (SoC %) and the PV energy above it at planning.
+    reserve: float
+    extra_kwh: float
+    # Whether the night's real prices were known.
+    with_tomorrow: bool
+    # True when the battery would reach into the night, whose prices were
+    # not known yet -- compared with the evening hours instead.
+    night_unknown: bool
+
+
+def plan_pv_release(
+    soc: float,
+    soc_pv: float,
+    battery_min_soc: float,
+    hour: int,
+    excluded_hours: set[int],
+    data: PvReleaseInputs,
+) -> PvReleasePlan | None:
+    """Issue #71 (Claus 2026-11-12): use the PV energy above the evening
+    reserve in today's dearest known hours instead of saving it for after
+    21:00. The battery empties in time order after 17:00, so energy used
+    now is missing at the END of what it would have covered -- the last
+    hours reached, latest first. A daytime hour gets it while its price
+    beats that hour's by at least _PV_RELEASE_MIN_GAIN; the dearest
+    daytime hours go first. Only known prices: a night hour without
+    tomorrow's real price is skipped, so the comparison is with the evening
+    hours 21-23, which are dearer as a rule. The PV energy is free, so no
+    charge price or margin -- it just has to save the dearest purchase.
+    The daytime need is the house's average without PV (it can only make
+    the plan pick fewer, dearer hours); the floor keeps the reserve either
+    way. None when something needed is missing."""
+    size = data.battery_size
+    if size <= 0 or not data.evening_need:
+        return None
+    evening_kwh = sum(data.evening_need.get(h, 0.0) for h in _DAY_PLAN_EVENING_HOURS)
+    reserve = min(
+        float(_MIN_SOC_CEILING),
+        battery_min_soc + math.ceil(evening_kwh * TARGET_MARGIN / size * 100),
+    )
+    above_kwh = max(soc - reserve, 0.0) / 100 * size
+    extra_kwh = min(above_kwh, max(soc_pv, 0.0) / 100 * size)
+
+    # The later hours the energy above the reserve reaches, in time order.
+    later: list[tuple[int, float, float | None]] = []
+    left = above_kwh
+    for later_hour in _PV_RELEASE_LATE_HOURS:
+        need = data.evening_need.get(later_hour, 0.0)
+        if left <= 0 or need <= 0:
+            continue
+        later.append((later_hour, min(need, left), data.prices_today.get(later_hour)))
+        left -= need
+    if data.night_need_per_hour > 0:
+        for night_hour in _PV_RELEASE_NIGHT_HOURS:
+            if left <= 0:
+                break
+            later.append(
+                (night_hour, min(data.night_need_per_hour, left), data.prices_tomorrow.get(night_hour))
+            )
+            left -= data.night_need_per_hour
+    night_unknown = any(price is None for h, _kwh, price in later if h < _DAY_PLAN_FIRST_HOUR)
+    # Latest first, known prices only.
+    displaced = [[h, kwh, price] for h, kwh, price in reversed(later) if price is not None]
+
+    candidates = sorted(
+        (
+            (data.prices_today[h], h)
+            for h in range(max(hour, _DAY_PLAN_FIRST_HOUR), _DAY_PLAN_END_HOUR)
+            if h not in excluded_hours and h in data.prices_today and data.day_need.get(h, 0.0) > 0
+        ),
+        reverse=True,
+    )
+    remaining = extra_kwh
+    planned: dict[int, float] = {}
+    instead: set[int] = set()
+    gain = 0.0
+    stop = False
+    for price, day_hour in candidates:
+        room = data.day_need[day_hour]
+        while remaining > 0 and room > 0 and displaced:
+            later_hour, later_kwh, later_price = displaced[0]
+            if price - later_price < _PV_RELEASE_MIN_GAIN:
+                # The dearest daytime hour left can't beat it -- nor can
+                # any cheaper one.
+                stop = True
+                break
+            amount = min(remaining, room, later_kwh)
+            planned[day_hour] = planned.get(day_hour, 0.0) + amount
+            instead.add(later_hour)
+            gain += amount * (price - later_price)
+            remaining -= amount
+            room -= amount
+            displaced[0][1] -= amount
+            if displaced[0][1] <= 1e-9:
+                displaced.pop(0)
+        if stop or remaining <= 0 or not displaced:
+            break
+
+    kwh = sum(planned.values())
+    hours = sorted(planned)
+    if kwh < _PV_RELEASE_MIN_KWH:
+        hours, kwh, gain, instead = [], 0.0, 0.0, set()
+    floor = max(reserve, math.ceil(soc - kwh / size * 100)) if hours else reserve
+    order = [*_PV_RELEASE_LATE_HOURS, *_PV_RELEASE_NIGHT_HOURS]
+    return PvReleasePlan(
+        hours=hours,
+        floor=float(floor),
+        kwh=round(kwh, 2),
+        instead_hours=[h for h in order if h in instead],
+        gain=round(gain, 2),
+        reserve=float(reserve),
+        extra_kwh=round(extra_kwh, 2),
+        with_tomorrow=bool(data.prices_tomorrow),
+        night_unknown=night_unknown,
+    )
 
 
 def kostal_min_soc_step(
@@ -1180,6 +1357,45 @@ def calculate_battery_data(
         released = True
         plan_lock = min_soc
 
+    # ---- PV energy above the evening reserve (issue #71) ----------------
+    # Planned at few moments, not every run (Claus 2026-11-12): the first
+    # run of the day from 06:00, when tomorrow's real prices arrive, and
+    # when PV has added _PV_RELEASE_REPLAN_KWH more to share out. Hours of
+    # the day plan and the sale keep their own rules.
+    pv_release_date = previous.pv_release_date
+    pv_release = previous.pv_release if pv_release_date == today else None
+    if pv_release is None:
+        pv_release_date = None
+    if inputs.pv_release is not None and _DAY_PLAN_FIRST_HOUR <= hour < _DAY_PLAN_END_HOUR:
+        excluded = set(day_plan_hours) | set(sale_hours)
+        fresh = plan_pv_release(
+            soc,
+            sum(1 for v in cells if v == 0),
+            empty_soc,
+            hour,
+            excluded,
+            inputs.pv_release,
+        )
+        if fresh is not None and (
+            pv_release is None
+            or (fresh.with_tomorrow and not pv_release.get("with_tomorrow"))
+            or fresh.extra_kwh >= (pv_release.get("extra_kwh") or 0.0) + _PV_RELEASE_REPLAN_KWH
+        ):
+            pv_release_date, pv_release = today, asdict(fresh)
+    if (
+        pv_release is not None
+        and hour in (pv_release.get("hours") or [])
+        and hour not in day_plan_hours
+        and hour not in sale_hours
+        and not manual_charger_active
+        and not charging
+        and not charging_blocked
+    ):
+        min_soc = max(empty_soc, min(float(pv_release["floor"]), soc))
+        target_floor_date, target_floor = None, None
+        released = True
+        plan_lock = min_soc
+
     # ---- Sale hours (issue #64) ------------------------------------------
     selling = False
     sale_lock = None
@@ -1294,6 +1510,8 @@ def calculate_battery_data(
         sale_target=sale_target,
         sale_done_hour=sale_done_hour,
         sale_kwh=sale_kwh,
+        pv_release_date=pv_release_date,
+        pv_release=pv_release,
     )
     return min_soc_rounded, ledger, forced_charge, behind_charge_curve
 
@@ -1359,6 +1577,8 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         # cancel callback of its timer, which only runs while selling.
         self._sale_sample: tuple[datetime, float] | None = None
         self._sale_meter: Any = None
+        # Issue #71: Strømligning's "tomorrow" sensor, found on first use.
+        self._tomorrow_prices_entity_id: str | None = None
 
         if not self._soc_entity_id:
             LOGGER.warning(
@@ -1663,6 +1883,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             ),
             **self._read_day_plan(),
             **self._read_sale_plan(),
+            pv_release=self._read_pv_release(),
         )
 
         was_selling = self._ledger.selling
@@ -1724,6 +1945,19 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             "sale_floors": list(ledger.sale_floors),
             "selling": ledger.selling,
             "sale_kwh": {hour: round(kwh, 3) for hour, kwh in ledger.sale_kwh.items()},
+            # Issue #71: today's plan for the PV energy above the evening
+            # reserve -- the daytime hours it is used in and the floor, the
+            # kWh, the later hours it would otherwise have covered (time
+            # order, 0-5 = the night after), the expected gain (kr), the
+            # reserve and the PV energy above it, and whether the night's
+            # prices were known / the battery would reach an unknown night.
+            **{
+                f"pv_release_{key}": (ledger.pv_release or {}).get(key)
+                for key in (
+                    "hours", "floor", "kwh", "instead_hours", "gain",
+                    "reserve", "extra_kwh", "with_tomorrow", "night_unknown",
+                )
+            },
         }
         self._attr_available = True
         self.async_write_ha_state()
@@ -1890,6 +2124,63 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             return {}
         hours, reserve = plan
         return {"day_plan_hours": hours, "day_plan_reserve": reserve, "day_plan_from_charge": False}
+
+    def _read_pv_release(self) -> PvReleaseInputs | None:
+        """Issue #71: the inputs of plan_pv_release(), or None while the
+        battery size or today's prices are missing."""
+        battery_size = self._read_float_pv(pv_properties.battery_size_entity_id, 0.0)
+        now = dt_util.now()
+        prices_today = hub_properties.electricity_prices_today(
+            self.hass, self._entry, now.strftime("%Y-%m-%d")
+        )
+        if not battery_size or not prices_today:
+            return None
+        if self._tomorrow_prices_entity_id is None:
+            self._tomorrow_prices_entity_id = auto_detect_tomorrow_prices_entity_id(self.hass)
+        battery_min_soc = pv_properties.battery_min_soc(self.hass, self._entry)
+        consumption = self._attributes_of(pv_properties.consumption_data_entity_id)
+        solar = self._attributes_of(pv_properties.solar_data_entity_id)
+        night = _float_or_none(consumption.get("nighttime_average_adjusted")) or _float_or_none(
+            consumption.get("nighttime_average")
+        )
+        evening_need = evening_hourly_need(
+            night_consumption=night,
+            night_consumption_raw=_float_or_none(consumption.get("nighttime_average")),
+            evening_consumption=_float_or_none(consumption.get("evening_average")),
+            late_evening_consumption=_float_or_none(
+                consumption.get("late_evening_average_adjusted")
+            ) or _float_or_none(consumption.get("late_evening_average")),
+            pv_17_21=_float_or_none(solar.get("pv_forecast_17_21_today")),
+            battery_target=self._read_float_pv(
+                pv_properties.battery_nightly_target_entity_id, battery_min_soc
+            ),
+            battery_min_soc=battery_min_soc,
+            battery_size=battery_size,
+        )
+        # consumption_data's nighttime average covers 17-24 and 00-06: what
+        # 17-23 doesn't use is the night after midnight.
+        night_per_hour = (
+            max(night - sum(evening_need.values()), 0.0) / len(_PV_RELEASE_NIGHT_HOURS)
+            if night
+            else 0.0
+        )
+        day_need: dict[int, float] = {}
+        hourly = consumption.get("day_hourly_average_adjusted")
+        if isinstance(hourly, list):
+            for index, value in enumerate(hourly):
+                kwh = _float_or_none(value)
+                if kwh is not None:
+                    day_need[_DAY_PLAN_FIRST_HOUR + index] = kwh
+        return PvReleaseInputs(
+            prices_today=prices_today,
+            prices_tomorrow=hub_properties.electricity_prices_tomorrow(
+                self.hass, self._entry, self._tomorrow_prices_entity_id
+            ),
+            evening_need=evening_need,
+            night_need_per_hour=night_per_hour,
+            day_need=day_need,
+            battery_size=battery_size,
+        )
 
     def _attributes_of(self, lookup) -> dict[str, Any]:
         entity_id = lookup(self.hass, self._entry)
