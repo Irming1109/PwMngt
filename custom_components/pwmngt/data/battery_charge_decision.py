@@ -146,7 +146,8 @@ Deliberate differences from Node-RED (each marked "DIFF" below):
   select.<pv>_pv_battery_sell_price_difference above 0, tonight's charge
   also fills the room left above the house's own plan (up to 95 %) for
   selling in tomorrow's dear hours: an hour 06-22 counts when its sale
-  price (Strømligning's spot price without VAT) minus the charge price
+  price (Strømligning's sale price for surplus production, issue #72 --
+  hub_properties.sale_prices_tomorrow()) minus the charge price
   (the purchase price of the extra charge hours, incl. everything, plus
   _SALE_CHARGE_LOSS) is at least that threshold. The best hours first, each
   at most the battery's max power for an hour minus what the house takes
@@ -165,6 +166,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 from homeassistant.components.sensor import (
@@ -321,10 +323,9 @@ _DAY_CHARGE_CEILING = 95
 
 # Issue #64: the hours the battery may sell in (not 23, so a sale never
 # runs over midnight into the next day's books), the charge loss the sale
-# must pay for, and Strømligning's tomorrow spot price without VAT.
+# must pay for.
 _SALE_HOURS = range(6, 23)
 _SALE_CHARGE_LOSS = 0.10
-_STROMLIGNING_TOMORROW_SPOT_EX_VAT_TRANSLATION_KEY = "tomorrow_spotprice_ex_vat"
 
 # Triggers.
 _EVENING_WINDOW_START = (18, 0)
@@ -466,7 +467,7 @@ class BatteryChargeInputs:
     day_hourly_consumption: list[float | None] | None = None
     pv_hourly_tomorrow: list[float | None] | None = None
     pv_forecast_17_21_tomorrow: float | None = None
-    # Issue #64: tomorrow's sale prices (spot without VAT, kr/kWh, hour
+    # Issue #64/#72: tomorrow's sale prices (what a sold kWh earns, kr/kWh, hour
     # 0-23; None = unknown) and the sale threshold (kr/kWh, 0 = off).
     sale_prices_tomorrow: list[float] | None = None
     sale_price_difference: float = 0.0
@@ -1448,25 +1449,25 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             return None
 
     def _read_sale_prices_tomorrow(self) -> list[float] | None:
-        """Issue #64: Strømligning's spot prices without VAT for tomorrow
-        (kr/kWh, hour 0-23), or None. Only while the sensor is "on" -- an
-        "off" one carries forecast prices (Strømligning, 2026-11)."""
-        entity_id = auto_detect_tomorrow_prices_entity_id(
-            self.hass, _STROMLIGNING_TOMORROW_SPOT_EX_VAT_TRANSLATION_KEY
+        """Issue #64/#72: tomorrow's sale prices (kr/kWh, hour 0-23) from
+        hub_properties.sale_prices_tomorrow(), or None until tomorrow's
+        real prices are out."""
+        now = dt_util.now()
+        prices = hub_properties.sale_prices_tomorrow(
+            self.hass,
+            now.strftime("%Y-%m-%d"),
+            (now + timedelta(days=1)).strftime("%Y-%m-%d"),
         )
-        state = self.hass.states.get(entity_id) if entity_id else None
-        if state is None or state.state != "on":
+        if len(prices) < 23:
             return None
-        raw = state.attributes.get("prices")
-        if not isinstance(raw, list) or len(raw) < 23:
-            return None
-        try:
-            prices = [round(float(item["price"]), 2) for item in raw[:24]]
-        except (TypeError, KeyError, ValueError):
-            return None
-        if len(prices) == 23:
-            prices.append(prices[22])  # DST, as the purchase prices.
-        return prices
+        result: list[float] = []
+        for hour in range(24):
+            # A DST day has 23 hours: the missing one takes the hour before.
+            price = prices.get(hour, result[-1] if result else prices.get(hour + 1))
+            if price is None:
+                return None
+            result.append(round(price, 2))
+        return result
 
     def _read_consumption_daytime_adjusted(self) -> float | None:
         return self._read_consumption("daytime_average_adjusted")

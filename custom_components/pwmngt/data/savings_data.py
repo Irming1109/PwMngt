@@ -162,7 +162,6 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     CONF_ENTITY_MAP,
-    DEPENDENCY_STROMLIGNING,
     DOMAIN,
     ENTITY_KEY_BATTERY_DISCHARGE_HOURLY,
     ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY,
@@ -340,10 +339,6 @@ ADJUSTABLE_SAVINGS_TOTALS: dict[str, tuple[str, str]] = {
 }
 
 
-# Issue #64: Strømligning's spot price without VAT (today's "prices").
-_STROMLIGNING_SPOT_EX_VAT_TRANSLATION_KEY = "spotprice_ex_vat"
-
-
 def signal_savings_update(entry_id: str) -> str:
     """Dispatcher signal PwMngtSavingsDataSensor sends after every +75 s
     run -- the two headline sensors listen and update themselves. Payload:
@@ -404,7 +399,7 @@ class BatteryGridBalanceState:
     hour_grid_charge_kwh: float = 0.0
     hour_discharge_from_grid_kwh: float = 0.0
     # Issue #64: the battery's grid power sold in its sale hours -- kWh
-    # and revenue (kr, spot without VAT), running totals for display.
+    # and revenue (kr, the sale price, issue #72), running totals for display.
     battery_sale_kwh: float = 0.0
     battery_sale_revenue: float = 0.0
 
@@ -701,7 +696,7 @@ def calculate_battery_grid_balance(
     discharge from the battery -- the counter can't tell the house's part
     from a sale. Issue #64 (Claus 2026-11-09): in a sale hour the caller
     passes the kWh sold (the discharge beyond the house's consumption)
-    and the hour's sale price (spot without VAT); that part of the grid-
+    and the hour's sale price (what a sold kWh earns, issue #72); that part of the grid-
     share discharge is valued at the sale price instead of the purchase
     price, still into battery_charging_savings (the night charge it came
     from is booked there too), and kept out of the house's purchase
@@ -1304,33 +1299,11 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
             return 0.0, None
         if kwh <= 0:
             return 0.0, None
-        price = self._read_spot_price_ex_vat(last)
+        # Issue #72: what a sold kWh earned that hour.
+        price = hub_properties.sale_prices_today(self.hass, last.strftime("%Y-%m-%d")).get(last.hour)
         if price is None:
             return 0.0, None
         return kwh, price
-
-    def _read_spot_price_ex_vat(self, when) -> float | None:
-        """Issue #64: Strømligning's spot price without VAT (kr/kWh) for the
-        hour starting at `when`, from its "prices" attribute."""
-        registry = er.async_get(self.hass)
-        matches = [
-            entry.entity_id
-            for entry in registry.entities.values()
-            if entry.platform == DEPENDENCY_STROMLIGNING
-            and entry.translation_key == _STROMLIGNING_SPOT_EX_VAT_TRANSLATION_KEY
-        ]
-        state = self.hass.states.get(matches[0]) if len(matches) == 1 else None
-        prices = state.attributes.get("prices") if state is not None else None
-        if not isinstance(prices, list):
-            return None
-        for item in prices:
-            try:
-                start = dt_util.parse_datetime(str(item["start"]))
-                if start is not None and dt_util.as_local(start).replace(minute=0, second=0, microsecond=0) == when.replace(minute=0, second=0, microsecond=0):
-                    return float(item["price"])
-            except (TypeError, KeyError, ValueError):
-                continue
-        return None
 
     def _read_grid_charge_pct_cum(self) -> float | None:
         """Issue #55: battery_data's grid_opladning_pct_cum -- None while

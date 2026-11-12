@@ -107,21 +107,19 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import event
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 
 from ..const import (
     CONF_ENTITY_MAP,
-    DEPENDENCY_STROMLIGNING,
     ENTITY_KEY_BATTERY_SOC,
     ENTITY_KEY_PV_FORECAST_TODAY,
     ENTITY_KEY_SELL_FORCE_OVERRIDE,
     ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
 )
 from ..helpers.state_helper import read_float_state
-from ..properties import pv_properties
+from ..properties import hub_properties, pv_properties
 from ..select import (
     SELL_OVERRIDE_FORGET,
     SELL_OVERRIDE_RESTORE,
@@ -143,7 +141,10 @@ _SELL_WINDOW_END_HOUR = 12      # Node-RED: SALGSVINDUE_SLUT.
 _WINDOW_START_HOUR = 6          # Node-RED: iVinduet's own "hour >= 6".
 _CONSUMPTION_HOURS = 8          # Node-RED: FORBRUG_TIMER (the 8-16 window).
 _SAFETY = 0.6                   # Node-RED: SIKKERHED.
-_PRICE_FLOOR = 0.15             # Node-RED: PRIS_GULV. Hard-coded (Claus, 2026-10-15).
+# Node-RED: PRIS_GULV. Hard-coded (Claus, 2026-10-15). Issue #72: compared
+# with the sale price (what a sold kWh earns, hub_properties.
+# sale_prices_today()) -- Node-RED compared the raw spot price.
+_PRICE_FLOOR = 0.15
 _MIN_PRICE_DIFFERENCE = 0.30    # Node-RED: MIN_PRISFORSKEL. Hard-coded (Claus, 2026-10-15).
 _BATTERY_MAX_CHARGE_FALLBACK = 3000.0  # W, before the 0.75 utilization.
 _CHARGE_POWER_UTILIZATION = 0.75       # Node-RED comment: "max ladeeffekt sat til 75%".
@@ -160,16 +161,6 @@ _ACTIVE_CHARGE_COMMANDS = frozenset(
     {"charge_now_25", "charge_now_50", "charge_now_75", "charge_now_100"}
 )
 
-# Best-effort guess, NOT verified against a live Strømligning install --
-# same caveat as data/battery_charge_decision.py's own identical note on
-# _STROMLIGNING_TOMORROW_TRANSLATION_KEY. Modelled the same way that one
-# was: the confirmed "current_price_vat" translation_key matches its
-# entity_id's own tail 1:1, so sensor.stromligning_spotprice_ex_vat is
-# assumed to carry translation_key "spotprice_ex_vat". Confirm against
-# the entity registry on a real install and correct if wrong -- a wrong
-# guess here is harmless, auto-detect just finds zero matches (see
-# async_start's own warning).
-_STROMLIGNING_SPOTPRICE_EX_VAT_TRANSLATION_KEY = "spotprice_ex_vat"
 
 # Node-RED's fixed 30 s delay (both triggers feed the same delay node;
 # see module docstring on why overlapping triggers are coalesced here).
@@ -185,23 +176,6 @@ _FORECAST_TRIGGER_WINDOW_END = (21, 0)
 # Price-list attribute names Node-RED tried, in order, before falling
 # back to "the first list-shaped attribute that looks like one".
 _PRICE_ATTR_CANDIDATES = ("prices", "raw_today", "forecast", "today")
-
-
-def _auto_detect_spotprice_ex_vat_entity_id(hass: HomeAssistant) -> str | None:
-    """Find the single Strømligning entity exposing the ex-VAT spot
-    price (Node-RED: sensor.stromligning_spotprice_ex_vat, "spotpris").
-    Only ever auto-detected -- there's no Options wizard field for this,
-    see the module docstring. None unless exactly one match exists, same
-    reasoning as data/battery_charge_decision.py's own
-    auto_detect_tomorrow_prices_entity_id."""
-    registry = er.async_get(hass)
-    matches = [
-        entry.entity_id
-        for entry in registry.entities.values()
-        if entry.platform == DEPENDENCY_STROMLIGNING
-        and entry.translation_key == _STROMLIGNING_SPOTPRICE_EX_VAT_TRANSLATION_KEY
-    ]
-    return matches[0] if len(matches) == 1 else None
 
 
 def _parse_today_hourly_prices(attributes: dict[str, Any], today: str) -> dict[int, float]:
@@ -271,7 +245,7 @@ class BatterySellInputs:
     day_consumption_8_16: float
     battery_size: float
     battery_soc: float
-    spotprice_ex_vat: float
+    sale_price: float  # kr/kWh, issue #72. Node-RED: spotpris.
     override_active: bool  # Node-RED: lejere == "on".
     battery_target_end_time: str  # "13:30" or "16:45".
     battery_max_charge_raw: float | None  # W, before the 0.75 utilization.
@@ -336,7 +310,7 @@ def calculate_battery_sell_decision(inputs: BatterySellInputs) -> str | None:
         else None
     )
     price_attractive = (
-        inputs.spotprice_ex_vat > _PRICE_FLOOR
+        inputs.sale_price > _PRICE_FLOOR
         and price_difference is not None
         and price_difference >= _MIN_PRICE_DIFFERENCE
     )
@@ -370,7 +344,7 @@ def calculate_battery_sell_decision(inputs: BatterySellInputs) -> str | None:
     would_sell = False
     if sell_basis:
         if (
-            inputs.spotprice_ex_vat <= _PRICE_FLOOR
+            inputs.sale_price <= _PRICE_FLOOR
             and inputs.battery_command == _COMMAND_BLOCK_CHARGING
         ):
             # Node-RED: this branch only ever set prioriter_stuehus here
@@ -422,9 +396,6 @@ class PwMngtBatterySellDecisionController:
         self._forecast_today_entity_id = entity_map.get(ENTITY_KEY_PV_FORECAST_TODAY) or None
         self._price_entity_id = entity_map.get(ENTITY_KEY_SPOT_ELECTRICITY_PRICE) or None
         self._override_entity_id = entity_map.get(ENTITY_KEY_SELL_FORCE_OVERRIDE) or None
-        # Resolved in async_start, once the entity registry is actually
-        # populated -- see _auto_detect_spotprice_ex_vat_entity_id.
-        self._spotprice_ex_vat_entity_id: str | None = None
 
         self._unsubscribers: list = []
         self._pending_trigger_run: Any = None
@@ -465,16 +436,6 @@ class PwMngtBatterySellDecisionController:
                 )
             )
 
-        spotprice_entity_id = _auto_detect_spotprice_ex_vat_entity_id(self.hass)
-        if not spotprice_entity_id:
-            LOGGER.warning(
-                "PwMngt: could not find the Strømligning ex-VAT spot "
-                "price entity (looked for translation_key '%s') -- the "
-                "sell decision will treat the spot price as 0, which "
-                "keeps the price floor check from ever passing",
-                _STROMLIGNING_SPOTPRICE_EX_VAT_TRANSLATION_KEY,
-            )
-        self._spotprice_ex_vat_entity_id = spotprice_entity_id
 
     @callback
     def async_stop(self) -> None:
@@ -579,8 +540,8 @@ class PwMngtBatterySellDecisionController:
         # every hour here comes from this same entity's own hourly-price
         # attribute, and the only uses below are now_price - afternoon_price
         # (a difference between two of this dict's own entries) and
-        # inputs.spotprice_ex_vat > _PRICE_FLOOR (a separate, unrelated
-        # ex-VAT entity) -- a flat kr/kWh surcharge added equally to every
+        # inputs.sale_price > _PRICE_FLOOR (the sale price, issue #72 -- a
+        # separate source) -- a flat kr/kWh surcharge added equally to every
         # hour would cancel out of the difference and never reaches the
         # floor check at all, so adding it here would be a no-op at best.
         price_state = (
@@ -610,7 +571,7 @@ class PwMngtBatterySellDecisionController:
             day_consumption_8_16=self._read_day_consumption(),
             battery_size=self._read_battery_size(),
             battery_soc=self._read_soc(),
-            spotprice_ex_vat=self._read_spotprice_ex_vat(),
+            sale_price=self._read_sale_price(today, hour),
             override_active=self._read_override_active(),
             battery_target_end_time=self._read_target_end_time(),
             battery_max_charge_raw=self._read_battery_max_charge(),
@@ -671,13 +632,10 @@ class PwMngtBatterySellDecisionController:
         )
         return value or 0.0
 
-    def _read_spotprice_ex_vat(self) -> float:
-        value = (
-            read_float_state(self.hass.states.get(self._spotprice_ex_vat_entity_id))
-            if self._spotprice_ex_vat_entity_id
-            else None
-        )
-        return value or 0.0
+    def _read_sale_price(self, today: str, hour: int) -> float:
+        """Issue #72: this hour's sale price (kr/kWh) -- 0 when unknown,
+        which keeps the price floor from ever passing (as before)."""
+        return hub_properties.sale_prices_today(self.hass, today).get(hour, 0.0)
 
     def _read_override_active(self) -> bool:
         if not self._override_entity_id:

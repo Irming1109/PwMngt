@@ -1,12 +1,13 @@
 """Read-only property accessors for the PwM hub device."""
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import entity_registry as er
 
 from ..const import (
     CONF_ELECTRICITY_PRICE_SURCHARGE,
     CONF_ENTITY_MAP,
+    DEPENDENCY_STROMLIGNING,
     DOMAIN,
     ENTITY_KEY_SPOT_ELECTRICITY_PRICE,
 )
@@ -155,6 +156,106 @@ def electricity_prices_tomorrow(
         except (KeyError, TypeError, ValueError):
             continue
     return prices
+
+
+# Issue #72: Strømligning's sale price for surplus production (spot price
+# less the production tariffs), in the order PwMngt prefers them -- only
+# exists when "Include sale prices for surplus production" is on in
+# Strømligning's options, and each sensor can be disabled on its own (the
+# VAT-exclusive one is disabled by default). The first one that is enabled
+# wins; without either, the raw spot price without VAT is the sale price,
+# as before #72.
+_SALE_PRICE_TRANSLATION_KEYS = ("production_price_vat", "production_price_ex_vat")
+_SPOT_EX_VAT_TRANSLATION_KEY = "spotprice_ex_vat"
+_TOMORROW_SPOT_EX_VAT_TRANSLATION_KEY = "tomorrow_spotprice_ex_vat"
+
+
+def _stromligning_state(hass: HomeAssistant, translation_key: str) -> State | None:
+    """State of the single enabled Strømligning entity with this
+    translation_key, or None (missing, disabled, more than one, or not
+    loaded yet)."""
+    registry = er.async_get(hass)
+    matches = [
+        entity.entity_id
+        for entity in registry.entities.values()
+        if entity.platform == DEPENDENCY_STROMLIGNING
+        and entity.translation_key == translation_key
+        and entity.disabled_by is None
+    ]
+    if len(matches) != 1:
+        return None
+    state = hass.states.get(matches[0])
+    if state is None or state.state in ("unknown", "unavailable"):
+        return None
+    return state
+
+
+def _hourly_prices(state: State | None, day: str) -> dict[int, float]:
+    """Hour -> kr/kWh from a Strømligning "prices" attribute, filtered to
+    `day` ("YYYY-MM-DD", local). Quarter-hour entries (Strømligning's
+    selectable resolution) are averaged into their hour."""
+    entries = state.attributes.get("prices") if state is not None else None
+    if not isinstance(entries, list):
+        return {}
+    sums: dict[int, list[float]] = {}
+    for item in entries:
+        if not isinstance(item, dict):
+            continue
+        start = str(item.get("start") or "")
+        if start[:10] != day:
+            continue
+        try:
+            sums.setdefault(int(start[11:13]), []).append(float(item["price"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return {hour: sum(values) / len(values) for hour, values in sums.items()}
+
+
+def sale_prices_today(hass: HomeAssistant, today: str) -> dict[int, float]:
+    """Issue #72: today's sale price per hour (hour -> kr/kWh) -- what a
+    sold kWh actually earns: Strømligning's sale price for surplus
+    production when one of its sensors is on, else the spot price without
+    VAT. Empty when neither is available."""
+    for key in _SALE_PRICE_TRANSLATION_KEYS:
+        prices = _hourly_prices(_stromligning_state(hass, key), today)
+        if prices:
+            return prices
+    return _hourly_prices(_stromligning_state(hass, _SPOT_EX_VAT_TRANSLATION_KEY), today)
+
+
+def sale_prices_tomorrow(hass: HomeAssistant, today: str, tomorrow: str) -> dict[int, float]:
+    """Issue #72: tomorrow's sale price per hour (hour -> kr/kWh), or empty
+    until Strømligning's real prices for tomorrow are out (its "tomorrow"
+    binary_sensor is "on" and not forecast_data).
+
+    Strømligning's sale-price sensors only carry today, so tomorrow is
+    tomorrow's spot price without VAT less today's production-tariff
+    deduction for the same hour (spot - sale price today) -- the tariffs
+    don't change from day to day. Without a sale-price sensor the
+    deduction is 0, i.e. the spot price as before #72."""
+    state = _stromligning_state(hass, _TOMORROW_SPOT_EX_VAT_TRANSLATION_KEY)
+    if state is None or state.state != "on" or state.attributes.get("forecast_data"):
+        return {}
+    spot_tomorrow = _hourly_prices(state, tomorrow)
+    if not spot_tomorrow:
+        return {}
+    spot_today = _hourly_prices(_stromligning_state(hass, _SPOT_EX_VAT_TRANSLATION_KEY), today)
+    sale_today: dict[int, float] = {}
+    for key in _SALE_PRICE_TRANSLATION_KEYS:
+        sale_today = _hourly_prices(_stromligning_state(hass, key), today)
+        if sale_today:
+            break
+    deductions = {
+        hour: spot_today[hour] - sale_today[hour]
+        for hour in sale_today
+        if hour in spot_today
+    }
+    # An hour today doesn't have (DST) takes the average deduction.
+    average = sum(deductions.values()) / len(deductions) if deductions else 0.0
+    return {
+        hour: price - deductions.get(hour, average)
+        for hour, price in spot_tomorrow.items()
+    }
 
 
 def electricity_prices_today(hass: HomeAssistant, entry: ConfigEntry, today: str) -> dict[int, float]:
