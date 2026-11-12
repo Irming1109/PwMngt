@@ -159,13 +159,13 @@ def electricity_prices_tomorrow(
 
 
 # Issue #72: Strømligning's sale price for surplus production (spot price
-# less the production tariffs), in the order PwMngt prefers them -- only
-# exists when "Include sale prices for surplus production" is on in
-# Strømligning's options, and each sensor can be disabled on its own (the
-# VAT-exclusive one is disabled by default). The first one that is enabled
-# wins; without either, the raw spot price without VAT is the sale price,
-# as before #72.
-_SALE_PRICE_TRANSLATION_KEYS = ("production_price_vat", "production_price_ex_vat")
+# less the production tariffs) -- only exists when "Include sale prices for
+# surplus production" is on in Strømligning's options. Always the
+# VAT-exclusive one: a private seller gets no VAT on sold power (Claus,
+# 2026-11-12), so production_price_vat is never used. That sensor is
+# disabled by default in Strømligning and must be enabled; without it, the
+# raw spot price without VAT is the sale price, as before #72.
+_SALE_PRICE_TRANSLATION_KEYS = ("production_price_ex_vat",)
 _SPOT_EX_VAT_TRANSLATION_KEY = "spotprice_ex_vat"
 _TOMORROW_SPOT_EX_VAT_TRANSLATION_KEY = "tomorrow_spotprice_ex_vat"
 
