@@ -85,8 +85,13 @@ normal hourly forecast -- not the cautious one: a battery filled from the
 grid on a sunny day would sell its PV cheaply) on top of the evening
 hours, and those hours alone are worth a charge too (it then still covers
 17-21). The evening part is the floor: data/battery_data.py lets the
-battery discharge in those daytime hours, but only down to
-evening_reserve_soc, so the evening keeps what was planned for it.
+battery discharge in those daytime hours, but only down to day_floor_soc,
+so the evening keeps what was planned for it. Issue #70 (Claus
+2026-11-12): day_floor_soc is evening_reserve_soc minus the part #43 took
+off the charge for tomorrow's PV surplus -- the PV refills it before the
+evening. With the full reserve as the floor, a charge cut by the surplus
+left the battery nothing to cover the daytime hours with (Kasper
+2026-11-12: charged to 33 %, floor 32 %, 1 of 8 % covered in 07-08).
 
 Day end at 16:55 (issue #2, Node-RED: inject "16:55" on the same tab):
 a "yes_today" still standing then goes back to "not_calculated" and a
@@ -238,6 +243,9 @@ PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES: list[str] = [
     "day_hours",
     "day_kwh",
     "evening_reserve_soc",
+    # Issue #70: the floor (%) in those daytime hours -- the evening
+    # reserve less what tomorrow's PV surplus is expected to refill.
+    "day_floor_soc",
     # Issue #64: tomorrow's hours the battery sells in, the SoC (%) each of
     # them stops at (same order), the energy (kWh) expected sold and the
     # expected profit (kr). Carried into "yes_today" (data/battery_data.py).
@@ -349,6 +357,7 @@ _CARRIED_TO_TODAY = frozenset(
         "day_hours",
         "day_kwh",
         "evening_reserve_soc",
+        "day_floor_soc",
         "sale_hours",
         "sale_floors",
         "sale_kwh",
@@ -758,6 +767,10 @@ def calculate_battery_charge_decision(
     charge_target = partial_charge_target(
         worth_target, inputs.battery_size, expected_surplus, inputs.battery_min_soc
     )
+    # Issue #70: the PV surplus refills what #43 took off the charge before
+    # the evening -- so the daytime hours may use it, down to the evening
+    # reserve less that part.
+    day_floor = max(inputs.battery_min_soc, evening_reserve - (worth_target - charge_target))
 
     # Issue #64: the room left above the house's own plan, filled for
     # selling -- see the module docstring.
@@ -845,6 +858,7 @@ def calculate_battery_charge_decision(
         "day_hours": day_hours,
         "day_kwh": round(day_kwh, 2),
         "evening_reserve_soc": evening_reserve if day_hours else None,
+        "day_floor_soc": day_floor if day_hours else None,
         "sale_hours": sale_hours,
         "sale_floors": floors,
         "sale_kwh": round(sale_kwh, 2),

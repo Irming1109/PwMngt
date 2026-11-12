@@ -98,9 +98,9 @@ Deliberate differences from Node-RED:
 
 - DIFF (issue #59, Claus 2026-11-09): in today's daytime hours the night
   charge also covered (data/battery_charge_decision.py: day_hours,
-  evening_reserve_soc), min_soc is the evening reserve -- the battery
-  covers the house down to what the evening needs, never below, and
-  never above the SoC. The plan is remembered for the day once read
+  day_floor_soc), min_soc is that floor -- the battery covers the house
+  down to what the evening needs less what tomorrow's PV surplus refills
+  before it (issue #70), never below, and never above the SoC. The plan is remembered for the day once read
   (the decision moves on to tomorrow after 14:00). Not while a charger
   charges a car, a grid charge runs or charging is blocked. The target
   floor is let go in those hours, so it follows the battery down
@@ -1831,7 +1831,11 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         state = self.hass.states.get(entity_id) if entity_id else None
         if state is not None and state.state == _CHARGE_STATUS_YES_TODAY:
             hours = state.attributes.get("day_hours")
-            reserve = state.attributes.get("evening_reserve_soc")
+            # Issue #70: the floor less the PV refill; a plan from before
+            # it has only the evening reserve.
+            reserve = state.attributes.get("day_floor_soc")
+            if reserve is None:
+                reserve = state.attributes.get("evening_reserve_soc")
             if isinstance(hours, list) and reserve is not None:
                 try:
                     return {

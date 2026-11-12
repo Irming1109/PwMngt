@@ -756,8 +756,10 @@ const PWM_BATTERY_TEXTS = {
     chargeCovers: (pct, hours) => `Charges to ${pct}% from the grid - enough for ${hours}`,
     chargeWithPvCovers: (pct, kwh, hours) =>
       `Charges to ${pct}% from the grid - together with tomorrow's PV (${kwh} surplus expected) it lasts until ${hours}`,
-    dayHours: (kwh, hours, reserve) =>
-      `Of which about ${kwh} for the daytime hours ${hours} - the battery keeps ${reserve}% for the evening`,
+    dayHours: (kwh, hours, reserve, floor) =>
+      floor < reserve
+        ? `Of which about ${kwh} for the daytime hours ${hours} - down to ${floor}%, the sun refills ${reserve}% for the evening`
+        : `Of which about ${kwh} for the daytime hours ${hours} - the battery keeps ${reserve}% for the evening`,
     dayPlanToday: (hours, reserve) =>
       `Today the battery covers the house at ${hours} - down to ${reserve}%, the rest is kept for the evening`,
     dayPlanFromToday: "Worked out from today's prices and what the battery's grid power cost",
@@ -822,8 +824,10 @@ const PWM_BATTERY_TEXTS = {
     chargeCovers: (pct, hours) => `Lades til ${pct} % fra nettet - nok til kl. ${hours}`,
     chargeWithPvCovers: (pct, kwh, hours) =>
       `Lades til ${pct} % fra nettet - sammen med solen i morgen (forventet ${kwh} overskud) rækker det til kl. ${hours}`,
-    dayHours: (kwh, hours, reserve) =>
-      `Heraf ca. ${kwh} til dagtimerne kl. ${hours} - batteriet gemmer ${reserve} % til aftenen`,
+    dayHours: (kwh, hours, reserve, floor) =>
+      floor < reserve
+        ? `Heraf ca. ${kwh} til dagtimerne kl. ${hours} - ned til ${floor} %, solen fylder op til ${reserve} % til aftenen`
+        : `Heraf ca. ${kwh} til dagtimerne kl. ${hours} - batteriet gemmer ${reserve} % til aftenen`,
     dayPlanToday: (hours, reserve) =>
       `I dag dækker batteriet huset kl. ${hours} - ned til ${reserve} %, resten gemmes til aftenen`,
     dayPlanFromToday: "Beregnet ud fra dagens priser og hvad netstrømmen i batteriet kostede",
@@ -1363,12 +1367,15 @@ class PwMBatteryCard extends HTMLElement {
         const withPv = surplus !== null && surplus >= 0.05;
         lines.push(withPv ? t.chargeWithPvCovers(pct, kwh, hours) : t.chargeCovers(pct, hours));
         // Issue #59: and the expensive daytime hours, down to the evening
-        // reserve.
+        // reserve less what the PV surplus refills before it (#70).
         const dayHours = Array.isArray(status.attributes.day_hours) ? status.attributes.day_hours : [];
         const dayKwh = number(status.attributes.day_kwh);
         const reserve = number(status.attributes.evening_reserve_soc);
+        const floor = number(status.attributes.day_floor_soc) ?? reserve;
         if (dayHours.length && dayKwh !== null && reserve !== null) {
-          lines.push(t.dayHours(t.kwh(dayKwh), pwmHourRanges(dayHours), Math.round(reserve)));
+          lines.push(
+            t.dayHours(t.kwh(dayKwh), pwmHourRanges(dayHours), Math.round(reserve), Math.round(floor))
+          );
         }
         // Only when the grid charge plus the PV surplus actually reaches the
         // target -- the evening-only charge usually stops well below it.
