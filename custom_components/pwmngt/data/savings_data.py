@@ -391,6 +391,9 @@ class BatteryGridBalanceState:
     # actual discharge, carried into the next hour (Node-RED:
     # grid_afladning_rest_kwh) -- see calculate_battery_grid_balance().
     grid_discharge_rest_kwh: float = 0.0
+    # Issue #76: last hour had neither grid-share discharge nor grid cells
+    # left -- the rest gets one such hour, then it is dropped.
+    grid_discharge_rest_idle: bool = False
     # Issue #55: battery_data's grid_opladning_pct_cum at the last run.
     grid_charge_pct_prev: float | None = None
     # Issue #56: this run's booked grid charge and grid-share discharge
@@ -688,6 +691,7 @@ def calculate_battery_grid_balance(
     grid_charge_pct_cum: float | None = None,
     sold_kwh: float = 0.0,
     sale_price: float | None = None,
+    battery_holds_grid: bool | None = None,
 ) -> BatteryGridBalanceState:
     """One run of Node-RED's "Beregn balance på ladning af batteri fra
     grid". Pure -- testable on its own.
@@ -711,7 +715,17 @@ def calculate_battery_grid_balance(
     (#48) -- 1.6 kWh on a dark day, all booked as a charge that no
     discharge ever earns back. The same rule for every inverter. Unknown
     (no previous reading, or battery_data without the attribute): booked
-    as before."""
+    as before.
+
+    DIFF (issue #76, Claus 2026-11-13): the rest only follows grid energy.
+    In an hour with no grid-share discharge and no grid cells left
+    (battery_holds_grid False, battery_data's soc_grid 0) it is kept once
+    -- a Kostal's discharge counter lags up to an hour (#62) -- and dropped
+    in the next such hour: what is left then is the SoC counting more than
+    the AC discharge (conversion loss), not grid power the house used. It
+    used to wait for the battery's next discharge of any kind -- on
+    2026-11-13 ~1 kWh of PV discharge at 11-13 was booked as grid energy
+    (1.39 kr). None (unknown): as before."""
     if (
         grid_charge_pct_cum is not None
         and state.grid_charge_pct_prev is not None
@@ -733,8 +747,10 @@ def calculate_battery_grid_balance(
     # (Claus, 2026-10-26). Capped at one percentage point, so the rest
     # can't grow without bound if the SoC counter systematically counts
     # more than the AC discharge (conversion losses).
+    idle = grid_discharge_pct_this_hour <= 0 and battery_holds_grid is False
+    rest_in = 0.0 if idle and state.grid_discharge_rest_idle else state.grid_discharge_rest_kwh
     potential_discharge_from_grid = (
-        grid_discharge_pct_this_hour * kwh_per_percent_point + state.grid_discharge_rest_kwh
+        grid_discharge_pct_this_hour * kwh_per_percent_point + rest_in
     )
     battery_discharge_from_grid = min(potential_discharge_from_grid, battery_discharge)
     grid_discharge_rest_kwh = min(
@@ -766,6 +782,7 @@ def calculate_battery_grid_balance(
         battery_charging_savings=battery_charging_savings,
         grid_discharge_pct_prev=grid_discharge_pct_cum,
         grid_discharge_rest_kwh=grid_discharge_rest_kwh,
+        grid_discharge_rest_idle=idle,
         grid_charge_pct_prev=grid_charge_pct_cum,
         hour_grid_charge_kwh=battery_grid_charge,
         hour_discharge_from_grid_kwh=house_from_grid,
@@ -858,6 +875,7 @@ class PwMngtSavingsStoredData(ExtraStoredData):
                 "battery_charging_savings": battery.battery_charging_savings,
                 "grid_discharge_pct_prev": battery.grid_discharge_pct_prev,
                 "grid_discharge_rest_kwh": battery.grid_discharge_rest_kwh,
+                "grid_discharge_rest_idle": battery.grid_discharge_rest_idle,
                 "grid_charge_pct_prev": battery.grid_charge_pct_prev,
                 "battery_sale_kwh": battery.battery_sale_kwh,
                 "battery_sale_revenue": battery.battery_sale_revenue,
@@ -901,6 +919,7 @@ class PwMngtSavingsStoredData(ExtraStoredData):
                     battery_charging_savings=battery_raw.get("battery_charging_savings", 0.0),
                     grid_discharge_pct_prev=battery_raw.get("grid_discharge_pct_prev"),
                     grid_discharge_rest_kwh=battery_raw.get("grid_discharge_rest_kwh", 0.0),
+                    grid_discharge_rest_idle=bool(battery_raw.get("grid_discharge_rest_idle")),
                     grid_charge_pct_prev=battery_raw.get("grid_charge_pct_prev"),
                     battery_sale_kwh=float(battery_raw.get("battery_sale_kwh") or 0.0),
                     battery_sale_revenue=float(battery_raw.get("battery_sale_revenue") or 0.0),
@@ -1178,6 +1197,7 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
                 battery_size,
                 self._read_grid_charge_pct_cum(),
                 *self._read_last_hour_sale(),
+                battery_holds_grid=self._read_battery_holds_grid(),
             )
             battery_hour = (
                 self._ledger.battery.hour_grid_charge_kwh,
@@ -1311,6 +1331,14 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         entity_id = pv_properties.battery_data_entity_id(self.hass, self._entry)
         state = self.hass.states.get(entity_id) if entity_id else None
         return _read_float_attribute(state, "grid_opladning_pct_cum") if state else None
+
+    def _read_battery_holds_grid(self) -> bool | None:
+        """Issue #76: whether battery_data's ledger still holds grid energy
+        (soc_grid > 0) -- None while it isn't there."""
+        entity_id = pv_properties.battery_data_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        value = _read_float_attribute(state, "soc_grid") if state else None
+        return None if value is None else value > 0
 
     def _read_battery_size(self) -> float:
         entity_id = pv_properties.battery_size_entity_id(self.hass, self._entry)
