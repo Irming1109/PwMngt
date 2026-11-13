@@ -656,15 +656,27 @@ def wanted_charge_now(
     return (target - start_soc) * multiplier + start_soc
 
 
-def grid_feeds_battery(grid_power: float | None, battery_power: float | None) -> bool:
+def grid_feeds_battery(
+    grid_power: float | None,
+    battery_power: float | None,
+    pv_power: float | None = None,
+) -> bool:
     """Issue #62: True while the battery charges and the house buys at
     least _GRID_FEED_SHARE of that charge power from the grid -- the
     charge comes from the grid, not PV. Powers in W, normalized (grid
     positive = buying, battery positive = discharging). False while
-    either is unknown."""
+    either is unknown.
+
+    Issue #74: only the part of the charge PV doesn't cover can come from
+    the grid -- under battery_hold's hard hold the inverter delivers 0 W,
+    so the house buys everything while PV charges the battery, which
+    otherwise looks exactly like a grid charge. Without a PV power, as
+    before."""
     if grid_power is None or battery_power is None or battery_power >= 0:
         return False
-    return grid_power >= -battery_power * _GRID_FEED_SHARE
+    charge = -battery_power
+    from_grid = charge - max(pv_power, 0.0) if pv_power is not None else charge
+    return from_grid >= charge * _GRID_FEED_SHARE and grid_power >= from_grid * _GRID_FEED_SHARE
 
 
 def _discharge_cells(
@@ -1694,6 +1706,11 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             return None
         return power * pv_properties.power_sign(self._entry, entity_map_key)
 
+    def _read_pv_power(self) -> float | None:
+        """Issue #74: PwM PV's "PV total" (W), or None."""
+        entity_id = pv_properties.pv_total_entity_id(self.hass, self._entry)
+        return read_float_state(self.hass.states.get(entity_id)) if entity_id else None
+
     def _charger_state_entity_ids(self) -> list[str]:
         """Each charger's State sensor (sensor.py, PwM_CHARGER_SENSORS),
         looked up by unique_id."""
@@ -1903,6 +1920,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             grid_feeds_battery=grid_feeds_battery(
                 self._read_power(ENTITY_KEY_GRID_POWER),
                 self._read_power(ENTITY_KEY_BATTERY_POWER),
+                self._read_pv_power(),
             ),
             **self._read_day_plan(),
             **self._read_sale_plan(),
