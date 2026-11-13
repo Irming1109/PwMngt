@@ -97,6 +97,16 @@ the latest. Planned day hours count too (issue #35, see _night_plan()):
 they make skipping possible, and no extension happens while one is
 still to come.
 
+New in PwMngt (issue #75, Claus 2026-11-13): today's charge hours.
+"Skal batteri lades" can move a planned charge hour to one of today's
+remaining hours before 17:00 (today_charge_hours/today_charge_date) while
+its status is still "yes_tomorrow". In those hours this module charges as
+in a "yes_today" hour, up to the SoC when the first of them started plus
+today_charge_pct (at most 95 %) -- the energy the moved hours would have
+charged tonight, not tonight's target. It stops the charge when that is
+reached or the hours are over, and never reports "target reached" (that
+would end tonight's plan).
+
 New in PwMngt (issue #17, Claus 2026-11-03 -- Node-RED had the same gap,
 "Bestem ladeeffekt" only ran on "Ja (i dag)"): a manual "Charge now".
 Picking a charge_now_* level by hand (the battery card) starts it; the
@@ -178,6 +188,9 @@ _FUSE_OVERLOAD_THRESHOLD = 20.0  # A
 # battery_charge_status (data/battery_charge_decision.py) value that
 # means tonight's grid charge is wanted. Old: "Ja (i dag)".
 _STATUS_YES_TODAY = "yes_today"
+# Issue #75: today's charge hours never charge above this SoC (%), the same
+# ceiling as the night plan's daytime hours.
+_TODAY_CHARGE_CEILING = 95
 
 # battery_command (select.py) options that mean "actively charging from
 # the grid right now" -- the "Lader vi ?" gate's own check. Old: "Lad nu
@@ -566,6 +579,8 @@ class PwMngtBatteryChargeLevelController:
         self._watch_resend: str | None = None
         self._watch_manual = False
         self._watch_failed = False
+        # Issue #75: (date, SoC) when today's first charge hour started.
+        self._today_charge_start: tuple[str, float] | None = None
 
         if not self._soc_entity_id:
             LOGGER.warning(
@@ -637,7 +652,13 @@ class PwMngtBatteryChargeLevelController:
 
     @callback
     def _handle_hourly_first_delay(self, _now) -> None:
-        if self._read_charge_status() != _STATUS_YES_TODAY:
+        if (
+            self._read_charge_status() != _STATUS_YES_TODAY
+            and dt_util.now().hour not in self._today_charge_hours()
+        ):
+            # Issue #75: not one of today's charge hours (any more) -- stop
+            # a charge they started.
+            self._stop_today_charge()
             # Node-RED: the companion branch here re-runs "Skal batteri
             # lades" itself within 14:00-23:30 -- deliberately left
             # unported, see data/battery_charge_decision.py.
@@ -660,7 +681,11 @@ class PwMngtBatteryChargeLevelController:
             return
         if not currently_charging(self._read_battery_command()):
             return
-        if self._read_manual_charge() is None and self._read_charge_status() != _STATUS_YES_TODAY:
+        if (
+            self._read_manual_charge() is None
+            and self._read_charge_status() != _STATUS_YES_TODAY
+            and dt_util.now().hour not in self._today_charge_hours()
+        ):
             return
         self._schedule_rate_limited_run()
 
@@ -724,13 +749,22 @@ class PwMngtBatteryChargeLevelController:
             # select.battery_mode (select.py) is "manual" -- see module
             # docstring. battery_command is left exactly as it is.
             return
-        battery_target = self._read_target()
+        today_hours = self._today_charge_hours()
+        today_hour = dt_util.now().hour in today_hours
+        if not today_hour and self._read_charge_status() != _STATUS_YES_TODAY:
+            # Issue #75: no plan for this hour -- only a charge today's
+            # hours started is stopped (Node-RED wrote nothing here).
+            self._stop_today_charge()
+            return
+        battery_target = self._today_charge_target() if today_hour else self._read_target()
         if battery_target is None:
             # Not ready yet -- see _read_target()'s own docstring. Leave
             # battery_command as it is and wait for the next trigger.
             return
         inputs = BatteryChargeLevelInputs(
-            charge_wish=self._read_charge_status(),
+            # Issue #75: one of today's charge hours counts as a planned
+            # hour of a "yes_today" plan.
+            charge_wish=_STATUS_YES_TODAY if today_hour else self._read_charge_status(),
             tariff_fuse_size_raw=self._read_tariff_fuse_size(),
             fuse_load_l1=self._read_fuse_load(0),
             fuse_load_l2=self._read_fuse_load(1),
@@ -738,10 +772,10 @@ class PwMngtBatteryChargeLevelController:
             battery_max_charge_raw=self._read_battery_max_charge(),
             battery_soc=self._read_soc(),
             battery_target=battery_target,
-            hour_is_cheap=self._read_hour_is_cheap(),
+            hour_is_cheap=today_hour or (not today_hours and self._read_hour_is_cheap()),
             battery_charge_power=self._read_grid_charge_power(),
             current_hour=dt_util.now().hour,
-            cheap_hours=self._read_cheap_hours(),
+            cheap_hours=frozenset() if today_hours else self._read_cheap_hours(),
             battery_size_kwh=self._read_battery_size(),
             charging_now=currently_charging(self._read_battery_command()),
             target_end_minutes=self._read_target_end_minutes(),
@@ -1011,6 +1045,14 @@ class PwMngtBatteryChargeLevelController:
     def _maybe_target_reached(self) -> None:
         if pv_properties.is_battery_mode_manual(self.hass, self._entry):
             return
+        if dt_util.now().hour in self._today_charge_hours():
+            # Issue #75: today's charge stops at its own target -- without
+            # telling "Skal batteri lades", whose plan is tonight's.
+            target = self._today_charge_target()
+            soc = self._read_soc()
+            if target is not None and soc is not None and soc >= target:
+                self._apply_result(_COMMAND_INTERNAL, reached_target=target)
+            return
         battery_target = self._read_target()
         if battery_target is None:
             # Not ready yet -- see _read_target()'s own docstring. Don't
@@ -1057,6 +1099,48 @@ class PwMngtBatteryChargeLevelController:
         )
 
     # -- input readers (Node-RED fallback when missing/unknown) ------------
+
+    def _today_charge_hours(self) -> frozenset[int]:
+        """Issue #75: today's charge hours from battery_charge_status (only
+        while it is "yes_tomorrow" and they are dated today), else empty."""
+        entity_id = pv_properties.battery_charge_status_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        if state is None or state.state != "yes_tomorrow":
+            return frozenset()
+        if state.attributes.get("today_charge_date") != dt_util.now().strftime("%Y-%m-%d"):
+            return frozenset()
+        hours = state.attributes.get("today_charge_hours")
+        return frozenset(hours) if isinstance(hours, list) else frozenset()
+
+    def _today_charge_target(self) -> float | None:
+        """Issue #75: the SoC today's charge goes to -- the SoC when its
+        first hour started plus today_charge_pct, at most 95 %. The start
+        is remembered for the day (a restart takes the SoC then)."""
+        entity_id = pv_properties.battery_charge_status_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        soc = self._read_soc()
+        try:
+            pct = float(state.attributes.get("today_charge_pct")) if state is not None else None
+        except (TypeError, ValueError):
+            pct = None
+        if pct is None or soc is None:
+            return None
+        today = dt_util.now().strftime("%Y-%m-%d")
+        if self._today_charge_start is None or self._today_charge_start[0] != today:
+            self._today_charge_start = (today, soc)
+        return min(_TODAY_CHARGE_CEILING, self._today_charge_start[1] + pct)
+
+    def _stop_today_charge(self) -> None:
+        """Issue #75: after the last of today's charge hours, stop a charge
+        they started (a manual charge is left alone)."""
+        if self._today_charge_start is None:
+            return
+        if self._today_charge_start[0] != dt_util.now().strftime("%Y-%m-%d"):
+            return
+        if self._read_manual_charge() is not None:
+            return
+        self._today_charge_start = None
+        self._apply_result(_COMMAND_INTERNAL)
 
     def _read_charge_status(self) -> str:
         entity_id = pv_properties.battery_charge_status_entity_id(self.hass, self._entry)

@@ -258,18 +258,22 @@ def sale_prices_tomorrow(hass: HomeAssistant, today: str, tomorrow: str) -> dict
     }
 
 
-def electricity_prices_today(hass: HomeAssistant, entry: ConfigEntry, today: str) -> dict[int, float]:
+def electricity_prices_today(
+    hass: HomeAssistant, entry: ConfigEntry, today: str, surcharge: bool = True
+) -> dict[int, float]:
     """Issue #61: today's hourly prices (hour -> kr/kWh) from the same
     entity as electricity_price() -- its "prices" attribute (Strømligning:
     [{"start", "price"}, ...]), filtered to today ("YYYY-MM-DD", local),
-    plus the same surcharge. Empty when not available."""
+    plus the same surcharge (issue #75: surcharge=False leaves it out, to
+    compare with Strømligning's own "tomorrow" prices). Empty when not
+    available."""
     entity_map = entry.options.get(CONF_ENTITY_MAP, {})
     entity_id = entity_map.get(ENTITY_KEY_SPOT_ELECTRICITY_PRICE) or None
     state = hass.states.get(entity_id) if entity_id else None
     entries = state.attributes.get("prices") if state is not None else None
     if not isinstance(entries, list):
         return {}
-    surcharge = entry.options.get(CONF_ELECTRICITY_PRICE_SURCHARGE, 0.0) or 0.0
+    added = (entry.options.get(CONF_ELECTRICITY_PRICE_SURCHARGE, 0.0) or 0.0) if surcharge else 0.0
     prices: dict[int, float] = {}
     for item in entries:
         if not isinstance(item, dict):
@@ -278,7 +282,7 @@ def electricity_prices_today(hass: HomeAssistant, entry: ConfigEntry, today: str
         if start[:10] != today:
             continue
         try:
-            prices[int(start[11:13])] = float(item["price"]) + surcharge
+            prices[int(start[11:13])] = float(item["price"]) + added
         except (KeyError, TypeError, ValueError):
             continue
     return prices

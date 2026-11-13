@@ -155,6 +155,18 @@ Deliberate differences from Node-RED (each marked "DIFF" below):
   counted on -- it comes on top. sale_hours/sale_floors (the SoC each sale
   hour stops at -- what the house still needs after it) are carried into
   "yes_today" for data/battery_data.py, which runs the sale.
+- NEW (issue #75, Claus 2026-11-13): the plan is made as soon as
+  tomorrow's real prices are out (~13:10, the "tomorrow" sensor turning
+  "on") instead of waiting for the 14:00 hourly nudge, and a planned
+  charge hour moves to one of today's remaining whole hours before 17:00
+  when that hour is at least _MOVE_MIN_GAIN cheaper (dearest planned hour
+  first, cheapest of today's first) -- a move, not a bigger charge.
+  today_charge_hours/today_charge_date/moved_from_hours tell
+  data/battery_charge_level.py to charge in today's hours while the
+  status is still "yes_tomorrow". The energy isn't held through the
+  evening: it becomes ordinary grid cells in data/battery_data.py (used
+  17-21, price-protected 21-06), and what is left counts in the night's
+  SoC, so the night charges less up to the target.
 Node-RED inputs not carried over because PwMngt doesn't have an
 abstracted equivalent yet, or because they're honestly unused:
 (none -- every input this function's result actually depends on now has
@@ -255,6 +267,16 @@ PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES: list[str] = [
     "sale_floors",
     "sale_kwh",
     "sale_profit",
+    # Issue #75: today's remaining hours (before 17:00) a planned charge
+    # hour moved to, the date they belong to (YYYY-MM-DD), and the planned
+    # hours they replaced (tomorrow's hours, for the battery card).
+    "today_charge_hours",
+    "today_charge_date",
+    "moved_from_hours",
+    # Issue #75: what today's hours charge (SoC %, on top of the SoC when
+    # the first of them starts) -- what the moved hours would have charged
+    # tonight, never more than the plan's charge itself.
+    "today_charge_pct",
 ]
 
 PwM_BATTERY_CHARGE_DECISION_SENSORS: list[SensorEntityDescription] = [
@@ -326,6 +348,11 @@ _DAY_CHARGE_CEILING = 95
 # must pay for.
 _SALE_HOURS = range(6, 23)
 _SALE_CHARGE_LOSS = 0.10
+
+# Issue #75: a planned charge hour moves to one of today's remaining hours
+# before _DAY_END_HOUR only when that hour is at least this much cheaper
+# (kr/kWh) -- the same minimum gain as battery_data's #71 plan.
+_MOVE_MIN_GAIN = 0.10
 
 # Triggers.
 _EVENING_WINDOW_START = (18, 0)
@@ -471,6 +498,10 @@ class BatteryChargeInputs:
     # 0-23; None = unknown) and the sale threshold (kr/kWh, 0 = off).
     sale_prices_tomorrow: list[float] | None = None
     sale_price_difference: float = 0.0
+    # Issue #75: today's remaining whole hours before 17:00 (hour ->
+    # kr/kWh, same price basis as prices_tomorrow) and today's date.
+    prices_today_remaining: dict[int, float] | None = None
+    today: str | None = None
 
 
 def _average(values: list[float]) -> float:
@@ -679,6 +710,23 @@ def sale_floors(
     return floors
 
 
+def move_to_today(
+    charge_hours: list[tuple[int, float]], prices_today: dict[int, float]
+) -> tuple[list[tuple[int, float]], list[tuple[int, float]], list[int]]:
+    """Issue #75: (the planned hours kept, today's hours they moved to,
+    the planned hours replaced). The dearest planned hour first goes to the
+    cheapest of today's remaining hours, while that one is at least
+    _MOVE_MIN_GAIN cheaper; one planned hour per today hour."""
+    kept = sorted(charge_hours, key=lambda item: item[1], reverse=True)
+    today = sorted(prices_today.items(), key=lambda item: item[1])
+    moved_to: list[tuple[int, float]] = []
+    moved_from: list[int] = []
+    while kept and today and today[0][1] <= kept[0][1] - _MOVE_MIN_GAIN:
+        moved_from.append(kept.pop(0)[0])
+        moved_to.append(today.pop(0))
+    return kept, moved_to, moved_from
+
+
 def calculate_battery_charge_decision(
     inputs: BatteryChargeInputs,
 ) -> tuple[str, dict[str, Any]]:
@@ -845,6 +893,12 @@ def calculate_battery_charge_decision(
     )
     price_difference = round(avg_most_expensive_hours - avg_cheapest_hours, 2)
 
+    # Issue #75: only a plan that will charge moves hours -- the status is
+    # decided below, so this is applied once it is known.
+    kept_hours, today_hours, moved_from = move_to_today(
+        cheapest_hours, inputs.prices_today_remaining or {}
+    )
+
     cheapest_hour_set = {hour for hour, _price in cheapest_hours}
     attributes = {
         "avg_cheapest_hours": avg_cheapest_hours,
@@ -884,6 +938,29 @@ def calculate_battery_charge_decision(
         status = "no_surplus"
     else:
         status = "yes_tomorrow"
+
+    attributes["today_charge_hours"] = []
+    attributes["today_charge_date"] = None
+    attributes["moved_from_hours"] = []
+    attributes["today_charge_pct"] = None
+    if status == "yes_tomorrow" and today_hours and inputs.battery_size > 0:
+        # The SoC one planned hour charges -- hours_needed() backwards.
+        pct_per_hour = battery_max_charge / 1000 / _CHARGETIME_SAFETY_MARGIN / inputs.battery_size * 100
+        attributes["today_charge_pct"] = math.ceil(
+            min(len(today_hours) * pct_per_hour, max(charge_target - inputs.battery_min_soc, 0.0))
+        )
+        kept_set = {hour for hour, _price in kept_hours}
+        attributes["today_charge_hours"] = sorted(hour for hour, _price in today_hours)
+        attributes["today_charge_date"] = inputs.today
+        attributes["moved_from_hours"] = sorted(moved_from)
+        for hour in range(24):
+            attributes[f"hour_{hour}"] = hour in kept_set
+        attributes["avg_cheapest_hours"] = round(
+            _average([price for _hour, price in kept_hours + today_hours]), 2
+        )
+        attributes["price_difference"] = round(
+            avg_most_expensive_hours - attributes["avg_cheapest_hours"], 2
+        )
 
     return status, attributes
 
@@ -1028,6 +1105,14 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             )
             return
         self._tomorrow_entity_id = tomorrow_entity_id
+
+        # Issue #75: plan as soon as tomorrow's real prices are out (~13:10)
+        # rather than at the next hourly nudge (14:00).
+        self.async_on_remove(
+            event.async_track_state_change_event(
+                self.hass, [tomorrow_entity_id], self._handle_tomorrow_prices
+            )
+        )
 
         # Price-difference threshold change -- unconditional, window-gated
         # (Node-RED: ha-select "PV batteri ladning pris difference"). Issue
@@ -1302,6 +1387,21 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         return _EVENING_WINDOW_START <= (now.hour, now.minute) <= _EVENING_WINDOW_END
 
     @callback
+    def _handle_tomorrow_prices(self, state_event) -> None:
+        """Issue #75: tomorrow's real prices just came out -- plan now when
+        no plan is standing. A "yes_today" waits for the 14:00 nudge as
+        before, so today's own plan isn't replaced any earlier."""
+        old_state = state_event.data.get("old_state")
+        new_state = state_event.data.get("new_state")
+        if new_state is None or new_state.state != "on":
+            return
+        if old_state is not None and old_state.state == "on":
+            return
+        if self._attr_native_value != _STATUS_NOT_CALCULATED:
+            return
+        self._run()
+
+    @callback
     def _handle_unconditional_trigger(self, _event_or_time=None) -> None:
         if self._in_evening_window():
             self._run()
@@ -1399,6 +1499,8 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             sale_price_difference=self._read_float_pv(
                 pv_properties.battery_sell_price_difference_entity_id, 0.0
             ) or 0.0,
+            prices_today_remaining=self._read_prices_today_remaining(),
+            today=dt_util.now().strftime("%Y-%m-%d"),
         )
 
         status, attributes = calculate_battery_charge_decision(inputs)
@@ -1447,6 +1549,21 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             return None if value is None else float(value)
         except (TypeError, ValueError):
             return None
+
+    def _read_prices_today_remaining(self) -> dict[int, float]:
+        """Issue #75: today's whole hours still ahead before 17:00 (hour ->
+        kr/kWh, rounded like tomorrow's) -- the configured price entity's
+        "prices", without PwMngt's surcharge: the same basis as
+        Strømligning's "tomorrow" prices."""
+        now = dt_util.now()
+        prices = hub_properties.electricity_prices_today(
+            self.hass, self._entry, now.strftime("%Y-%m-%d"), surcharge=False
+        )
+        return {
+            hour: round(price, 2)
+            for hour, price in prices.items()
+            if now.hour < hour < _DAY_END_HOUR
+        }
 
     def _read_sale_prices_tomorrow(self) -> list[float] | None:
         """Issue #64/#72: tomorrow's sale prices (kr/kWh, hour 0-23) from

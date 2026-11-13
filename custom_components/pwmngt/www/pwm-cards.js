@@ -772,6 +772,9 @@ const PWM_BATTERY_TEXTS = {
     pvKept: (kwh) =>
       `Solar power above the evening reserve (about ${kwh}) is kept for later - today's remaining hours aren't dearer`,
     pvNight: (hours) => `${hours} tonight`,
+    movedToToday: (today, from, when) => `Charges at ${today} today instead of ${from} ${when}`,
+    tonight: "tonight",
+    tomorrow: "tomorrow",
     and: " and ",
     sellingNow: "The battery is selling to the grid now",
     pvFills: (target) => `Tomorrow's PV is expected to fill it up to the target of ${target}%`,
@@ -847,6 +850,9 @@ const PWM_BATTERY_TEXTS = {
     pvKept: (kwh) =>
       `Solstrøm over aftenreserven (ca. ${kwh}) gemmes til senere - dagens resterende timer er ikke dyrere`,
     pvNight: (hours) => `${hours} i nat`,
+    movedToToday: (today, from, when) => `Lader kl. ${today} i dag i stedet for kl. ${from} ${when}`,
+    tonight: "i nat",
+    tomorrow: "i morgen",
     and: " og ",
     sellingNow: "Batteriet sælger til nettet nu",
     pvFills: (target) => `Solen i morgen forventes at fylde op til target ${target} %`,
@@ -1217,6 +1223,9 @@ class PwMBatteryCard extends HTMLElement {
         status.attributes.extended_hours || [],
         null
       );
+      // Issue #75: planned hours moved to today's cheaper hours before 17.
+      const movedNote = this._movedToToday(t, status);
+      if (movedNote) nightGroup.appendChild(this._note(movedNote));
     }
 
     // How tonight's plan ended, until a new decision is made (issue #24).
@@ -1436,6 +1445,23 @@ class PwMBatteryCard extends HTMLElement {
       if (target !== null) return [t.surplusCovers(Math.round(target), kwh)];
     }
     return [];
+  }
+
+  /**
+   * Issue #75: "Charges at 14 today instead of 2 tonight" while one of
+   * today's charge hours is still ahead (or running), else null.
+   */
+  _movedToToday(t, status) {
+    const a = status.attributes;
+    const today = Array.isArray(a.today_charge_hours) ? a.today_charge_hours : [];
+    const from = Array.isArray(a.moved_from_hours) ? a.moved_from_hours : [];
+    const now = new Date();
+    const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(
+      now.getDate()).padStart(2, "0")}`;
+    if (status.state !== "yes_tomorrow" || a.today_charge_date !== date || !from.length) return null;
+    if (!today.some((hour) => hour >= now.getHours())) return null;
+    const when = from.every((hour) => hour < 6) ? t.tonight : t.tomorrow;
+    return t.movedToToday(pwmHourRanges(today), pwmHourRanges(from), when);
   }
 
   /** Issue #64: the night charge's sale hours, kWh and expected profit. */
