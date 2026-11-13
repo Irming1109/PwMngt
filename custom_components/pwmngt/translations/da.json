@@ -364,6 +364,17 @@
             "name": "Vintergrænse"
           }
         }
+      },
+      "inverter_own_consumption": {
+        "name": "Inverter egetforbrug",
+        "state_attributes": {
+          "house_power_entity": {
+            "name": "Husets effekt-sensor"
+          }
+        }
+      },
+      "inverter_own_consumption_today": {
+        "name": "Inverter egetforbrug i dag"
       }
     }
   },

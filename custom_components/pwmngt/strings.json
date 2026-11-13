@@ -378,6 +378,17 @@
             "name": "Winter limit"
           }
         }
+      },
+      "inverter_own_consumption": {
+        "name": "Inverter own consumption",
+        "state_attributes": {
+          "house_power_entity": {
+            "name": "House power sensor"
+          }
+        }
+      },
+      "inverter_own_consumption_today": {
+        "name": "Inverter own consumption today"
       }
     }
   },

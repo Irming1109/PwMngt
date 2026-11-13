@@ -451,6 +451,17 @@ GROWATT_MODBUS_BATTERY_CHARGE_TOTAL = "Battery Charge Total"
 GROWATT_MODBUS_AC_CHARGE_ENERGY_TOTAL = "AC Charge Energy Total"
 GROWATT_MODBUS_HOUSE_CONSUMPTION = "House Consumption"
 
+# Issue #77: each inverter integration's own sensor (original_name) for
+# the whole house's power (W, from PV + battery + grid), per platform --
+# what data/inverter_own_consumption.py subtracts. Found the same way, on
+# the platform of the mapped Grid power -- not a wizard field. Confirmed
+# on Claus's install 2026-11-14: Kostal "Home Power", growatt_modbus
+# "House Consumption" (same value as its "Power To Load").
+INVERTER_HOUSE_POWER_NAMES: dict[str, str] = {
+    "kostal_plenticore": "Home Power",
+    GROWATT_MODBUS_PLATFORM: GROWATT_MODBUS_HOUSE_CONSUMPTION,
+}
+
 # ---------------------------------------------------------------------------
 # Segments: optional areas of PwMngt a given installation may not need.
 # "Power Management" itself isn't in this list -- it's mandatory and always

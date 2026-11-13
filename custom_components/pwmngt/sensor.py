@@ -12,7 +12,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_NAME, EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.event import async_call_later, async_track_state_change_event
+from homeassistant.helpers.event import (
+    async_call_later,
+    async_track_state_change_event,
+    async_track_time_change,
+)
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 
@@ -79,6 +83,10 @@ from .data.inverter_derived_data import (
     PwMngtPvDirectConsumptionDerivedSensor,
     derivable_entity_map_keys,
 )
+from .data.inverter_own_consumption import (
+    PwM_INVERTER_OWN_CONSUMPTION_SENSORS,
+    PwMngtInverterOwnConsumptionSensor,
+)
 from .base import use_description_key_as_translation_key
 from .helpers.state_helper import read_float_state
 from .properties import pv_properties
@@ -139,6 +147,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     for description, source_split_key in PwM_PV_INTEGRAL_SENSORS:
         entity = PwMngtEnergyIntegrationSensor(description, entry, source_split_key)
         LOGGER.info("Added PV energy-integration sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    # Issue #77: the inverter's own consumption (W) and today's kWh of it.
+    for description in PwM_INVERTER_OWN_CONSUMPTION_SENSORS:
+        entity = PwMngtInverterOwnConsumptionSensor(description, entry)
+        LOGGER.info("Added PV inverter own consumption sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+    for description, source_key in PwM_PV_DAILY_INTEGRAL_SENSORS:
+        entity = PwMngtDailyEnergyIntegrationSensor(description, entry, source_key)
+        LOGGER.info("Added PV daily energy-integration sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
     for description, entity_map_key in PwM_HUB_MIRROR_SENSORS:
@@ -719,6 +737,26 @@ PwM_PV_INTEGRAL_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 ]
 
 
+# Issue #77: like PwM_PV_INTEGRAL_SENSORS, but back to 0 at local
+# midnight (PwMngtDailyEnergyIntegrationSensor). The source key is a PwM PV
+# sensor's description key.
+PwM_PV_DAILY_INTEGRAL_SENSORS: list[tuple[SensorEntityDescription, str]] = [
+    (
+        SensorEntityDescription(
+            key="inverter_own_consumption_today",
+            name="Inverter own consumption today",
+            icon="mdi:flash-triangle-outline",
+            device_class=SensorDeviceClass.ENERGY,
+            state_class=SensorStateClass.TOTAL_INCREASING,
+            native_unit_of_measurement="kWh",
+            suggested_display_precision=2,
+            entity_category=EntityCategory.DIAGNOSTIC,
+        ),
+        "inverter_own_consumption",
+    ),
+]
+
+
 # ---------------------------------------------------------------------------
 # Hub-device sensors that live-mirror another entity's state, picked by
 # the user in Options -> Solar PV Plant. Same tuple shape and wiring as
@@ -1180,3 +1218,32 @@ class PwMngtEnergyIntegrationSensor(RestoreEntity, SensorEntity):
 
         self._last_source_value = value
         self._last_update_time = now
+
+
+class PwMngtDailyEnergyIntegrationSensor(PwMngtEnergyIntegrationSensor):
+    """PwMngtEnergyIntegrationSensor that starts again from 0 at local
+    midnight -- today's kWh (issue #77). TOTAL_INCREASING, so the drop to 0
+    is a new meter cycle to the Recorder, not a negative reading. A value
+    restored from before today (HA was down over midnight) starts at 0
+    too."""
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        last_state = await self.async_get_last_state()
+        if last_state is not None and (
+            dt_util.as_local(last_state.last_updated).date() != dt_util.now().date()
+        ):
+            self._reset()
+
+        @callback
+        def _midnight(_now) -> None:
+            self._reset()
+
+        self.async_on_remove(
+            async_track_time_change(self.hass, _midnight, hour=0, minute=0, second=0)
+        )
+
+    @callback
+    def _reset(self) -> None:
+        self._attr_native_value = 0.0
+        self.async_write_ha_state()
