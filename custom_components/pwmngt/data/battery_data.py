@@ -837,6 +837,24 @@ class PvReleasePlan:
     night_unknown: bool
 
 
+def evening_reserve_soc(
+    evening_need: dict[int, float], battery_min_soc: float, battery_size: float
+) -> float | None:
+    """Issues #71/#73: the SoC (%) the battery keeps for the evening 17-21
+    -- the floor plus the evening's need with TARGET_MARGIN, at most
+    _MIN_SOC_CEILING. One formula for #71's plan and battery_hold's winter
+    limit, so the hold never lets go of the reserve over a rounding
+    difference. None when the battery size or the evening need is
+    missing."""
+    if battery_size <= 0 or not evening_need:
+        return None
+    evening_kwh = sum(evening_need.get(h, 0.0) for h in _DAY_PLAN_EVENING_HOURS)
+    return min(
+        float(_MIN_SOC_CEILING),
+        battery_min_soc + math.ceil(evening_kwh * TARGET_MARGIN / battery_size * 100),
+    )
+
+
 def plan_pv_release(
     soc: float,
     soc_pv: float,
@@ -859,13 +877,9 @@ def plan_pv_release(
     the plan pick fewer, dearer hours); the floor keeps the reserve either
     way. None when something needed is missing."""
     size = data.battery_size
-    if size <= 0 or not data.evening_need:
+    reserve = evening_reserve_soc(data.evening_need, battery_min_soc, size)
+    if reserve is None:
         return None
-    evening_kwh = sum(data.evening_need.get(h, 0.0) for h in _DAY_PLAN_EVENING_HOURS)
-    reserve = min(
-        float(_MIN_SOC_CEILING),
-        battery_min_soc + math.ceil(evening_kwh * TARGET_MARGIN / size * 100),
-    )
     above_kwh = max(soc - reserve, 0.0) / 100 * size
     extra_kwh = min(above_kwh, max(soc_pv, 0.0) / 100 * size)
 
@@ -1844,6 +1858,15 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             return
 
         battery_min_soc = pv_properties.battery_min_soc(self.hass, self._entry)
+        pv_release_inputs = self._read_pv_release()
+        # Issue #73: battery_hold's winter limit in daytime.
+        evening_reserve = (
+            evening_reserve_soc(
+                pv_release_inputs.evening_need, battery_min_soc, pv_release_inputs.battery_size
+            )
+            if pv_release_inputs is not None
+            else None
+        )
         inputs = BatteryInputs(
             now=dt_util.now(),
             battery_soc=soc,
@@ -1883,7 +1906,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             ),
             **self._read_day_plan(),
             **self._read_sale_plan(),
-            pv_release=self._read_pv_release(),
+            pv_release=pv_release_inputs,
         )
 
         was_selling = self._ledger.selling
@@ -1945,6 +1968,9 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             "sale_floors": list(ledger.sale_floors),
             "selling": ledger.selling,
             "sale_kwh": {hour: round(kwh, 3) for hour, kwh in ledger.sale_kwh.items()},
+            # Issue #73: the SoC kept for the evening 17-21 (floor + need),
+            # battery_hold's winter limit 06-17. None while unknown.
+            "evening_reserve": evening_reserve,
             # Issue #71: today's plan for the PV energy above the evening
             # reserve -- the daytime hours it is used in and the floor, the
             # kWh, the later hours it would otherwise have covered (time

@@ -107,6 +107,13 @@ Deliberate differences from Node-RED (agreed with Claus, issue #12):
   expensive daytime hours (#59) need, so a limit of 16 % can be a grid
   charge: on 2026-11-09 the hold let go of it at 04:30 and the battery
   covered the house with it before 06:00.
+- DIFF (issue #73, Claus 2026-11-13): 06-17 the winter limit is
+  battery_data's evening reserve (floor + the evening's need 17-21,
+  evening_reserve_soc()) instead of a fixed 20 %. #70/#71 set min_soc to
+  that reserve in daytime, which on a big battery is often below 20 % --
+  the fixed rule let go of exactly the energy saved for the evening. A
+  little PV that doesn't reach the reserve still doesn't start a hard
+  hold. Outside 06-17, or while the reserve is unknown, the fixed 20 %.
 
 New logic with no Node-RED counterpart (Claus, issue #14):
 - The wait at the limit is 3 minutes, but 6 with 3 or more big PV shifts
@@ -198,6 +205,8 @@ _POWER_COMMANDS = frozenset({COMMAND_HOLD, COMMAND_BLOCK_CHARGING})
 _FLOOR_LIMIT = 10  # BUND: Growatt's lowest cutoff -- a limit at or below means no hold.
 _WINTER_MIN_LIMIT = 20  # VINTER_MIN: Nov-Jan, hold only from a limit of 20 % (not grid energy, #60).
 _WINTER_MONTHS = (11, 12, 1)
+# Issue #73: the hours the winter limit follows the evening reserve.
+_WINTER_RESERVE_HOURS = range(6, 17)
 _MARGIN_W = 300  # MARGIN_W: safety margin at the limit (clouds).
 # Issue #30: under "Bloker ladning" the margin also covers the inverter's
 # DC/AC loss, which grows with PV -- measured 2026-11-04 on Claus's WIT:
@@ -317,12 +326,38 @@ def battery_hold_supported(hass: HomeAssistant) -> bool:
     return find_entity_by_name(hass, GROWATT_MODBUS_PLATFORM, GROWATT_MODBUS_HOUSE_CONSUMPTION) is not None
 
 
-def hold_engages(limit: float, soc: float, winter: bool, grid_energy: bool) -> bool:
+def winter_min_limit(hour: int, evening_reserve: float | None) -> float:
+    """Issue #73: the lowest limit the hold keeps in winter (without grid
+    energy) -- battery_data's evening reserve 06-17, else the fixed
+    VINTER_MIN."""
+    if hour in _WINTER_RESERVE_HOURS and evening_reserve is not None:
+        return evening_reserve
+    return float(_WINTER_MIN_LIMIT)
+
+
+def read_evening_reserve(hass: HomeAssistant, entry: ConfigEntry) -> float | None:
+    """Issue #73: battery_data's evening_reserve (SoC %), or None."""
+    entity_id = pv_properties.battery_data_entity_id(hass, entry)
+    state = hass.states.get(entity_id) if entity_id else None
+    try:
+        value = state.attributes.get("evening_reserve") if state is not None else None
+        return None if value is None else float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def hold_engages(
+    limit: float,
+    soc: float,
+    winter: bool,
+    grid_energy: bool,
+    winter_limit: float = _WINTER_MIN_LIMIT,
+) -> bool:
     """Whether the hold has a limit to keep (the same rules as
     calculate_battery_hold()) and SoC is at or below it."""
     if limit <= _FLOOR_LIMIT:
         return False
-    if winter and limit < _WINTER_MIN_LIMIT and not grid_energy:
+    if winter and limit < winter_limit and not grid_energy:
         return False
     return soc <= limit
 
@@ -349,8 +384,14 @@ def stop_command(
         grid_energy = bool(state and float(state.attributes.get("soc_grid") or 0) > 0)
     except (TypeError, ValueError):
         grid_energy = False
-    winter = dt_util.now().month in _WINTER_MONTHS
-    return COMMAND_HOLD if hold_engages(limit, soc, winter, grid_energy) else _COMMAND_INTERNAL
+    now = dt_util.now()
+    winter = now.month in _WINTER_MONTHS
+    winter_limit = winter_min_limit(now.hour, read_evening_reserve(hass, entry))
+    return (
+        COMMAND_HOLD
+        if hold_engages(limit, soc, winter, grid_energy, winter_limit)
+        else _COMMAND_INTERNAL
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -408,6 +449,8 @@ class BatteryHoldInputs:
     # Issue #60: battery_data's soc_grid > 0 -- the battery holds
     # grid-bought energy, which the winter rule doesn't release.
     grid_energy: bool = False
+    # Issue #73: the lowest limit kept in winter (winter_min_limit()).
+    winter_limit: float = _WINTER_MIN_LIMIT
     pv_big_shifts: int = 0  # solar_data's pv_big_shifts_last_60min.
     # Issue #33: a car is charging, and with how much (W; None = unknown,
     # the charger has no power sensor).
@@ -699,7 +742,7 @@ def calculate_battery_hold(state: BatteryHoldState, inputs: BatteryHoldInputs) -
         else:
             status = STATUS_WAITING_MIN_SWITCH_TIME
     elif (
-        (limit < _WINTER_MIN_LIMIT and not inputs.grid_energy)
+        (limit < inputs.winter_limit and not inputs.grid_energy)
         if inputs.winter
         else (limit <= _FLOOR_LIMIT)
     ) or limit <= _FLOOR_LIMIT:
@@ -919,7 +962,8 @@ class PwMngtBatteryHoldSensor(RestoreEntity, SensorEntity):
 
     @callback
     def _run(self) -> None:
-        result = calculate_battery_hold(self._state, self._read_inputs())
+        inputs = self._read_inputs()
+        result = calculate_battery_hold(self._state, inputs)
         self._state = result.state
 
         native_value = result.state.power_w if result.active else 0.0
@@ -927,6 +971,8 @@ class PwMngtBatteryHoldSensor(RestoreEntity, SensorEntity):
             "active": result.active,
             "status": result.status,
             "target_power": result.target_power_w,
+            # Issue #73: the winter limit in use (None outside winter).
+            "winter_limit": inputs.winter_limit if inputs.winter else None,
         }
         if native_value != self._attr_native_value or attributes != self._attr_extra_state_attributes:
             self._attr_native_value = native_value
@@ -960,6 +1006,9 @@ class PwMngtBatteryHoldSensor(RestoreEntity, SensorEntity):
             now=dt_util.utcnow().timestamp(),
             winter=dt_util.now().month in _WINTER_MONTHS,
             grid_energy=self._read_grid_energy(),
+            winter_limit=winter_min_limit(
+                dt_util.now().hour, read_evening_reserve(self.hass, self._entry)
+            ),
             pv_big_shifts=self._read_pv_big_shifts(),
             step_w=self._read_step_w(),
             **self._read_car_charging(),

@@ -336,7 +336,7 @@
               "paused_manual": "Pause (batteritilstand manuel)",
               "paused_other_command": "Pause (anden batterikommando)",
               "released_no_limit": "Frigivet (ingen grænse)",
-              "released_winter": "Frigivet (vinter, grænse under 20%)",
+              "released_winter": "Frigivet (vinter, grænse under vintergrænsen)",
               "waiting_discharge": "Afventer: aflader ved grænsen",
               "waiting_below_limit": "Afventer: under grænsen under afladning",
               "below_limit_not_discharging": "Under grænsen - aflader ikke, inverteren lader selv",
@@ -359,6 +359,9 @@
           },
           "target_power": {
             "name": "Ønsket effekt"
+          },
+          "winter_limit": {
+            "name": "Vintergrænse"
           }
         }
       }
