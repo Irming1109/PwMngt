@@ -695,7 +695,7 @@ PwM_PV_SPLIT_SENSORS: list[tuple[SensorEntityDescription, str, Callable[[float],
 # over time into a cumulative energy (kWh) total -- a left-Riemann-sum
 # approximation, same method as Home Assistant's built-in "Integration -
 # Riemann sum" helper (`platform: integration`, method: left, unit_prefix:
-# k, round: 2). Each tuple is (description, source_split_key).
+# k; only the state is rounded). Each tuple is (description, source_split_key).
 #
 # source_split_key is the description key of the PwMngt split sensor in
 # PwM_PV_SPLIT_SENSORS above -- not something the user maps. It's resolved
@@ -1105,12 +1105,18 @@ class PwMngtGridSplitSensor(SensorEntity):
         self._attr_available = True
         self.async_write_ha_state()
 
+# Decimals of an energy-integration sensor's state (kWh). The display
+# uses suggested_display_precision; this only keeps the stored state
+# from carrying float noise.
+_STATE_DECIMALS = 4
+
+
 class PwMngtEnergyIntegrationSensor(RestoreEntity, SensorEntity):
     """A PwM PV-device sensor that integrates a power (W) source sensor
     over time into a cumulative energy (kWh) total, using a left-Riemann-sum
     approximation (same method as Home Assistant's built-in "Integration -
     Riemann sum" helper: `platform: integration`, method: left,
-    unit_prefix: k, round: 2).
+    unit_prefix: k; only the state is rounded, never the running total).
 
     The accumulated total survives Home Assistant restarts via
     RestoreEntity; only the elapsed-time baseline resets on restart (the
@@ -1140,6 +1146,12 @@ class PwMngtEnergyIntegrationSensor(RestoreEntity, SensorEntity):
         self._source_entity_id: str | None = None
         self._last_source_value: float | None = None
         self._last_update_time = None
+        # The running total, unrounded (issue #77): rounding it to 2
+        # decimals on every source update dropped each step below
+        # 0.005 kWh -- e.g. 100 W for 10 s is 0.0003 kWh, so a sensor at
+        # 100 W never counted at all, while ~1 kW steps were rounded up.
+        # Only the state shown is rounded (_STATE_DECIMALS).
+        self._total = 0.0
 
     async def async_added_to_hass(self) -> None:
         """Restore the accumulated total, then start integrating."""
@@ -1148,7 +1160,7 @@ class PwMngtEnergyIntegrationSensor(RestoreEntity, SensorEntity):
         last_state = await self.async_get_last_state()
         value = read_float_state(last_state)
         if value is not None:
-            self._attr_native_value = value
+            self._set_total(value)
         self._attr_available = True
         self.async_write_ha_state()
 
@@ -1208,16 +1220,16 @@ class PwMngtEnergyIntegrationSensor(RestoreEntity, SensorEntity):
 
         if self._last_source_value is not None and self._last_update_time is not None:
             elapsed_hours = (now - self._last_update_time).total_seconds() / 3600
-            self._attr_native_value = round(
-                (self._attr_native_value or 0.0)
-                + (self._last_source_value * elapsed_hours) / 1000,
-                2,
-            )
+            self._set_total(self._total + (self._last_source_value * elapsed_hours) / 1000)
             self._attr_available = True
             self.async_write_ha_state()
 
         self._last_source_value = value
         self._last_update_time = now
+
+    def _set_total(self, total: float) -> None:
+        self._total = total
+        self._attr_native_value = round(total, _STATE_DECIMALS)
 
 
 class PwMngtDailyEnergyIntegrationSensor(PwMngtEnergyIntegrationSensor):
@@ -1245,5 +1257,5 @@ class PwMngtDailyEnergyIntegrationSensor(PwMngtEnergyIntegrationSensor):
 
     @callback
     def _reset(self) -> None:
-        self._attr_native_value = 0.0
+        self._set_total(0.0)
         self.async_write_ha_state()

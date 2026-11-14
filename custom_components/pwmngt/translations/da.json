@@ -269,9 +269,6 @@
   },
   "entity": {
     "select": {
-      "battery_min_soc": {
-        "name": "Batteri minimum SoC, kun til beregning (%)"
-      },
       "battery_mode": {
         "state": {
           "auto": "Auto",
@@ -295,24 +292,6 @@
       }
     },
     "sensor": {
-      "own_production_savings_today": {
-        "name": "Besparelse egenproduktion i dag"
-      },
-      "own_production_savings_month": {
-        "name": "Besparelse egenproduktion denne måned"
-      },
-      "own_production_savings_year": {
-        "name": "Besparelse egenproduktion i år"
-      },
-      "battery_charging_savings_today": {
-        "name": "Besparelse batteriladning i dag"
-      },
-      "battery_charging_savings_month": {
-        "name": "Besparelse batteriladning denne måned"
-      },
-      "battery_charging_savings_year": {
-        "name": "Besparelse batteriladning i år"
-      },
       "battery_charge_status": {
         "state": {
           "not_calculated": "Ikke beregnet",
@@ -366,15 +345,11 @@
         }
       },
       "inverter_own_consumption": {
-        "name": "Inverter egetforbrug",
         "state_attributes": {
           "house_power_entity": {
             "name": "Husets effekt-sensor"
           }
         }
-      },
-      "inverter_own_consumption_today": {
-        "name": "Inverter egetforbrug i dag"
       }
     }
   },
