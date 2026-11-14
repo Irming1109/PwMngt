@@ -44,6 +44,8 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.util import dt as dt_util
 
@@ -57,7 +59,11 @@ from ..const import (
     INVERTER_HOUSE_POWER_NAMES,
 )
 from ..devices import pv_device_info
-from ..helpers.entity_registry_helper import entity_platform, find_entity_by_name
+from ..helpers.entity_registry_helper import (
+    entity_platform,
+    find_entity_by_name,
+    registry_entry_names,
+)
 from ..helpers.state_helper import read_float_state
 from ..properties import pv_properties
 
@@ -129,11 +135,38 @@ def house_power_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None
     inverter PwMngt doesn't know, or no single match)."""
     entity_map = entry.options.get(CONF_ENTITY_MAP, {})
     for key in (ENTITY_KEY_GRID_POWER, ENTITY_KEY_BATTERY_POWER):
-        platform = entity_platform(hass, entity_map.get(key))
+        source_entity_id = entity_map.get(key)
+        platform = entity_platform(hass, source_entity_id)
         name = INVERTER_HOUSE_POWER_NAMES.get(platform) if platform else None
         if name:
-            return find_entity_by_name(hass, platform, name)
+            return find_entity_by_name(hass, platform, name) or _find_by_name_suffix(
+                hass, source_entity_id, name
+            )
     return None
+
+
+def _find_by_name_suffix(hass: HomeAssistant, source_entity_id: str, name: str) -> str | None:
+    """Fallback: the single sensor of the source entity's own config entry
+    whose name ends with " <name>". Kostal stores its sensors' names with
+    a prefix that needn't be the device's name -- on Rene's install
+    "Kostal Home Power" on device "Hjortevej17" (2026-11-14), which
+    find_entity_by_name() can't strip. Only within the one config entry,
+    so another inverter's sensor can't match."""
+    registry = er.async_get(hass)
+    device_registry = dr.async_get(hass)
+    source = registry.async_get(source_entity_id)
+    if source is None or source.config_entry_id is None:
+        return None
+    matches = [
+        entity.entity_id
+        for entity in er.async_entries_for_config_entry(registry, source.config_entry_id)
+        if entity.domain == "sensor"
+        and any(
+            entity_name == name or entity_name.endswith(f" {name}")
+            for entity_name in registry_entry_names(entity, device_registry)
+        )
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 # ---------------------------------------------------------------------------
