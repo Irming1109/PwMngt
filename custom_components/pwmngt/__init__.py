@@ -11,6 +11,7 @@ from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.loader import async_get_integration
 
+from .devices import async_register_hub_device
 from .services import async_setup_services
 from .const import (
     DOMAIN,
@@ -45,6 +46,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await _async_register_frontend(hass)
 
     await async_setup_services(hass)
+
+    # Issue #78: the hub device first -- the nested devices refer to it by id.
+    async_register_hub_device(hass, entry)
 
     # Forward config entry setup to the sensor platform
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)

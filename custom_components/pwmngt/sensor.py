@@ -408,7 +408,9 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
             key="battery_pv_charged",
             name="Battery PV charged",
             icon="mdi:battery-arrow-up-outline",
-            device_class=SensorDeviceClass.ENERGY_STORAGE,
+            # Issue #79: a counter that only rises is ENERGY -- Home
+            # Assistant rejects ENERGY_STORAGE with TOTAL_INCREASING.
+            device_class=SensorDeviceClass.ENERGY,
             state_class=SensorStateClass.TOTAL_INCREASING,
             native_unit_of_measurement="kWh",
         ),
@@ -420,7 +422,7 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
             key="battery_pv_discharged",
             name="Battery PV discharged",
             icon="mdi:battery-arrow-down-outline",
-            device_class=SensorDeviceClass.ENERGY_STORAGE,
+            device_class=SensorDeviceClass.ENERGY,  # issue #79, as battery_pv_charged
             state_class=SensorStateClass.TOTAL_INCREASING,
             native_unit_of_measurement="kWh",
         ),
