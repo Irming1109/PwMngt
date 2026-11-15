@@ -923,6 +923,7 @@ const PWM_BATTERY_CARD_STYLE = `
     border-radius: 8px;
     margin-bottom: 8px;
     color: var(--text-primary-color, #fff);
+    font-size: 17px;
     font-weight: 500;
     text-align: center;
   }
@@ -931,7 +932,7 @@ const PWM_BATTERY_CARD_STYLE = `
   .pwm-banner.warn { background: var(--warning-color, #ffa600); }
   .pwm-banner.info { background: var(--info-color, #039be5); }
   .pwm-note {
-    font-size: 12px;
+    font-size: 15px;
     color: var(--secondary-text-color);
     margin: -2px 0 8px;
     text-align: center;
@@ -1007,6 +1008,14 @@ const PWM_BATTERY_CARD_STYLE = `
   .pwm-warning {
     color: var(--error-color);
     font-size: 13px;
+  }
+  /* Percentages in banners and notes stand out (Claus, 2026-11-15). */
+  .pwm-pct {
+    font-weight: 700;
+    font-size: 1.12em;
+  }
+  .pwm-note .pwm-pct {
+    color: var(--primary-text-color);
   }
 `;
 
@@ -1341,7 +1350,7 @@ class PwMBatteryCard extends HTMLElement {
   _banner(tone, text) {
     const banner = document.createElement("div");
     banner.className = `pwm-banner ${tone || "info"}`;
-    banner.textContent = text;
+    this._fillWithPercentages(banner, text);
     return banner;
   }
 
@@ -1538,8 +1547,30 @@ class PwMBatteryCard extends HTMLElement {
   _note(text) {
     const note = document.createElement("div");
     note.className = "pwm-note";
-    note.textContent = text;
+    this._fillWithPercentages(note, text);
     return note;
+  }
+
+  /**
+   * Put text into el with every percentage ("17 %", "59%") in its own
+   * .pwm-pct span -- built from text nodes, never innerHTML, as the texts
+   * carry values from Home Assistant states.
+   */
+  _fillWithPercentages(el, text) {
+    el.textContent = "";
+    String(text)
+      .split(/(\d+(?:[.,]\d+)?\s?%)/)
+      .forEach((part, index) => {
+        if (!part) return;
+        if (index % 2) {
+          const pct = document.createElement("span");
+          pct.className = "pwm-pct";
+          pct.textContent = part;
+          el.appendChild(pct);
+        } else {
+          el.appendChild(document.createTextNode(part));
+        }
+      });
   }
 
   _button(text, onClick) {
