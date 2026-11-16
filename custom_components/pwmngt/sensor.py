@@ -695,6 +695,33 @@ PwM_PV_SPLIT_SENSORS: list[tuple[SensorEntityDescription, str, Callable[[float],
         ENTITY_KEY_GRID_POWER,
         lambda value: -value if value < 0 else 0.0,
     ),
+    # Issue #87 (Claus 2026-11-16) -- no Node-RED counterpart: Battery
+    # power split into charging and discharging (normalized, positive =
+    # discharge), for the battery energy totals below.
+    (
+        SensorEntityDescription(
+            key="battery_charge_power",
+            name="Battery charge power",
+            icon="mdi:battery-arrow-up",
+            device_class=SensorDeviceClass.POWER,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="W",
+        ),
+        ENTITY_KEY_BATTERY_POWER,
+        lambda value: -value if value < 0 else 0.0,
+    ),
+    (
+        SensorEntityDescription(
+            key="battery_discharge_power",
+            name="Battery discharge power",
+            icon="mdi:battery-arrow-down",
+            device_class=SensorDeviceClass.POWER,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="W",
+        ),
+        ENTITY_KEY_BATTERY_POWER,
+        lambda value: value if value > 0 else 0.0,
+    ),
 ]
 
 
@@ -758,6 +785,33 @@ PwM_PV_INTEGRAL_SENSORS: list[tuple[SensorEntityDescription, str]] = [
             suggested_display_precision=2,
         ),
         "pv_total",
+    ),
+    # Issue #87 (Claus 2026-11-16) -- no Node-RED counterpart: the energy
+    # into and out of the battery, grid charging included (Battery PV
+    # charged counts PV only), for the Energy dashboard's battery system.
+    (
+        SensorEntityDescription(
+            key="battery_energy_charged",
+            name="Battery energy charged",
+            icon="mdi:battery-arrow-up-outline",
+            device_class=SensorDeviceClass.ENERGY,
+            state_class=SensorStateClass.TOTAL_INCREASING,
+            native_unit_of_measurement="kWh",
+            suggested_display_precision=2,
+        ),
+        "battery_charge_power",
+    ),
+    (
+        SensorEntityDescription(
+            key="battery_energy_discharged",
+            name="Battery energy discharged",
+            icon="mdi:battery-arrow-down-outline",
+            device_class=SensorDeviceClass.ENERGY,
+            state_class=SensorStateClass.TOTAL_INCREASING,
+            native_unit_of_measurement="kWh",
+            suggested_display_precision=2,
+        ),
+        "battery_discharge_power",
     ),
 ]
 
