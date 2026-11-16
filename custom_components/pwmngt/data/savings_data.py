@@ -97,6 +97,14 @@ down (see _seed_ledger()'s own docstring) -- so it's safe to re-run as
 often as the wizard is, and a late or corrected seed sensor still takes
 effect instead of being permanently locked out.
 
+Issue #91 (Claus, 2026-11-16): a seed field is used once. Left in place,
+it pulled the sums up again on every start -- after a wizard re-run, after
+a pwmngt.adjust_savings correction (undoing it), or from a Node-RED sensor
+still counting. So once a seed sensor has been read, the sums are saved
+straight away (restore state) and the field is removed from the options;
+the wizard then shows it empty. Picking a sensor again seeds once more. A
+seed sensor without a value yet (e.g. not loaded) stays until it has one.
+
 Why all 4 base sums (not just the two headline ones) have to be seeded
 together: own_production_savings and battery_charging_savings are both a
 running *high-water mark* of (bigger sum - smaller sum) -- lifetime
@@ -157,7 +165,11 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er, event
 from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
-from homeassistant.helpers.restore_state import ExtraStoredData, RestoreEntity
+from homeassistant.helpers.restore_state import (
+    ExtraStoredData,
+    RestoreEntity,
+    async_get as async_get_restore_state,
+)
 from homeassistant.util import dt as dt_util
 
 from ..const import (
@@ -983,9 +995,9 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         self._battery_discharge_entity_id = (
             entity_map.get(ENTITY_KEY_BATTERY_DISCHARGE_HOURLY) or None
         )
+        # entity_map key -> seed sensor, for the seed fields that are set.
         self._seed_entity_ids = {
-            field_path: entity_map.get(key) or None
-            for key, field_path in _SEED_SOURCE_KEYS.items()
+            key: entity_map[key] for key in _SEED_SOURCE_KEYS if entity_map.get(key)
         }
 
     @property
@@ -998,7 +1010,12 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         restored = await self.async_get_last_extra_data()
         if restored is not None:
             self._ledger = PwMngtSavingsStoredData.from_dict(restored.as_dict()).ledger
-        self._seed_ledger()
+        used_seed_keys = self._seed_ledger()
+        if used_seed_keys:
+            # Issue #91: save the seeded sums before the fields go, so a
+            # crash can't lose both.
+            await async_get_restore_state(self.hass).async_dump_states()
+            self._remove_seed_fields(used_seed_keys)
         roll_periods(self._ledger, dt_util.now(), only_unstarted=True)
 
         self.async_on_remove(
@@ -1023,7 +1040,7 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
             self._pending_accumulate = None
         await super().async_will_remove_from_hass()
 
-    def _seed_ledger(self) -> None:
+    def _seed_ledger(self) -> list[str]:
         """High-water-mark seed, re-applied on every async_added_to_hass
         (not just the first run ever -- Claus, 2026-10-16, see module
         docstring's "Reworked yet again" paragraph). Each of the 4 seed
@@ -1037,11 +1054,17 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         every reload instead of gating it on "no restored state yet"
         means pointing the wizard's seed fields at a historical sensor
         always has an effect, instead of silently doing nothing once the
-        entity has ever been restored once before (the bug this fixed)."""
-        for field_path, entity_id in self._seed_entity_ids.items():
+        entity has ever been restored once before (the bug this fixed).
+
+        Returns the entity_map keys whose seed sensor was read -- used
+        once, issue #91 (see _remove_seed_fields())."""
+        used: list[str] = []
+        for key, entity_id in self._seed_entity_ids.items():
             value = self._seed_value(entity_id)
             if value is None:
                 continue
+            used.append(key)
+            field_path = _SEED_SOURCE_KEYS[key]
             owner_name, attr_name = field_path.split(".", 1)
             owner = getattr(self._ledger, owner_name)
             current = getattr(owner, attr_name)
@@ -1065,6 +1088,22 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         # must not undo an hourly high-water mark set since the last
         # reload just because this run's raw diff happens to be smaller.
         self._raise_headline_values()
+        return used
+
+    def _remove_seed_fields(self, keys: list[str]) -> None:
+        """Issue #91: take used seed fields out of the config entry's
+        options, so they aren't applied again. PwMngt has no options
+        update listener, so this doesn't reload anything."""
+        options = dict(self._entry.options)
+        entity_map = dict(options.get(CONF_ENTITY_MAP, {}))
+        for key in keys:
+            entity_map.pop(key, None)
+            self._seed_entity_ids.pop(key, None)
+        options[CONF_ENTITY_MAP] = entity_map
+        self.hass.config_entries.async_update_entry(self._entry, options=options)
+        LOGGER.info(
+            "PwMngt: savings seed field(s) %s used once and cleared", ", ".join(keys)
+        )
 
     def _raise_headline_values(self) -> None:
         """Raise own_production_savings/battery_charging_savings to the
