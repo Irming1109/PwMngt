@@ -357,6 +357,12 @@ _MOVE_MIN_GAIN = 0.10
 # Triggers.
 _EVENING_WINDOW_START = (18, 0)
 _EVENING_WINDOW_END = (23, 30)
+# Issue #93: a changed price difference re-plans at once from when
+# tomorrow's prices are out (~13:10) to the evening window's end -- but a
+# "yes_today" (today's own plan) is left alone before this hour, as #75
+# does, and a running grid charge is waited out, retrying this often.
+_PRICE_CHANGE_KEEP_TODAY_UNTIL = (14, 0)
+_PRICE_CHANGE_RETRY_SECONDS = 5 * 60
 _DAILY_TRIGGER_HOUR = 23  # Node-RED: inject "Kl 23", cron "00 23 * * *".
 # Node-RED: inject "16:55", cron "55 16 * * *" -- see _handle_day_end().
 _DAY_END_HOUR_MINUTE = (16, 55)
@@ -1009,6 +1015,7 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         entity_map = entry.options.get(CONF_ENTITY_MAP, {})
         self._forecast_tomorrow_entity_id = entity_map.get(ENTITY_KEY_PV_FORECAST_TOMORROW) or None
         self._pending_hourly_recheck: Any = None
+        self._pending_price_change: Any = None
 
     @property
     def extra_restore_state_data(self) -> PwMngtBatteryChargeDecisionStoredData:
@@ -1114,9 +1121,10 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             )
         )
 
-        # Price-difference threshold change -- unconditional, window-gated
-        # (Node-RED: ha-select "PV batteri ladning pris difference"). Issue
-        # #64: the sale threshold too, so a changed sale plan shows at once.
+        # Price-difference threshold change (Node-RED: ha-select "PV batteri
+        # ladning pris difference", gated 18:00-23:30). Issue #64: the sale
+        # threshold too. DIFF (issue #93): not only 18:00-23:30 -- see
+        # _handle_price_difference_change().
         unconditional_watched = []
         for entity_id in (
             pv_properties.battery_price_difference_entity_id(self.hass, self._entry),
@@ -1127,7 +1135,7 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         if unconditional_watched:
             self.async_on_remove(
                 event.async_track_state_change_event(
-                    self.hass, unconditional_watched, self._handle_unconditional_trigger
+                    self.hass, unconditional_watched, self._handle_price_difference_change
                 )
             )
 
@@ -1343,6 +1351,9 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         if self._pending_hourly_recheck is not None:
             self._pending_hourly_recheck()
             self._pending_hourly_recheck = None
+        if self._pending_price_change is not None:
+            self._pending_price_change()
+            self._pending_price_change = None
         await super().async_will_remove_from_hass()
 
     @callback
@@ -1400,6 +1411,43 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         if self._attr_native_value != _STATUS_NOT_CALCULATED:
             return
         self._run()
+
+    @callback
+    def _handle_price_difference_change(self, _event_or_time=None) -> None:
+        """Issue #93 (Claus 2026-11-16): a changed price difference re-plans
+        right away, not only in Node-RED's 18:00-23:30 window -- the plan is
+        made when tomorrow's prices are out (~13:10, #75), and _run() does
+        nothing before that. Two exceptions: today's own plan ("yes_today")
+        isn't replaced before 14:00 (as #75), and a running grid charge is
+        waited out (re-planning could take away the hour it charges in),
+        trying again every _PRICE_CHANGE_RETRY_SECONDS."""
+        if self._pending_price_change is not None:
+            self._pending_price_change()
+            self._pending_price_change = None
+        now = dt_util.now()
+        if (now.hour, now.minute) > _EVENING_WINDOW_END:
+            return
+        if (
+            self._attr_native_value == "yes_today"
+            and (now.hour, now.minute) < _PRICE_CHANGE_KEEP_TODAY_UNTIL
+        ):
+            return
+        if self._grid_charge_running():
+            self._pending_price_change = event.async_call_later(
+                self.hass, _PRICE_CHANGE_RETRY_SECONDS, self._handle_price_difference_retry
+            )
+            return
+        self._run()
+
+    @callback
+    def _handle_price_difference_retry(self, _now=None) -> None:
+        self._pending_price_change = None
+        self._handle_price_difference_change()
+
+    def _grid_charge_running(self) -> bool:
+        entity_id = pv_properties.battery_command_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        return state is not None and state.state in _ACTIVE_CHARGE_COMMANDS
 
     @callback
     def _handle_unconditional_trigger(self, _event_or_time=None) -> None:
