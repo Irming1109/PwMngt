@@ -69,22 +69,36 @@ def consumption_source_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> li
 
 def charger_power_entity_id(hass: HomeAssistant, source_entity_id: str) -> str | None:
     """The charging-power sensor on the same device as a charger's
-    consumption source (CHARGER_POWER_TRANSLATION_KEYS), or None."""
+    consumption source (CHARGER_POWER_TRANSLATION_KEYS), or None.
+
+    Issue #89: a source from any other integration -- an energy meter on
+    the supply of a charger PwMngt can't talk to (charger type "Other",
+    e.g. a Shelly) -- uses the one sensor with device class power on that
+    device. Without it, car_charging() would fall back to the energy
+    counter moving, and a meter's standby draw moves it too."""
     registry = er.async_get(hass)
     source = registry.async_get(source_entity_id)
     if source is None or source.device_id is None:
         return None
     translation_key = CHARGER_POWER_TRANSLATION_KEYS.get(source.platform)
-    if translation_key is None:
+    entities = [
+        entity
+        for entity in er.async_entries_for_device(registry, source.device_id)
+        if entity.domain == "sensor"
+        and entity.platform == source.platform
+        and entity.disabled_by is None
+    ]
+    if translation_key is not None:
+        for entity in entities:
+            if entity.translation_key == translation_key:
+                return entity.entity_id
         return None
-    for entity in er.async_entries_for_device(registry, source.device_id):
-        if (
-            entity.domain == "sensor"
-            and entity.platform == source.platform
-            and entity.translation_key == translation_key
-        ):
-            return entity.entity_id
-    return None
+    power = [
+        entity.entity_id
+        for entity in entities
+        if (entity.device_class or entity.original_device_class) == "power"
+    ]
+    return power[0] if len(power) == 1 else None
 
 
 def car_charging_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> list[str]:

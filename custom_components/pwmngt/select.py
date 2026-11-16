@@ -99,7 +99,7 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         name="Charger1 type",
         icon="mdi:ev-station",
         entity_category=EntityCategory.CONFIG,
-        options=["Not installed", "Wallbox", "Easee"],
+        options=["Not installed", "Wallbox", "Easee", "Other"],
         # Issue #82: a new installation has no charger until one is picked
         # (Node-RED's own default was Claus's Wallbox).
         default_option="Not installed",
@@ -111,7 +111,7 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         name="Charger2 type",
         icon="mdi:ev-station",
         entity_category=EntityCategory.CONFIG,
-        options=["Not installed", "Wallbox", "Easee"],
+        options=["Not installed", "Wallbox", "Easee", "Other"],
         # Issue #82: a new installation has no charger until one is picked
         # (Node-RED's own default was Claus's Wallbox).
         default_option="Not installed",

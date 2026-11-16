@@ -246,7 +246,7 @@
       },
       "ev_charging_consumption": {
         "title": "EV-ladning",
-        "description": "Vælg hver laders egen sensor for tilført energi (fx Wallbox' \"Added energy\" eller Easee's \"Session Energy\").{auto_filled_note}",
+        "description": "Vælg hver laders egen sensor for tilført energi (fx Wallbox' \"Added energy\" eller Easee's \"Session Energy\"). For typen \"Other\": energisensoren på måleren i laderens forsyning (fx en Shelly) -- PwMngt bruger effektsensoren på samme enhed til at se, hvornår bilen lader.{auto_filled_note}",
         "data": {
           "charger1": "Lader 1 forbrugskilde",
           "charger2": "Lader 2 forbrugskilde"

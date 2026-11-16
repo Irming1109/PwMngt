@@ -246,7 +246,7 @@
       },
       "ev_charging_consumption": {
         "title": "EV Charging",
-        "description": "Pick each charger's own added-energy sensor (e.g. Wallbox's \"Added energy\" or Easee's \"Session Energy\").{auto_filled_note}",
+        "description": "Pick each charger's own added-energy sensor (e.g. Wallbox's \"Added energy\" or Easee's \"Session Energy\"). For type \"Other\": the energy sensor of the meter on the charger's supply (e.g. a Shelly) -- PwMngt uses the power sensor on the same device to see when the car charges.{auto_filled_note}",
         "data": {
           "charger1": "Charger1 consumption source entity",
           "charger2": "Charger2 consumption source entity"

@@ -41,6 +41,12 @@ CHARGER_TYPE_INTEGRATION_DOMAINS: dict[str, str] = {
 # that only make sense for an installed charger, without repeating the
 # literal string.
 CHARGER_TYPE_NOT_INSTALLED = "Not installed"
+# Issue #89: a charger PwMngt can't talk to, only watch through an energy
+# meter on its supply (e.g. a Shelly) -- its consumption source is the
+# meter's energy sensor, its power the meter's power sensor
+# (properties/charger_properties.py). Needs no integration of its own, so
+# the wizard always offers it.
+CHARGER_TYPE_OTHER = "Other"
 
 # ---------------------------------------------------------------------------
 # Each brand's own sensor for "how much energy this charger has added,
