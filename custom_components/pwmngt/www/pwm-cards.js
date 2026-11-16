@@ -1271,7 +1271,7 @@ class PwMBatteryCard extends HTMLElement {
     if (isAuto) {
       for (const node of this._pvReleaseToday(t)) todayGroup.appendChild(node);
     }
-    // Issue #64: selling now, or today's sale hours still ahead.
+    // Issue #64: selling now, or today's sale hours while some are left.
     const sale = this._saleToday();
     if (isAuto && sale) {
       todayGroup.appendChild(
@@ -1483,18 +1483,19 @@ class PwMBatteryCard extends HTMLElement {
   }
 
   /**
-   * Issue #64: battery_data's sales today -- {hours (the ones still ahead),
-   * selling} -- or null.
+   * Issue #64: battery_data's sales today -- {hours (all of today's --
+   * issue #81: only the remaining ones read as if it starts later),
+   * selling} -- or null once they are over.
    */
   _saleToday() {
     const data = this._state("data");
     if (!data) return null;
     const hours = Array.isArray(data.attributes.sale_hours) ? data.attributes.sale_hours : [];
     const now = new Date().getHours();
-    const ahead = hours.map(Number).filter((hour) => hour >= now);
+    const all = hours.map(Number);
     const selling = data.attributes.selling === true;
-    if (!ahead.length && !selling) return null;
-    return { hours: ahead, selling };
+    if (!all.some((hour) => hour >= now) && !selling) return null;
+    return { hours: all, selling };
   }
 
   /**
@@ -1508,10 +1509,10 @@ class PwMBatteryCard extends HTMLElement {
     const now = new Date().getHours();
     if (now >= 17) return [];
     const hours = (Array.isArray(a.pv_release_hours) ? a.pv_release_hours : []).map(Number);
-    const ahead = hours.filter((hour) => hour >= now);
     const nodes = [];
-    if (ahead.length) {
-      nodes.push(this._banner("ok", t.pvRelease(pwmHourRanges(ahead), Math.round(Number(a.pv_release_floor)))));
+    // Issue #81: all of today's hours while some are left.
+    if (hours.some((hour) => hour >= now)) {
+      nodes.push(this._banner("ok", t.pvRelease(pwmHourRanges(hours), Math.round(Number(a.pv_release_floor)))));
       const instead = (Array.isArray(a.pv_release_instead_hours) ? a.pv_release_instead_hours : []).map(Number);
       const evening = instead.filter((hour) => hour >= 12);
       const night = instead.filter((hour) => hour < 12);
@@ -1530,8 +1531,9 @@ class PwMBatteryCard extends HTMLElement {
   }
 
   /**
-   * Issues #59/#61: battery_data's plan for today -- {hours (the ones still
-   * ahead), reserve, source} -- or null.
+   * Issues #59/#61: battery_data's plan for today -- {hours (all of
+   * today's -- issue #81: only the remaining ones read as if it starts
+   * later), reserve, source} -- or null once they are over.
    */
   _dayPlanToday() {
     const data = this._state("data");
@@ -1539,9 +1541,9 @@ class PwMBatteryCard extends HTMLElement {
     const hours = Array.isArray(data.attributes.day_plan_hours) ? data.attributes.day_plan_hours : [];
     const reserve = Number(data.attributes.day_plan_reserve);
     const now = new Date().getHours();
-    const ahead = hours.map(Number).filter((hour) => hour >= now);
-    if (!ahead.length || !Number.isFinite(reserve)) return null;
-    return { hours: ahead, reserve: Math.round(reserve), source: data.attributes.day_plan_source };
+    const all = hours.map(Number);
+    if (!all.some((hour) => hour >= now) || !Number.isFinite(reserve)) return null;
+    return { hours: all, reserve: Math.round(reserve), source: data.attributes.day_plan_source };
   }
 
   _note(text) {
