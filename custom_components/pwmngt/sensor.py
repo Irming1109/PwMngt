@@ -539,7 +539,9 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
             key="pv_forecast_today",
             name="PV forecast today",
             icon="mdi:weather-sunny",
-            device_class=SensorDeviceClass.ENERGY,
+            # Issue #88: no device_class -- Home Assistant allows energy only
+            # with total/total_increasing, and a forecast isn't a meter.
+            # measurement keeps the statistics it already has.
             state_class=SensorStateClass.MEASUREMENT,
             native_unit_of_measurement="kWh",
         ),
@@ -550,7 +552,9 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
             key="pv_forecast_tomorrow",
             name="PV forecast tomorrow",
             icon="mdi:weather-sunny",
-            device_class=SensorDeviceClass.ENERGY,
+            # Issue #88: no device_class -- Home Assistant allows energy only
+            # with total/total_increasing, and a forecast isn't a meter.
+            # measurement keeps the statistics it already has.
             state_class=SensorStateClass.MEASUREMENT,
             native_unit_of_measurement="kWh",
         ),
