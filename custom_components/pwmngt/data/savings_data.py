@@ -257,7 +257,9 @@ PwM_SAVINGS_DATA_SENSORS: list[SensorEntityDescription] = [
 
 # The two headline sensors -- real entities with their own History/
 # Statistics graph and Energy-dashboard compatibility (device_class
-# monetary + state_class total_increasing), unlike PwM_SAVINGS_DATA_
+# monetary + state_class total -- issue #84: Home Assistant allows no
+# other state class with monetary and warns about total_increasing; no
+# last_reset, the sums run from the installation), unlike PwM_SAVINGS_DATA_
 # SENSORS above. Old: sensor.besparelse_egenproduktion /
 # sensor.PV_batteri_ladning_besparelse.
 PwM_SAVINGS_HEADLINE_SENSORS: list[SensorEntityDescription] = [
@@ -266,7 +268,7 @@ PwM_SAVINGS_HEADLINE_SENSORS: list[SensorEntityDescription] = [
         name="Own production savings",
         icon="mdi:solar-power-variant",
         device_class=SensorDeviceClass.MONETARY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         native_unit_of_measurement="DKK",
     ),
     SensorEntityDescription(
@@ -274,7 +276,7 @@ PwM_SAVINGS_HEADLINE_SENSORS: list[SensorEntityDescription] = [
         name="Battery charging savings",
         icon="mdi:battery-heart-variant",
         device_class=SensorDeviceClass.MONETARY,
-        state_class=SensorStateClass.TOTAL_INCREASING,
+        state_class=SensorStateClass.TOTAL,
         native_unit_of_measurement="DKK",
     ),
 ]
@@ -1066,8 +1068,8 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
 
     def _raise_headline_values(self) -> None:
         """Raise own_production_savings/battery_charging_savings to the
-        four sums' current differences -- never lowered: they're
-        total_increasing sensors, where a drop reads as a meter reset."""
+        four sums' current differences -- never lowered: the headline
+        sums only ever grow (the period totals may fall, issue #53)."""
         purchase = self._ledger.purchase
         derived_production_savings = max(
             0.0, purchase.purchase_price_real_without_pv - purchase.purchase_price_real
