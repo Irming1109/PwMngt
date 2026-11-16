@@ -18,6 +18,7 @@ from homeassistant.helpers.event import (
     async_track_time_change,
 )
 from homeassistant.helpers.restore_state import RestoreEntity
+from homeassistant.helpers.start import async_at_started
 from homeassistant.util import dt as dt_util
 
 from .const import (
@@ -89,7 +90,7 @@ from .data.inverter_own_consumption import (
 )
 from .base import use_description_key_as_translation_key
 from .helpers.state_helper import read_float_state
-from .properties import pv_properties
+from .properties import hub_properties, pv_properties
 
 LOGGER = logging.getLogger(__name__)
 
@@ -162,6 +163,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     for description, entity_map_key in PwM_HUB_MIRROR_SENSORS:
         entity = PwMngtHubMirrorSensor(description, entry, entity_map_key)
         LOGGER.info("Added hub mirror sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    for description in PwM_HUB_SALE_PRICE_SENSORS:
+        entity = PwMngtSalePriceSensor(description, entry)
+        LOGGER.info("Added hub sale price sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
     for description in PwM_PV_SCAFFOLD_SENSORS:
@@ -783,6 +789,21 @@ PwM_PV_DAILY_INTEGRAL_SENSORS: list[tuple[SensorEntityDescription, str]] = [
 # lookup key, resolved to an entity_id in PwMngtHubMirrorSensor.__init__.
 # ---------------------------------------------------------------------------
 
+# Issue #86 (Claus 2026-11-16) -- no Node-RED counterpart: the price a sold
+# kWh earns right now, for Home Assistant's Energy dashboard (export
+# price). The same price the sale plan and the savings book sales at
+# (hub_properties.sale_price_now()): Strømligning's sale price for surplus
+# production, else the spot price without VAT.
+PwM_HUB_SALE_PRICE_SENSORS: list[SensorEntityDescription] = [
+    SensorEntityDescription(
+        key="sale_price",
+        name="Sale price",
+        icon="mdi:cash-plus",
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="kr/kWh",
+    ),
+]
+
 PwM_HUB_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
     # Old key="el_kobspris_variabel"
     # Computed natively by the Stromligning integration. Renamed from
@@ -985,6 +1006,64 @@ class PwMngtHubMirrorSensor(_PwMngtMirrorSensor):
                 "Options -> Solar PV Plant), it will stay unavailable",
                 self.entity_description.key,
             )
+
+
+class PwMngtSalePriceSensor(SensorEntity):
+    """Issue #86: see PwM_HUB_SALE_PRICE_SENSORS. Recalculated every
+    quarter of an hour (the price is per hour, Strømligning may run in
+    quarters) and whenever one of Strømligning's price sensors changes.
+    Those sensors are found through the entity registry, which is only
+    complete once Home Assistant has started -- so the subscription is
+    made (again) then. The attribute "source" is the translation_key of
+    the Strømligning sensor the price came from."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+
+    def __init__(self, description: SensorEntityDescription, entry: ConfigEntry) -> None:
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
+        self._attr_device_info = hub_device_info(entry)
+        self._attr_native_value = None
+        self._unsub_sources = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self.async_on_remove(
+            async_track_time_change(
+                self.hass, self._handle_update, minute=[0, 15, 30, 45], second=5
+            )
+        )
+        self.async_on_remove(async_at_started(self.hass, self._handle_started))
+        self.async_on_remove(self._unsubscribe_sources)
+        self._update()
+
+    @callback
+    def _handle_started(self, _hass: HomeAssistant) -> None:
+        self._unsubscribe_sources()
+        source_ids = hub_properties.sale_price_source_entity_ids(self.hass)
+        if source_ids:
+            self._unsub_sources = async_track_state_change_event(
+                self.hass, source_ids, self._handle_update
+            )
+        self._update()
+
+    @callback
+    def _unsubscribe_sources(self) -> None:
+        if self._unsub_sources is not None:
+            self._unsub_sources()
+            self._unsub_sources = None
+
+    @callback
+    def _handle_update(self, _event_or_now=None) -> None:
+        self._update()
+
+    @callback
+    def _update(self) -> None:
+        price, source = hub_properties.sale_price_now(self.hass, dt_util.now())
+        self._attr_native_value = None if price is None else round(price, 4)
+        self._attr_extra_state_attributes = {"source": source}
+        self.async_write_ha_state()
 
 
 class PwMngtPvSumSensor(SensorEntity):

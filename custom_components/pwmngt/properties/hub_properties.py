@@ -1,5 +1,7 @@
 """Read-only property accessors for the PwM hub device."""
 
+from datetime import datetime
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, State
 from homeassistant.helpers import entity_registry as er
@@ -221,6 +223,32 @@ def sale_prices_today(hass: HomeAssistant, today: str) -> dict[int, float]:
         if prices:
             return prices
     return _hourly_prices(_stromligning_state(hass, _SPOT_EX_VAT_TRANSLATION_KEY), today)
+
+
+def sale_price_now(hass: HomeAssistant, now: datetime) -> tuple[float | None, str | None]:
+    """Issue #86: the sale price (kr/kWh) for the hour `now` is in -- the
+    same price sale_prices_today() gives that hour -- and the
+    translation_key of the Strømligning sensor it came from. (None, None)
+    when no price is available."""
+    day = now.strftime("%Y-%m-%d")
+    for key in (*_SALE_PRICE_TRANSLATION_KEYS, _SPOT_EX_VAT_TRANSLATION_KEY):
+        prices = _hourly_prices(_stromligning_state(hass, key), day)
+        if prices:
+            return prices.get(now.hour), key
+    return None, None
+
+
+def sale_price_source_entity_ids(hass: HomeAssistant) -> list[str]:
+    """Issue #86: the enabled Strømligning sensors sale_price_now() reads
+    -- for state-change triggers."""
+    keys = {*_SALE_PRICE_TRANSLATION_KEYS, _SPOT_EX_VAT_TRANSLATION_KEY}
+    return [
+        entity.entity_id
+        for entity in er.async_get(hass).entities.values()
+        if entity.platform == DEPENDENCY_STROMLIGNING
+        and entity.translation_key in keys
+        and entity.disabled_by is None
+    ]
 
 
 def sale_prices_tomorrow(hass: HomeAssistant, today: str, tomorrow: str) -> dict[int, float]:
