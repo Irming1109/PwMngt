@@ -720,12 +720,16 @@ const PWM_BATTERY_TEXTS = {
   en: {
     title: "House battery control",
     manual: "Automation and battery hold are off - manual charging only",
-    charging: (pct) => `Battery is charging at ${pct}% power`,
+    // Issue #92: level is the charge power ("11.3 kW"), or "75% power"
+    // while Battery max charge effect isn't known (see _chargeLevel()).
+    charging: (level) => `Battery is charging at ${level}`,
     autoControls: "Tonight's charge is controlled by the automation",
-    manualCharging: (pct) => `Manual charge at ${pct}% power`,
+    manualCharging: (level) => `Manual charge at ${level}`,
     manualRuns: "Runs until 100% SoC or until stopped",
-    reducedByFuse: (pct) => `Reduced from ${pct}% because of the main fuse - goes up again when there is room`,
-    pausedByFuse: (pct) => `Manual charge ${pct}% paused because of the main fuse`,
+    reducedByFuse: (level) => `Reduced from ${level} because of the main fuse - goes up again when there is room`,
+    pausedByFuse: (level) => `Manual charge at ${level} paused because of the main fuse`,
+    kw: (value) => `${pwmKwText(value, ".")} kW`,
+    pctPower: (pct) => `${pct}% power`,
     status: {
       yes_today: "Battery charges today in these hours",
       yes_tomorrow: "Battery charges tomorrow in these hours",
@@ -784,7 +788,7 @@ const PWM_BATTERY_TEXTS = {
     surplusCoversWorth: (hours, kwh) =>
       `Tomorrow's PV surplus (${kwh}, cautious estimate) covers ${hours}, the hours tonight's charge would cover`,
     manualTitle: "Manual battery control",
-    chargeNow: (pct) => `Charge now ${pct}%`,
+    chargeNow: (level) => `Charge now ${level}`,
     stop: "Stop charging",
     postpone: "Postpone charging 1 day",
     cancelPostpone: "Cancel postponement",
@@ -798,12 +802,14 @@ const PWM_BATTERY_TEXTS = {
   da: {
     title: "Hus batteri styring",
     manual: "Automatik og batterilås slået fra - kun manuel ladning",
-    charging: (pct) => `Batteri lader nu med ${pct} % effekt`,
+    charging: (level) => `Batteri lader nu med ${level}`,
     autoControls: "Nattens ladning styres af automatikken",
-    manualCharging: (pct) => `Manuel ladning med ${pct} % effekt`,
+    manualCharging: (level) => `Manuel ladning med ${level}`,
     manualRuns: "Kører til 100 % SoC, eller til den afbrydes",
-    reducedByFuse: (pct) => `Sænket fra ${pct} % pga. hovedsikring - går op igen, når der er plads`,
-    pausedByFuse: (pct) => `Manuel ladning ${pct} % sat på pause pga. hovedsikring`,
+    reducedByFuse: (level) => `Sænket fra ${level} pga. hovedsikring - går op igen, når der er plads`,
+    pausedByFuse: (level) => `Manuel ladning med ${level} sat på pause pga. hovedsikring`,
+    kw: (value) => `${pwmKwText(value, ",")} kW`,
+    pctPower: (pct) => `${pct} % effekt`,
     status: {
       yes_today: "Batteri lades i dag i disse timer",
       yes_tomorrow: "Batteri lades i morgen i disse timer",
@@ -862,7 +868,7 @@ const PWM_BATTERY_TEXTS = {
     surplusCoversWorth: (hours, kwh) =>
       `Forventet sol-overskud i morgen (${kwh}, forsigtigt skøn) dækker kl. ${hours}, de timer natladningen skulle dække`,
     manualTitle: "Manuel betjening af batteri",
-    chargeNow: (pct) => `Lad nu ${pct} %`,
+    chargeNow: (level) => `Lad nu ${level}`,
     stop: "Afbryd ladning",
     postpone: "Udskyd ladning 1 dag",
     cancelPostpone: "Annuller udskydning",
@@ -895,6 +901,13 @@ const PWM_BATTERY_STATUS_TONE = {
 };
 
 const PWM_CHARGE_LEVELS = [25, 50, 75, 100];
+
+/** Issue #92: kW with one decimal (none when whole), e.g. 11.3 / 15. */
+function pwmKwText(kw, separator) {
+  const rounded = Math.round(kw * 10) / 10;
+  const text = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1);
+  return text.replace(".", separator);
+}
 
 const PWM_BATTERY_CARD_STYLE = `
   ha-card {
@@ -1090,6 +1103,8 @@ class PwMBatteryCard extends HTMLElement {
       soc: pwmFindEntityId(this._hass, "pv", "sensor", "battery_soc"),
       target: pwmFindEntityId(this._hass, "pv", "sensor", "battery_nightly_target"),
       size: pwmFindEntityId(this._hass, "pv", "select", "battery_size"),
+      // Issue #92: what the charge_now_* percentages are a share of.
+      maxCharge: pwmFindEntityId(this._hass, "pv", "select", "battery_max_charge_effect"),
       // Issues #59/#61: today's day plan (day_plan_* attributes).
       data: pwmFindEntityId(this._hass, "pv", "sensor", "battery_data"),
     };
@@ -1101,9 +1116,21 @@ class PwMBatteryCard extends HTMLElement {
     return entityId ? this._hass.states[entityId] : undefined;
   }
 
+  /**
+   * Issue #92: a charge_now_* level as power -- pct of Battery max charge
+   * effect (W) in kW, as battery_charge_level.py reads it; "75 % effekt"
+   * while that isn't known. A percentage read as a SoC to charge to.
+   */
+  _chargeLevel(t, pct) {
+    const state = this._state("maxCharge");
+    const maxW = state ? Number(state.state) : NaN;
+    if (!Number.isFinite(maxW) || maxW <= 0) return t.pctPower(pct);
+    return t.kw((maxW * pct) / 100 / 1000);
+  }
+
   /** Only re-render when something the card shows has changed. */
   _stateSignature() {
-    const parts = ["command", "mode", "status", "soc", "target"].map((name) => {
+    const parts = ["command", "mode", "status", "soc", "target", "maxCharge"].map((name) => {
       const state = this._state(name);
       return state ? `${state.state}|${JSON.stringify(state.attributes)}` : "-";
     });
@@ -1202,15 +1229,15 @@ class PwMBatteryCard extends HTMLElement {
 
     if (manualPct !== null) {
       if (chargingPct === null) {
-        statusGroup.appendChild(this._banner("warn", t.pausedByFuse(manualPct)));
+        statusGroup.appendChild(this._banner("warn", t.pausedByFuse(this._chargeLevel(t, manualPct))));
       } else {
-        statusGroup.appendChild(this._banner("ok", t.manualCharging(chargingPct)));
+        statusGroup.appendChild(this._banner("ok", t.manualCharging(this._chargeLevel(t, chargingPct))));
       }
       statusGroup.appendChild(
-        this._note(chargingPct !== null && chargingPct < manualPct ? t.reducedByFuse(manualPct) : t.manualRuns)
+        this._note(chargingPct !== null && chargingPct < manualPct ? t.reducedByFuse(this._chargeLevel(t, manualPct)) : t.manualRuns)
       );
     } else if (chargingPct !== null) {
-      statusGroup.appendChild(this._banner("ok", t.charging(chargingPct)));
+      statusGroup.appendChild(this._banner("ok", t.charging(this._chargeLevel(t, chargingPct))));
       if (isAuto && status.state === "yes_today") {
         statusGroup.appendChild(this._note(t.autoControls));
       }
@@ -1289,7 +1316,9 @@ class PwMBatteryCard extends HTMLElement {
     buttons.className = "pwm-buttons";
     for (const pct of PWM_CHARGE_LEVELS) {
       if (pct === (manualPct !== null ? manualPct : chargingPct)) continue;
-      buttons.appendChild(this._button(t.chargeNow(pct), () => this._setCommand(`charge_now_${pct}`)));
+      buttons.appendChild(
+        this._button(t.chargeNow(this._chargeLevel(t, pct)), () => this._setCommand(`charge_now_${pct}`))
+      );
     }
     if (chargingPct !== null || manualPct !== null) {
       buttons.appendChild(this._button(t.stop, () => this._setCommand("internal")));
