@@ -100,7 +100,9 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         icon="mdi:ev-station",
         entity_category=EntityCategory.CONFIG,
         options=["Not installed", "Wallbox", "Easee"],
-        default_option="Wallbox",
+        # Issue #82: a new installation has no charger until one is picked
+        # (Node-RED's own default was Claus's Wallbox).
+        default_option="Not installed",
     ),
     # Old key="ladeboks_2_opsaetning"
     # Old name="Ladeboks 2 opsætning"
@@ -110,7 +112,9 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         icon="mdi:ev-station",
         entity_category=EntityCategory.CONFIG,
         options=["Not installed", "Wallbox", "Easee"],
-        default_option="Wallbox",
+        # Issue #82: a new installation has no charger until one is picked
+        # (Node-RED's own default was Claus's Wallbox).
+        default_option="Not installed",
     ),
     # Old key="ladebokse_prioritet"
     # Old name="Ladebokse prioritet"
@@ -319,7 +323,9 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         options=["0.20", "0.30", "0.40", "0.50", "0.60", "0.70", "0.80", "0.90",
                  "1.00", "1.10", "1.20", "1.30", "1.40", "1.50", "1.60", "1.70",
                  "1.80", "1.90", "2.00"],
-        default_option="0.30",
+        # Issue #83 (Claus 2026-11-16): 0.30 charged far too much from the
+        # grid on a new installation -- the same 1.20 the code falls back to.
+        default_option="1.20",
     ),
     # New (issue #64, Claus 2026-11-09) -- no Node-RED counterpart: how much
     # (kr/kWh) an hour's sale price (spot without VAT) must lie above
@@ -547,7 +553,7 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
     recreate the entity with description.default_option, discarding
     whatever the user had picked (this bit charger1_type/charger2_type in
     practice: picking a type on the EV Charging wizard page, then
-    finishing the wizard, reset it right back to "Wallbox").
+    finishing the wizard, reset it right back to the default).
     """
 
     _attr_has_entity_name = True
