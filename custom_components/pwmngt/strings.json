@@ -279,6 +279,26 @@
     "charge_not_responding": {
       "title": "The battery doesn't respond to the charge command",
       "description": "PwMngt asked the battery to charge, but it showed no charge power -- also after the command was sent again 3 times (2 minutes on \"internal\" in between).\n\nCheck the inverter (its own event log and battery status) and whatever passes the battery command on to it (relays, Node-RED). This warning clears itself the next time a charge works."
+    },
+    "field_missing": {
+      "title": "PwMngt: the sensor for \"{field}\" is missing",
+      "description": "PwMngt's field **{field}** points at `{entity_id}`, which doesn't exist (or is disabled). PwMngt calculates without it, so the numbers that depend on it are wrong or stand still.\n\nPick another sensor in PwMngt's options (Settings -> Devices & services -> PwMngt -> Configure), or enable the entity again. This warning clears itself once the field works."
+    },
+    "field_unavailable": {
+      "title": "PwMngt: the sensor for \"{field}\" has been unavailable for 12 hours",
+      "description": "PwMngt's field **{field}** points at `{entity_id}`, which has been unavailable for at least 12 hours. PwMngt calculates without it, so the numbers that depend on it are wrong or stand still.\n\nCheck the integration behind the sensor, or pick another sensor in PwMngt's options (Settings -> Devices & services -> PwMngt -> Configure). This warning clears itself once the sensor works again."
+    },
+    "field_utility_meter": {
+      "title": "PwMngt: \"{field}\" points at a Utility Meter",
+      "description": "PwMngt's field **{field}** points at `{entity_id}`, a Utility Meter helper. This field must be a raw counter that never resets: PwMngt reads it just after the top of the hour, takes the meter's reset for a new counter and books the hour as about 0 kWh.\n\nPick the underlying total counter instead in PwMngt's options (Settings -> Devices & services -> PwMngt -> Configure). This warning clears itself once the field is changed."
+    },
+    "stromligning_entity_required": {
+      "title": "PwMngt needs a Strømligning sensor that is disabled",
+      "description": "PwMngt reads Strømligning's **{key}** entity, but it is disabled (Strømligning disables its prices without VAT by default) or missing. Without it, the sale price, tomorrow's sale plan and the sell decision don't work.\n\nGo to Settings -> Devices & services -> Strømligning -> entities, enable the entity, and reload Strømligning. This warning clears itself once the entity is enabled."
+    },
+    "stromligning_entity_recommended": {
+      "title": "PwMngt: Strømligning's sale price is not enabled",
+      "description": "Strømligning's **{key}** entity (the sale price for surplus production) is disabled or missing. PwMngt then prices sales at the spot price without VAT, without the production tariff deducted -- about 2 øre/kWh too high.\n\nTo use it: Settings -> Devices & services -> Strømligning -> Configure -> enable \"Include sale prices for surplus production\", enable the entity and reload Strømligning. Don't sell? Then you can ignore this warning."
     }
   },
   "entity": {

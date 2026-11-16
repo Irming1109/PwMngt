@@ -365,6 +365,26 @@
     "charge_not_responding": {
       "title": "Batteriet reagerer ikke på ladekommandoen",
       "description": "PwMngt bad batteriet om at lade, men det viste ingen ladeeffekt -- heller ikke efter, at kommandoen blev sendt igen 3 gange (2 minutter på \"internal\" imellem).\n\nTjek inverteren (dens egen hændelseslog og batteristatus) og det, der sender batterikommandoen videre til den (relæer, Node-RED). Advarslen forsvinder af sig selv, næste gang en ladning lykkes."
+    },
+    "field_missing": {
+      "title": "PwMngt: sensoren til \"{field}\" mangler",
+      "description": "PwMngt's felt **{field}** peger på `{entity_id}`, som ikke findes (eller er deaktiveret). PwMngt regner videre uden den, så de tal, der afhænger af den, er forkerte eller står stille.\n\nVælg en anden sensor i PwMngt's indstillinger (Indstillinger -> Enheder og tjenester -> PwMngt -> Konfigurer), eller slå entiteten til igen. Advarslen forsvinder af sig selv, når feltet virker."
+    },
+    "field_unavailable": {
+      "title": "PwMngt: sensoren til \"{field}\" har været utilgængelig i 12 timer",
+      "description": "PwMngt's felt **{field}** peger på `{entity_id}`, som har været utilgængelig i mindst 12 timer. PwMngt regner videre uden den, så de tal, der afhænger af den, er forkerte eller står stille.\n\nTjek integrationen bag sensoren, eller vælg en anden sensor i PwMngt's indstillinger (Indstillinger -> Enheder og tjenester -> PwMngt -> Konfigurer). Advarslen forsvinder af sig selv, når sensoren virker igen."
+    },
+    "field_utility_meter": {
+      "title": "PwMngt: \"{field}\" peger på en forbrugsmåler (Utility Meter)",
+      "description": "PwMngt's felt **{field}** peger på `{entity_id}`, en Utility Meter-hjælper. Feltet skal være en rå tæller, der aldrig nulstilles: PwMngt læser den lige efter hel time, tager målerens nulstilling for en ny tæller og bogfører timen som ca. 0 kWh.\n\nVælg i stedet den samlede tæller bag måleren i PwMngt's indstillinger (Indstillinger -> Enheder og tjenester -> PwMngt -> Konfigurer). Advarslen forsvinder af sig selv, når feltet er rettet."
+    },
+    "stromligning_entity_required": {
+      "title": "PwMngt mangler en Strømligning-sensor, der er deaktiveret",
+      "description": "PwMngt læser Strømlignings entitet **{key}**, men den er deaktiveret (Strømligning slår priserne uden moms fra som standard) eller mangler. Uden den virker salgsprisen, morgendagens salgsplan og salgsbeslutningen ikke.\n\nGå til Indstillinger -> Enheder og tjenester -> Strømligning -> entiteter, slå entiteten til, og genindlæs Strømligning. Advarslen forsvinder af sig selv, når entiteten er slået til."
+    },
+    "stromligning_entity_recommended": {
+      "title": "PwMngt: Strømlignings salgspris er ikke slået til",
+      "description": "Strømlignings entitet **{key}** (salgsprisen for overskudsproduktion) er deaktiveret eller mangler. PwMngt regner så salg med spotprisen uden moms, uden fradrag af produktionstariffen – ca. 2 øre/kWh for højt.\n\nSådan bruges den: Indstillinger -> Enheder og tjenester -> Strømligning -> Konfigurer -> slå \"Include sale prices for surplus production\" til, slå entiteten til og genindlæs Strømligning. Sælger du ikke? Så kan du ignorere advarslen."
     }
   },
   "services": {

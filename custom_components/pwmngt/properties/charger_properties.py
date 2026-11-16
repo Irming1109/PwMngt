@@ -49,8 +49,15 @@ def consumption_source_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> li
     skipping a charger whose type is "Not installed" or whose field is
     empty. Looked up via the entity registry, never by entity_id
     string."""
+    return [entity_id for _charger_id, entity_id in consumption_sources(hass, entry)]
+
+
+def consumption_sources(hass: HomeAssistant, entry: ConfigEntry) -> list[tuple[str, str]]:
+    """(charger id, consumption source entity_id) for each installed
+    charger with the field filled in -- see consumption_source_entity_ids().
+    The charger id names the field, e.g. for a Repair (config_check.py)."""
     registry = er.async_get(hass)
-    entity_ids: list[str] = []
+    sources: list[tuple[str, str]] = []
     for charger in CHARGERS:
         prefix = f"{entry.entry_id}_{charger['id']}"
         type_entity_id = registry.async_get_entity_id("select", DOMAIN, f"{prefix}_type")
@@ -63,8 +70,8 @@ def consumption_source_entity_ids(hass: HomeAssistant, entry: ConfigEntry) -> li
         text_state = hass.states.get(text_entity_id) if text_entity_id else None
         if text_state is None or text_state.state in ("", "unknown", "unavailable"):
             continue
-        entity_ids.append(text_state.state)
-    return entity_ids
+        sources.append((charger["id"], text_state.state))
+    return sources
 
 
 def charger_power_entity_id(hass: HomeAssistant, source_entity_id: str) -> str | None:

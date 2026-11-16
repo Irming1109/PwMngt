@@ -11,6 +11,7 @@ from homeassistant.helpers.device_registry import DeviceEntry
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.loader import async_get_integration
 
+from .config_check import async_start_config_check
 from .devices import async_register_hub_device
 from .services import async_setup_services
 from .const import (
@@ -54,6 +55,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     _async_check_dependencies(hass)
+    # Issue #20: Repairs for fields that point at a missing, long
+    # unavailable or hourly-resetting sensor, and Strømligning entities
+    # left disabled.
+    async_start_config_check(hass, entry)
 
     return True
 
