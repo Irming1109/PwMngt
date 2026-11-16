@@ -316,10 +316,22 @@ _PV_INVERTER_TYPE_DESCRIPTION = next(
 )
 
 
-def _entity_ids_by_unit(hass, unit: str) -> list[str]:
+# Issue #90: the savings counters are only read as counters by
+# data/savings_data.py, never mirrored -- so PwMngt's own kWh counters
+# (e.g. Energy import, for a Kostal that has no total grid-import counter)
+# may be picked for them without making anything circular.
+_OWN_ENTITIES_ALLOWED = {
+    ENTITY_KEY_HOUSEHOLD_CONSUMPTION_HOURLY,
+    ENTITY_KEY_GRID_IMPORT_HOURLY,
+    ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY,
+    ENTITY_KEY_BATTERY_DISCHARGE_HOURLY,
+}
+
+
+def _entity_ids_by_unit(hass, unit: str, include_own: bool = False) -> list[str]:
     """Sensor entity_ids with the given unit of measurement, excluding
     PwMngt's own sensors (mirroring one of PwMngt's own would be
-    circular).
+    circular) unless include_own.
     """
     registry = er.async_get(hass)
     entity_ids = []
@@ -327,17 +339,17 @@ def _entity_ids_by_unit(hass, unit: str) -> list[str]:
         if state.attributes.get("unit_of_measurement") != unit:
             continue
         entry = registry.async_get(state.entity_id)
-        if entry is not None and entry.platform == DOMAIN:
+        if not include_own and entry is not None and entry.platform == DOMAIN:
             continue
         entity_ids.append(state.entity_id)
     return sorted(entity_ids)
 
 
-def _entity_picker(hass, unit: str) -> selector.EntitySelector:
+def _entity_picker(hass, unit: str, include_own: bool = False) -> selector.EntitySelector:
     """Entity picker restricted to sensors of the given unit."""
     return selector.EntitySelector(
         selector.EntitySelectorConfig(
-            include_entities=_entity_ids_by_unit(hass, unit),
+            include_entities=_entity_ids_by_unit(hass, unit, include_own),
         )
     )
 
@@ -1002,7 +1014,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
                     ] = selector.BooleanSelector()
                 else:
                     group_schema_dict[vol.Optional(key)] = _entity_picker(
-                        self.hass, _FIELD_UNIT_BY_KEY[key]
+                        self.hass, _FIELD_UNIT_BY_KEY[key], key in _OWN_ENTITIES_ALLOWED
                     )
                 if values.get(key):
                     group_suggested[key] = values[key]
