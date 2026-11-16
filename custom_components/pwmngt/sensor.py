@@ -694,13 +694,14 @@ PwM_PV_SPLIT_SENSORS: list[tuple[SensorEntityDescription, str, Callable[[float],
 
 # ---------------------------------------------------------------------------
 # PV-device sensors that integrate one of the split power (W) sensors above
-# over time into a cumulative energy (kWh) total -- a left-Riemann-sum
+# (or PV total, issue #85) over time into a cumulative energy (kWh) total -- a left-Riemann-sum
 # approximation, same method as Home Assistant's built-in "Integration -
 # Riemann sum" helper (`platform: integration`, method: left, unit_prefix:
 # k; only the state is rounded). Each tuple is (description, source_split_key).
 #
 # source_split_key is the description key of the PwMngt split sensor in
-# PwM_PV_SPLIT_SENSORS above -- not something the user maps. It's resolved
+# PwM_PV_SPLIT_SENSORS (or sum sensor in PwM_PV_SUM_SENSORS) above -- not
+# something the user maps. It's resolved
 # to an entity_id through the entity registry (unique_id
 # "<entry_id>_pv_<key>"), never by guessing the entity_id string: that
 # depends on the device name and on Home Assistant's "_2" de-duplication
@@ -735,6 +736,22 @@ PwM_PV_INTEGRAL_SENSORS: list[tuple[SensorEntityDescription, str]] = [
             suggested_display_precision=2,
         ),
         "grid_export_power",
+    ),
+    # Issue #85 (Claus 2026-11-16) -- no Node-RED counterpart: the PV
+    # production in kWh, for Home Assistant's Energy dashboard. Integrates
+    # PV total (PwM_PV_SUM_SENSORS, PV1 + PV2 + PV3) -- the same for every
+    # inverter, and free of the jumps Growatt's own energy totals have.
+    (
+        SensorEntityDescription(
+            key="pv_production",
+            name="PV production",
+            icon="mdi:solar-power-variant",
+            device_class=SensorDeviceClass.ENERGY,
+            state_class=SensorStateClass.TOTAL_INCREASING,
+            native_unit_of_measurement="kWh",
+            suggested_display_precision=2,
+        ),
+        "pv_total",
     ),
 ]
 
