@@ -115,6 +115,9 @@ Deliberate differences from Node-RED:
   worth_charging(), on today's prices and today's PV 17-21). Only while
   the battery holds grid energy; a plan from the night charge always
   wins.
+  Issue #96 (Claus 2026-11-17): a night charge with no daytime hours is a
+  plan too (it wins), and the fallback has no hours while the SoC is at
+  or below its evening reserve.
 - DIFF (issue #62, Claus 2026-11-09): outside 23:00-04:59 a SoC rise is
   also booked as grid while a grid charge runs (a charge_now_* command),
   or while the house buys at least half the battery's charge power from
@@ -1922,7 +1925,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
                 self._read_power(ENTITY_KEY_BATTERY_POWER),
                 self._read_pv_power(),
             ),
-            **self._read_day_plan(),
+            **self._read_day_plan(soc),
             **self._read_sale_plan(),
             pv_release=pv_release_inputs,
         )
@@ -2101,7 +2104,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         except (TypeError, ValueError):
             return {}
 
-    def _read_day_plan(self) -> dict[str, Any]:
+    def _read_day_plan(self, soc: float | None) -> dict[str, Any]:
         """Issue #59: day_plan_hours/day_plan_reserve for BatteryInputs,
         from Battery charge status while it is "yes_today" -- issue #61:
         otherwise worked out from today (fallback_day_plan())."""
@@ -2109,6 +2112,16 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         state = self.hass.states.get(entity_id) if entity_id else None
         if state is not None and state.state == _CHARGE_STATUS_YES_TODAY:
             hours = state.attributes.get("day_hours")
+            if hours == []:
+                # Issue #96: the night charge decided "no daytime hours" --
+                # that is a plan too, and it wins over the one worked out
+                # from today (Rene 2026-11-17: charged to 38 % for the
+                # evening, then a fallback plan "8-9 down to 43 %").
+                return {
+                    "day_plan_hours": [],
+                    "day_plan_reserve": float(state.attributes.get("charge_target") or 0.0),
+                    "day_plan_from_charge": True,
+                }
             # Issue #70: the floor less the PV refill; a plan from before
             # it has only the evening reserve.
             reserve = state.attributes.get("day_floor_soc")
@@ -2123,10 +2136,12 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
                     }
                 except (TypeError, ValueError):
                     pass
-        return self._fallback_day_plan()
+        return self._fallback_day_plan(soc)
 
-    def _fallback_day_plan(self) -> dict[str, Any]:
-        """Issue #61: see fallback_day_plan()."""
+    def _fallback_day_plan(self, soc: float | None) -> dict[str, Any]:
+        """Issue #61: see fallback_day_plan(). Issue #96: no daytime hours
+        while the SoC is at or below the evening reserve -- there's nothing
+        above it to use (Rene 2026-11-17: SoC 37 %, reserve 43 %)."""
         grid_cells = [price for price in self._ledger.soc_cells if price != 0]
         if not grid_cells:
             return {}
@@ -2167,6 +2182,8 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         if plan is None:
             return {}
         hours, reserve = plan
+        if soc is None or soc <= reserve:
+            hours = []
         return {"day_plan_hours": hours, "day_plan_reserve": reserve, "day_plan_from_charge": False}
 
     def _read_pv_release(self) -> PvReleaseInputs | None:
