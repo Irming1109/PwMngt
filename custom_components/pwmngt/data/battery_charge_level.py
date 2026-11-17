@@ -80,10 +80,22 @@ right at the limit, otherwise flipped 75 -> 50 -> 75 within one minute
 recheck is scheduled for when the wait ends, so going up doesn't depend
 on the fuse trigger (only fires at >= 20 A) or the next hourly run.
 Issue #95 (Claus 2026-11-17): when the fuse holds a planned charge hour
-at "internal" (Torsten's car charging at 31 A on a 25 A fuse at 04:00),
-it is looked at again every 5 minutes for the rest of the hour, so the
-charge resumes once there is room -- before, only one recheck after the
+at "internal" (Torsten's car charging on a 25 A fuse at 04:00 -- the
+fuse trigger stopped the charge 3 minutes after it started), it is
+looked at again every 5 minutes for the rest of the hour, so the charge
+resumes once there is room -- before, only one recheck after the
 10-minute wait, then the next hourly run.
+
+Deliberate difference from Node-RED (issue #101, Claus 2026-11-17), one
+fuse rule for the automatic and the manual charge (fuse_check()):
+- No rounding of the free amps down to whole amps.
+- When no level fits under tariff fuse * 0.85, "Charge 25" may still run
+  as long as every phase stays under tariff fuse * 0.95.
+- A phase sensor picked in the wizard that can't be read blocks the grid
+  charge ("internal"); before, it read as 0 A -- all the room there is.
+  It going unavailable during a charge runs the fuse check at once.
+- Every command change it makes carries what the check read and decided
+  as battery_command's last_fuse_check attribute (select.py).
 
 Deliberate difference from Node-RED (issue #22, Claus 2026-11-03): "Skal
 batteri lades" plans its hours as if the battery were empty, so there
@@ -181,6 +193,11 @@ LOGGER = logging.getLogger(__name__)
 
 # Node-RED fallbacks for inputs that are missing/unknown.
 _TARIFF_FUSE_MARGIN = 0.85  # Node-RED: tarif_sikring * 0.85.
+# DIFF (issue #101, Claus 2026-11-17): when no level fits under the limit
+# above, the lowest level ("Charge 25") may still run as long as every
+# phase stays under this share of the fuse -- a little over PwMngt's own
+# limit, never up to the fuse itself.
+_LOWEST_LEVEL_FUSE_MARGIN = 0.95
 _BATTERY_MAX_CHARGE_FALLBACK = 3000.0  # W
 _BATTERY_SOC_FALLBACK = 5.0  # %, Node-RED: parseFloat(...) || 5.
 # The "SOC når Target value" trigger-state's own first constraint: the
@@ -275,6 +292,8 @@ _WATCHDOG_MIN_W = 300.0
 _WATCHDOG_ISSUE_ID = "charge_not_responding"
 # Manual levels, highest first, for stepping down from the chosen one.
 _MANUAL_LEVELS = (100, 75, 50, 25)
+# "Bestem ladeeffekt"'s levels, highest first (Node-RED: no 100 %).
+_AUTOMATIC_LEVELS = (75, 50, 25)
 
 # Charge levels in order, for "is this a step up or down?". Anything not
 # listed (internal, hold_min_soc, block_charging) counts as not charging.
@@ -300,9 +319,11 @@ class BatteryChargeLevelInputs:
     # select.tariff_fuse_size's raw value (A), before the 0.85 margin.
     # None if missing/invalid -- Node-RED's own NaN, caught below.
     tariff_fuse_size_raw: float | None
-    fuse_load_l1: float
-    fuse_load_l2: float
-    fuse_load_l3: float
+    # Phase loads (A). 0 for a phase not picked in the wizard; None for a
+    # picked one that can't be read (issue #101: blocks the grid charge).
+    fuse_load_l1: float | None
+    fuse_load_l2: float | None
+    fuse_load_l3: float | None
     battery_max_charge_raw: float | None
     battery_soc: float | None
     battery_target: float
@@ -332,13 +353,58 @@ def _amps_per_phase(power_w: float) -> float:
     return (power_w / 3) / 230
 
 
-def _amps_allowed(load: float, amps_needed_75: float, tariff_fuse_size: float) -> float:
-    if load + amps_needed_75 > tariff_fuse_size:
-        allowed = tariff_fuse_size - load
-        allowed = min(allowed, amps_needed_75)
-        allowed = max(allowed, 0.0)
-        return math.floor(allowed)
-    return amps_needed_75
+@dataclass
+class FuseCheck:
+    """What the main fuse allows right now (issue #101) -- shared by the
+    automatic and the manual charge, and shown as battery_command's
+    last_fuse_check attribute."""
+
+    # Highest charge level (%) that fits, None when not even the lowest does.
+    level_pct: int | None
+    # Free amps on the most loaded phase under PwMngt's limit (fuse * 0.85),
+    # and under the lowest level's limit (fuse * 0.95). The battery's own
+    # grid charge current is taken out first (issue #15).
+    headroom: float
+    headroom_lowest: float
+    # A phase picked in the wizard that can't be read -- nothing fits.
+    unreadable: bool
+
+
+def fuse_check(
+    tariff_fuse_size_raw: float,
+    loads: tuple[float | None, float | None, float | None],
+    battery_max_charge_full: float,
+    battery_charge_power: float,
+    levels: tuple[int, ...],
+) -> FuseCheck:
+    """The highest of levels (%, highest first) that keeps every phase
+    under tariff fuse * 0.85; failing that, the lowest of them if it keeps
+    every phase under tariff fuse * 0.95 (DIFF, issue #101). Node-RED
+    rounded the free amps down to whole amps (math.floor) -- not here: at
+    Torsten's 2026-11-17 04:00, 2.3 A free became 2 A, too little for
+    "Charge 25" (2.2 A)."""
+    own_amps = _amps_per_phase(max(battery_charge_power, 0.0))
+    unreadable = any(load is None for load in loads)
+
+    def headroom(margin: float) -> float:
+        if unreadable:
+            return 0.0
+        return min(
+            tariff_fuse_size_raw * margin - max(load - own_amps, 0.0) for load in loads
+        )
+
+    normal = headroom(_TARIFF_FUSE_MARGIN)
+    lowest = headroom(_LOWEST_LEVEL_FUSE_MARGIN)
+
+    def amps(pct: int) -> float:
+        return _amps_per_phase(battery_max_charge_full * pct / 100)
+
+    level = next((pct for pct in levels if amps(pct) <= normal), None)
+    if level is None and levels and amps(levels[-1]) <= lowest:
+        level = levels[-1]
+    if unreadable:
+        level = None
+    return FuseCheck(level_pct=level, headroom=normal, headroom_lowest=lowest, unreadable=unreadable)
 
 
 def _charge_hours_needed(
@@ -408,25 +474,11 @@ def calculate_battery_charge_level(
     it was; the night plan's verdict for this hour, issue #22: "skip",
     "extend" or None -- shown on the battery card, issue #24).
     """
-    tariff_fuse_size = (
-        inputs.tariff_fuse_size_raw * _TARIFF_FUSE_MARGIN
-        if inputs.tariff_fuse_size_raw is not None
-        else None
-    )
-    if tariff_fuse_size is None:
+    if inputs.tariff_fuse_size_raw is None:
         # Node-RED: node.warn(...) + return null.
         return None, None
 
-    battery_max_charge_full = (
-        inputs.battery_max_charge_raw
-        if inputs.battery_max_charge_raw is not None
-        else _BATTERY_MAX_CHARGE_FALLBACK
-    )
-    amps_needed_full = _amps_per_phase(battery_max_charge_full)
-
-    amps_needed_75 = amps_needed_full * 0.75
-    amps_needed_50 = amps_needed_full * 0.50
-    amps_needed_25 = amps_needed_full * 0.25
+    battery_max_charge_full = _battery_max_charge_full(inputs.battery_max_charge_raw)
 
     if inputs.charge_wish != _STATUS_YES_TODAY:
         return None, None
@@ -436,11 +488,16 @@ def calculate_battery_charge_level(
     # running "Charge 75" counted itself twice and flipped to "Charge 50"
     # and back on every fuse check (unnoticed with a 6 kW Kostal, ~6.5 A
     # per phase at 75 %; a 15 kW Growatt draws ~16 A).
-    own_amps = _amps_per_phase(max(inputs.battery_charge_power, 0.0))
-    amps_allowed = min(
-        _amps_allowed(max(load - own_amps, 0.0), amps_needed_75, tariff_fuse_size)
-        for load in (inputs.fuse_load_l1, inputs.fuse_load_l2, inputs.fuse_load_l3)
-    )
+    check = automatic_fuse_check(inputs)
+    amps_needed_75 = _amps_per_phase(battery_max_charge_full * 0.75)
+    # What the night plan may count on per phase: the free amps (at most
+    # "Charge 75"), or the lowest level when it only fits under 0.95.
+    amps_allowed = 0.0
+    if check.level_pct is not None:
+        amps_allowed = max(
+            min(max(check.headroom, 0.0), amps_needed_75),
+            _amps_per_phase(battery_max_charge_full * check.level_pct / 100),
+        )
 
     battery_soc = (
         inputs.battery_soc if inputs.battery_soc is not None else _BATTERY_SOC_FALLBACK
@@ -465,13 +522,60 @@ def calculate_battery_charge_level(
     if not hour_is_cheap:
         return _COMMAND_INTERNAL, night_plan
 
-    if amps_allowed >= amps_needed_75:
-        return "charge_now_75", night_plan
-    if amps_allowed >= amps_needed_50:
-        return "charge_now_50", night_plan
-    if amps_allowed >= amps_needed_25:
-        return "charge_now_25", night_plan
-    return _COMMAND_INTERNAL, night_plan
+    if check.level_pct is None:
+        return _COMMAND_INTERNAL, night_plan
+    return f"charge_now_{check.level_pct}", night_plan
+
+
+def _battery_max_charge_full(raw: float | None) -> float:
+    return raw if raw is not None else _BATTERY_MAX_CHARGE_FALLBACK
+
+
+def automatic_fuse_check(inputs: BatteryChargeLevelInputs) -> FuseCheck | None:
+    """The fuse check of one "Bestem ladeeffekt" run (levels 75/50/25);
+    None without a tariff fuse size."""
+    if inputs.tariff_fuse_size_raw is None:
+        return None
+    return fuse_check(
+        inputs.tariff_fuse_size_raw,
+        (inputs.fuse_load_l1, inputs.fuse_load_l2, inputs.fuse_load_l3),
+        _battery_max_charge_full(inputs.battery_max_charge_raw),
+        inputs.battery_charge_power,
+        _AUTOMATIC_LEVELS,
+    )
+
+
+def _fuse_check_attribute(
+    tariff_fuse_size_raw: float | None,
+    loads: tuple[float | None, float | None, float | None],
+    battery_max_charge_raw: float | None,
+    battery_charge_power: float,
+    check: FuseCheck | None,
+    result: str,
+    **extra: Any,
+) -> dict:
+    """battery_command's last_fuse_check attribute (issue #101): what one
+    run read and decided -- so a surprising command can be explained
+    afterwards from the Recorder (Torsten 2026-11-17 04:01 could not)."""
+
+    def rounded(value: float | None, digits: int = 2) -> float | None:
+        return round(value, digits) if value is not None else None
+
+    return {
+        "time": dt_util.now().isoformat(timespec="seconds"),
+        "result": result,
+        "l1": rounded(loads[0]),
+        "l2": rounded(loads[1]),
+        "l3": rounded(loads[2]),
+        "unreadable": check.unreadable if check else None,
+        "own_amps": rounded(_amps_per_phase(max(battery_charge_power, 0.0))),
+        "tariff_fuse_size": tariff_fuse_size_raw,
+        "max_charge_w": battery_max_charge_raw,
+        "headroom": rounded(check.headroom) if check else None,
+        "headroom_lowest": rounded(check.headroom_lowest) if check else None,
+        "level_pct": check.level_pct if check else None,
+        **extra,
+    }
 
 
 def fuse_blocked(result: str, night_plan: str | None, hour_is_cheap: bool, reached: bool) -> bool:
@@ -493,40 +597,43 @@ class ManualChargeLevelInputs:
     # The level the user picked, e.g. "charge_now_100".
     requested: str
     tariff_fuse_size_raw: float | None
-    fuse_load_l1: float
-    fuse_load_l2: float
-    fuse_load_l3: float
+    # See BatteryChargeLevelInputs (None = picked but unreadable).
+    fuse_load_l1: float | None
+    fuse_load_l2: float | None
+    fuse_load_l3: float | None
     battery_max_charge_raw: float | None
     # W the battery charges with right now (see BatteryChargeLevelInputs).
     battery_charge_power: float = 0.0
 
 
-def calculate_manual_charge_level(inputs: ManualChargeLevelInputs) -> str | None:
-    """The highest level, at most the requested one, that the main fuse
-    allows right now -- same fuse rule as "Bestem ladeeffekt" (tariff fuse
-    * 0.85, the battery's own charge current taken out first, issue #15).
-    "internal" when not even 25 % fits; None when the tariff fuse size is
-    missing (no change, same as calculate_battery_charge_level())."""
+def manual_fuse_check(inputs: ManualChargeLevelInputs) -> FuseCheck | None:
+    """The fuse check of one manual-charge run (the levels up to the
+    requested one); None without a tariff fuse size."""
     if inputs.tariff_fuse_size_raw is None:
         return None
-    tariff_fuse_size = inputs.tariff_fuse_size_raw * _TARIFF_FUSE_MARGIN
-    battery_max_charge_full = (
-        inputs.battery_max_charge_raw
-        if inputs.battery_max_charge_raw is not None
-        else _BATTERY_MAX_CHARGE_FALLBACK
-    )
-    own_amps = _amps_per_phase(max(inputs.battery_charge_power, 0.0))
-    headroom = min(
-        tariff_fuse_size - max(load - own_amps, 0.0)
-        for load in (inputs.fuse_load_l1, inputs.fuse_load_l2, inputs.fuse_load_l3)
-    )
     requested_pct = int(inputs.requested.rsplit("_", 1)[1])  # "charge_now_100" -> 100
-    for pct in _MANUAL_LEVELS:
-        if pct > requested_pct:
-            continue
-        if _amps_per_phase(battery_max_charge_full * pct / 100) <= headroom:
-            return f"charge_now_{pct}"
-    return _COMMAND_INTERNAL
+    return fuse_check(
+        inputs.tariff_fuse_size_raw,
+        (inputs.fuse_load_l1, inputs.fuse_load_l2, inputs.fuse_load_l3),
+        _battery_max_charge_full(inputs.battery_max_charge_raw),
+        inputs.battery_charge_power,
+        tuple(pct for pct in _MANUAL_LEVELS if pct <= requested_pct),
+    )
+
+
+def calculate_manual_charge_level(inputs: ManualChargeLevelInputs) -> str | None:
+    """The highest level, at most the requested one, that the main fuse
+    allows right now -- same fuse rule as "Bestem ladeeffekt" (fuse_check():
+    tariff fuse * 0.85, "Charge 25" up to * 0.95, the battery's own charge
+    current taken out first, issue #15). "internal" when not even 25 %
+    fits; None when the tariff fuse size is missing (no change, same as
+    calculate_battery_charge_level())."""
+    check = manual_fuse_check(inputs)
+    if check is None:
+        return None
+    if check.level_pct is None:
+        return _COMMAND_INTERNAL
+    return f"charge_now_{check.level_pct}"
 
 
 def battery_target_reached(
@@ -699,7 +806,9 @@ class PwMngtBatteryChargeLevelController:
     def _handle_fuse_trigger(self, state_event) -> None:
         new_state = state_event.data.get("new_state")
         load = read_float_state(new_state)
-        if load is None or load < _FUSE_OVERLOAD_THRESHOLD:
+        # Issue #101: a phase sensor that stops answering during a charge
+        # stops it too (the run reads it as unreadable).
+        if load is not None and load < _FUSE_OVERLOAD_THRESHOLD:
             return
         if not currently_charging(self._read_battery_command()):
             return
@@ -811,7 +920,22 @@ class PwMngtBatteryChargeLevelController:
         reached = (
             inputs.battery_soc is not None and inputs.battery_soc >= battery_target
         )
-        self._apply_result(result, reached_target=battery_target if reached else None)
+        check = automatic_fuse_check(inputs)
+        self._apply_result(
+            result,
+            reached_target=battery_target if reached else None,
+            fuse_check=_fuse_check_attribute(
+                inputs.tariff_fuse_size_raw,
+                (inputs.fuse_load_l1, inputs.fuse_load_l2, inputs.fuse_load_l3),
+                inputs.battery_max_charge_raw,
+                inputs.battery_charge_power,
+                check,
+                result,
+                night_plan=night_plan,
+                soc=inputs.battery_soc,
+                target=battery_target,
+            ),
+        )
         if (
             fuse_blocked(result, night_plan, inputs.hour_is_cheap, reached)
             and self._pending_step_up_recheck is None
@@ -848,23 +972,33 @@ class PwMngtBatteryChargeLevelController:
             return
         if self._watchdog_paused():
             return
-        result = calculate_manual_charge_level(
-            ManualChargeLevelInputs(
-                requested=requested,
-                tariff_fuse_size_raw=self._read_tariff_fuse_size(),
-                fuse_load_l1=self._read_fuse_load(0),
-                fuse_load_l2=self._read_fuse_load(1),
-                fuse_load_l3=self._read_fuse_load(2),
-                battery_max_charge_raw=self._read_battery_max_charge(),
-                battery_charge_power=self._read_grid_charge_power(),
-            )
+        inputs = ManualChargeLevelInputs(
+            requested=requested,
+            tariff_fuse_size_raw=self._read_tariff_fuse_size(),
+            fuse_load_l1=self._read_fuse_load(0),
+            fuse_load_l2=self._read_fuse_load(1),
+            fuse_load_l3=self._read_fuse_load(2),
+            battery_max_charge_raw=self._read_battery_max_charge(),
+            battery_charge_power=self._read_grid_charge_power(),
         )
+        result = calculate_manual_charge_level(inputs)
         if result is None or result == self._read_battery_command():
             return
         if not self._step_allowed(result):
             return
         async_dispatcher_send(
-            self.hass, signal_manual_charge(self._entry.entry_id), result
+            self.hass,
+            signal_manual_charge(self._entry.entry_id),
+            result,
+            _fuse_check_attribute(
+                inputs.tariff_fuse_size_raw,
+                (inputs.fuse_load_l1, inputs.fuse_load_l2, inputs.fuse_load_l3),
+                inputs.battery_max_charge_raw,
+                inputs.battery_charge_power,
+                manual_fuse_check(inputs),
+                result,
+                requested=requested,
+            ),
         )
 
     def _manual_charge_idle_too_long(self) -> bool:
@@ -1094,7 +1228,12 @@ class PwMngtBatteryChargeLevelController:
         )
         self._apply_result(_COMMAND_INTERNAL, reached_target=battery_target)
 
-    def _apply_result(self, result: str, reached_target: float | None = None) -> None:
+    def _apply_result(
+        self,
+        result: str,
+        reached_target: float | None = None,
+        fuse_check: dict | None = None,
+    ) -> None:
         if result == _COMMAND_INTERNAL and not currently_charging(self._read_battery_command()):
             # Node-RED's "Lader vi ?" gate: only actually stop a charge
             # that's active -- see module docstring.
@@ -1118,11 +1257,11 @@ class PwMngtBatteryChargeLevelController:
                 # 3.5 min (and 1 %) later.
                 limit = max(limit or 0.0, min(soc, reached_target))
             result = stop_command(self.hass, self._entry, soc, limit)
-        self._send_battery_command(result)
+        self._send_battery_command(result, fuse_check)
 
-    def _send_battery_command(self, option: str) -> None:
+    def _send_battery_command(self, option: str, fuse_check: dict | None = None) -> None:
         async_dispatcher_send(
-            self.hass, signal_set_battery_command(self._entry.entry_id), option
+            self.hass, signal_set_battery_command(self._entry.entry_id), option, fuse_check
         )
 
     # -- input readers (Node-RED fallback when missing/unknown) ------------
@@ -1223,10 +1362,14 @@ class PwMngtBatteryChargeLevelController:
         entity_id = hub_properties.tariff_fuse_size_entity_id(self.hass, self._entry)
         return read_float_state(self.hass.states.get(entity_id)) if entity_id else None
 
-    def _read_fuse_load(self, phase_index: int) -> float:
+    def _read_fuse_load(self, phase_index: int) -> float | None:
+        """A phase's load (A); 0 when no sensor is picked for it. Issue
+        #101: None when the picked sensor can't be read -- before, that
+        read as 0 A (all the room in the world) and could start a charge."""
         entity_id = self._fuse_entity_ids_by_phase[phase_index]
-        value = read_float_state(self.hass.states.get(entity_id)) if entity_id else None
-        return value if value is not None else 0.0
+        if not entity_id:
+            return 0.0
+        return read_float_state(self.hass.states.get(entity_id))
 
     def _read_grid_charge_power(self) -> float:
         """W the battery is charging with while a charge_now_* command is

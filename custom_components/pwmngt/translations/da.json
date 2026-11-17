@@ -386,6 +386,10 @@
       "title": "PwMngt: Strømlignings salgspris er ikke slået til",
       "description": "Strømlignings entitet **{key}** (salgsprisen for overskudsproduktion) er deaktiveret eller mangler. PwMngt regner så salg med spotprisen uden moms, uden fradrag af produktionstariffen – ca. 2 øre/kWh for højt.\n\nSådan bruges den: Indstillinger -> Enheder og tjenester -> Strømligning -> Konfigurer -> slå \"Include sale prices for surplus production\" til, slå entiteten til og genindlæs Strømligning. Sælger du ikke? Så kan du ignorere advarslen."
     },
+    "no_fuse_phases": {
+      "title": "PwMngt: der er ikke valgt sensorer til hovedsikringens faser",
+      "description": "Ingen af felterne **Hovedsikring belastning L1**, **L2** og **L3** på siden Solar PV Plant har en sensor. Batteriets netladning tager så ikke hensyn til hovedsikringen: den lader altid med \"Charge 75\", også mens fx en bil lader.\n\nSådan rettes det: Indstillinger -> Enheder og tjenester -> PwMngt -> Konfigurer -> Solar PV Plant -> vælg fasestrømssensorerne (A). Har du ingen fasestrømsmåler? Så kan du ignorere advarslen."
+    },
     "consumption_counts_battery": {
       "title": "PwMngt: forbrugssensoren ser ud til at tælle batteriets ladning med",
       "description": "PwMngt's felt **Total property consumption** peger på `{entity_id}`. På nætter, hvor batteriet lades fra nettet, stiger sensoren med omtrent den ladede mængde -- den ser ud til at tælle batteriets ladning med som forbrug (fx en måler, der er køb + PV - salg).\n\nSå ligner en nat med netladning en nat med højt forbrug: nattens target stiger, næste nat lades der mere, og så videre.\n\nVælg en sensor med husets eget forbrug i PwMngt's indstillinger (Indstillinger -> Enheder og tjenester -> PwMngt -> Konfigurér -> Solar PV Plant). Advarslen forsvinder af sig selv, når mønstret ikke længere ses (tjekkes hver nat kl. 00:15)."

@@ -86,6 +86,12 @@ ATTR_MANUAL_CHARGE = "manual_charge"
 # override is on.
 ATTR_COMMAND_BEFORE_SELL_OVERRIDE = "command_before_sell_override"
 
+# battery_command attribute with what the fuse check behind the last
+# command change from data/battery_charge_level.py read and decided (issue
+# #101). Only taken along with a change of the command itself, so it never
+# causes an attribute-only state change (Node-RED's translator listens).
+ATTR_LAST_FUSE_CHECK = "last_fuse_check"
+
 _COMMAND_INTERNAL = "internal"
 _COMMAND_BLOCK_CHARGING = "block_charging"
 
@@ -585,6 +591,8 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
         self._manual_charge: str | None = None
         # Issue #51: battery_command before the "force sell" override.
         self._command_before_sell_override: str | None = None
+        # Issue #101: the last fuse check (battery_command only).
+        self._last_fuse_check: dict | None = None
 
     @property
     def extra_state_attributes(self) -> dict | None:
@@ -593,6 +601,7 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
         return {
             ATTR_MANUAL_CHARGE: self._manual_charge,
             ATTR_COMMAND_BEFORE_SELL_OVERRIDE: self._command_before_sell_override,
+            ATTR_LAST_FUSE_CHECK: self._last_fuse_check,
         }
 
     async def async_added_to_hass(self) -> None:
@@ -649,7 +658,7 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
             )
 
     @callback
-    def _handle_set_option(self, option: str) -> None:
+    def _handle_set_option(self, option: str, fuse_check: dict | None = None) -> None:
         if option not in self.entity_description.options:
             LOGGER.warning("%s: ignoring unknown option '%s'", self.entity_id, option)
             return
@@ -663,11 +672,10 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
                 option,
             )
             return
-        self._attr_current_option = option
-        self.async_write_ha_state()
+        self._set_command(option, fuse_check)
 
     @callback
-    def _handle_manual_charge(self, option: str | None) -> None:
+    def _handle_manual_charge(self, option: str | None, fuse_check: dict | None = None) -> None:
         if self._manual_charge is None:
             return
         if option is None:
@@ -676,6 +684,13 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
         elif option not in self.entity_description.options:
             LOGGER.warning("%s: ignoring unknown option '%s'", self.entity_id, option)
             return
+        self._set_command(option, fuse_check)
+
+    def _set_command(self, option: str, fuse_check: dict | None) -> None:
+        if option != self._attr_current_option:
+            # ATTR_LAST_FUSE_CHECK: only with a change of the command.
+            # Any other change clears it -- the check didn't cause it.
+            self._last_fuse_check = fuse_check
         self._attr_current_option = option
         self.async_write_ha_state()
 
@@ -686,6 +701,7 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
             # Issue #17: a manual charge outranks the override as well.
             LOGGER.debug("%s: manual charge running -- ignoring sell override", self.entity_id)
             return
+        previous = self._attr_current_option
         if action == SELL_OVERRIDE_START:
             # Turning on twice keeps the first remembered command.
             if self._command_before_sell_override is None:
@@ -702,6 +718,8 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
         else:
             LOGGER.warning("%s: ignoring unknown sell override action '%s'", self.entity_id, action)
             return
+        if self._attr_current_option != previous:
+            self._last_fuse_check = None
         self.async_write_ha_state()
 
     async def async_select_option(self, option: str) -> None:
@@ -714,5 +732,7 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
             # Issue #51: a command picked by hand takes over from the
             # override -- nothing to restore when it turns off.
             self._command_before_sell_override = None
+            if option != self._attr_current_option:
+                self._last_fuse_check = None
         self._attr_current_option = option
         self.async_write_ha_state()

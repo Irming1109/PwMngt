@@ -20,6 +20,10 @@ _CHECK_INTERVAL, the first time 10 minutes after setup:
   (properties/hub_properties.py): spot price ex VAT and tomorrow's spot
   price ex VAT are required; the sale price for surplus production is
   recommended (the Repair can be ignored -- Kasper and Rene don't use it).
+- The main fuse's phase sensors (issue #101): with a battery set up but
+  none of the three picked, the grid charge ignores the main fuse and
+  always charges at "Charge 75" (data/battery_charge_level.py) -- a
+  Repair that can be ignored by those without a phase-current meter.
 
 Each Repair clears itself once the cause is gone. No Node-RED
 counterpart -- new in PwMngt (Claus, 2026-11-16).
@@ -45,8 +49,12 @@ from .const import (
     DOMAIN,
     ENTITY_KEY_BATTERY_DISCHARGE_HOURLY,
     ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY,
+    ENTITY_KEY_BATTERY_SOC,
     ENTITY_KEY_GRID_IMPORT_HOURLY,
     ENTITY_KEY_HOUSEHOLD_CONSUMPTION_HOURLY,
+    ENTITY_KEY_MAIN_FUSE_LOAD_L1,
+    ENTITY_KEY_MAIN_FUSE_LOAD_L2,
+    ENTITY_KEY_MAIN_FUSE_LOAD_L3,
     ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL,
     ENTITY_KEY_SEED_BATTERY_GRID_CHARGE_SUM,
     ENTITY_KEY_SEED_BATTERY_GRID_DISCHARGE_SUM,
@@ -95,6 +103,13 @@ ISSUE_FIELD_UNAVAILABLE = "field_unavailable"
 ISSUE_FIELD_UTILITY_METER = "field_utility_meter"
 ISSUE_STROMLIGNING_REQUIRED = "stromligning_entity_required"
 ISSUE_STROMLIGNING_RECOMMENDED = "stromligning_entity_recommended"
+ISSUE_NO_FUSE_PHASES = "no_fuse_phases"
+
+_FUSE_PHASE_KEYS = (
+    ENTITY_KEY_MAIN_FUSE_LOAD_L1,
+    ENTITY_KEY_MAIN_FUSE_LOAD_L2,
+    ENTITY_KEY_MAIN_FUSE_LOAD_L3,
+)
 
 _STATES_UNAVAILABLE = ("unavailable", "unknown")
 
@@ -207,6 +222,28 @@ class _ConfigCheck:
             if domain == DOMAIN and issue_id.startswith("field_") and issue_id not in raised:
                 ir.async_delete_issue(self.hass, DOMAIN, issue_id)
         self._check_stromligning(registry)
+        self._check_fuse_phases()
+
+    def _check_fuse_phases(self) -> None:
+        """Issue #101: a battery without any phase sensor picked."""
+        entity_map = self._entry.options.get(CONF_ENTITY_MAP, {})
+
+        def picked(key: str) -> bool:
+            # Same test as _fields(): an empty field holds "" or no entity id.
+            value = entity_map.get(key)
+            return isinstance(value, str) and "." in value
+
+        if picked(ENTITY_KEY_BATTERY_SOC) and not any(picked(key) for key in _FUSE_PHASE_KEYS):
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                ISSUE_NO_FUSE_PHASES,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=ISSUE_NO_FUSE_PHASES,
+            )
+        else:
+            ir.async_delete_issue(self.hass, DOMAIN, ISSUE_NO_FUSE_PHASES)
 
     def _fields(self) -> list[Field]:
         """Every filled-in entity field, the seed fields left out."""

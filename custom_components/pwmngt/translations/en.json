@@ -300,6 +300,10 @@
       "title": "PwMngt: Strømligning's sale price is not enabled",
       "description": "Strømligning's **{key}** entity (the sale price for surplus production) is disabled or missing. PwMngt then prices sales at the spot price without VAT, without the production tariff deducted -- about 2 øre/kWh too high.\n\nTo use it: Settings -> Devices & services -> Strømligning -> Configure -> enable \"Include sale prices for surplus production\", enable the entity and reload Strømligning. Don't sell? Then you can ignore this warning."
     },
+    "no_fuse_phases": {
+      "title": "PwMngt: no main fuse phase sensors selected",
+      "description": "None of the fields **Main fuse load L1**, **L2** and **L3** on the Solar PV Plant page has a sensor. The battery's grid charge then doesn't take the main fuse into account: it always charges at \"Charge 75\", also while e.g. a car is charging.\n\nTo fix: Settings -> Devices & services -> PwMngt -> Configure -> Solar PV Plant -> pick the phase-current sensors (A). No phase-current meter? Then you can ignore this warning."
+    },
     "consumption_counts_battery": {
       "title": "PwMngt: the consumption sensor seems to count the battery's charging",
       "description": "PwMngt's field **Total property consumption** points at `{entity_id}`. On nights the battery charges from the grid, that sensor rises by about the charged energy -- it looks like it counts the battery's charging as consumption (for example a meter that is purchase + PV - sale).\n\nThen a night with a grid charge looks like a night with high consumption: the nightly target rises, the next night charges more, and so on.\n\nPick a sensor with the house's own consumption in PwMngt's options (Settings -> Devices & services -> PwMngt -> Configure -> Solar PV Plant). This warning clears itself once the pattern is gone (checked every night at 00:15)."
