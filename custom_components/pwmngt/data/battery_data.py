@@ -1499,6 +1499,18 @@ def calculate_battery_data(
             previous.hold_lock if previous.hold_lock is not None else float(min_soc_rounded)
         )
 
+    # ---- Locks follow the SoC down in winter (issue #100) -----------------
+    # Torsten 2026-11-18: hold and charge lock at 21, the SoC dipped to 20 --
+    # the winter rule set min_soc to 20, the SoC back at 21 set 21 again,
+    # and the Kostal charged/discharged on every write: 20/21 every 10 s,
+    # each an EEPROM write. A lock above the SoC now moves down to it and
+    # stays there -- the winter rule (no grid charge) holds, min_soc stands.
+    if vinter:
+        soc_now = float(_js_round(soc))
+        charge_lock = None if charge_lock is None else min(charge_lock, soc_now)
+        car_lock = None if car_lock is None else min(car_lock, soc_now)
+        hold_lock = None if hold_lock is None else min(hold_lock, soc_now)
+
     avg_cheapest_hours = (
         inputs.avg_cheapest_hours
         if inputs.avg_cheapest_hours is not None
