@@ -2159,7 +2159,7 @@ class PwMPhaseLoadCard extends HTMLElement {
     // Label positions: the middle of each third of the ring.
     const labels = [
       { x: -6, y: 98, anchor: "end" },
-      { x: 100, y: -8, anchor: "middle" },
+      { x: 100, y: -22, anchor: "middle" },
       { x: 206, y: 98, anchor: "start" },
     ];
 
@@ -2189,12 +2189,8 @@ class PwMPhaseLoadCard extends HTMLElement {
       }
       const label = labels[index];
       const value = Number.isFinite(amps) ? `${pwmFormatDecimal(amps)} A` : "–";
-      if (index === 1) {
-        texts += `<text x="${label.x}" y="${label.y}" text-anchor="middle" font-size="13" font-weight="500" fill="${phase.text}">${phase.name} ${value}</text>`;
-      } else {
-        texts += `<text x="${label.x}" y="${label.y}" text-anchor="${label.anchor}" font-size="13" font-weight="500" fill="${phase.text}">${value}</text>
-          <text x="${label.x}" y="${label.y + 14}" text-anchor="${label.anchor}" font-size="11" fill="${phase.text}">${phase.name}</text>`;
-      }
+      texts += `<text x="${label.x}" y="${label.y}" text-anchor="${label.anchor}" font-size="13" font-weight="500" fill="${phase.text}">${value}</text>
+        <text x="${label.x}" y="${label.y + 14}" text-anchor="${label.anchor}" font-size="11" fill="${phase.text}">${phase.name}</text>`;
     });
 
     const centre = top
@@ -2210,7 +2206,7 @@ class PwMPhaseLoadCard extends HTMLElement {
       : "";
     const wrap = document.createElement("div");
     wrap.innerHTML = `
-      <svg viewBox="-24 -22 248 212">
+      <svg viewBox="-24 -36 248 226">
         ${arcs}
         ${texts}
         ${centre}
