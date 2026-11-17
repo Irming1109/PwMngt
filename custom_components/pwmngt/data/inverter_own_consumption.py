@@ -12,6 +12,7 @@ Node-RED sensor -> PwMngt:
 |-----------------------------------------|------------------------------------------|
 | sensor.inverter_egetforbrug (HA template) | inverter_own_consumption (W)           |
 | -- (none)                               | inverter_own_consumption_today (kWh, sensor.py) |
+| -- (none)                               | house_power (W, issue #97)               |
 
 The house's power is not a wizard field: it is the inverter
 integration's own sensor (INVERTER_HOUSE_POWER_NAMES), found by
@@ -88,6 +89,24 @@ PwM_INVERTER_OWN_CONSUMPTION_SENSORS: list[SensorEntityDescription] = [
         entity_category=EntityCategory.DIAGNOSTIC,
     ),
 ]
+
+
+# Issue #97 (Claus 2026-11-17) -- no Node-RED counterpart: the house's
+# power on the PV device. The inverter's own house sensor (the one
+# house_power_entity_id() finds, also read by battery_hold and above);
+# for an inverter PwMngt doesn't know: PV + grid + battery, i.e. the house
+# including the inverter's own use.
+PwM_HOUSE_POWER_SENSORS: list[SensorEntityDescription] = [
+    SensorEntityDescription(
+        key="house_power",
+        name="House power",
+        icon="mdi:home-lightning-bolt-outline",
+        device_class=SensorDeviceClass.POWER,
+        state_class=SensorStateClass.MEASUREMENT,
+        native_unit_of_measurement="W",
+    ),
+]
+_HOUSE_SOURCE_CALCULATED = "calculated"
 
 
 # ---------------------------------------------------------------------------
@@ -249,4 +268,77 @@ class PwMngtInverterOwnConsumptionSensor(SensorEntity):
             return
         self._attr_native_value = round(mean)
         self._last_write = now
+        self.async_write_ha_state()
+
+
+class PwMngtHousePowerSensor(SensorEntity):
+    """Issue #97: house_power (W) -- see PwM_HOUSE_POWER_SENSORS. Follows
+    the source as it updates (a kW sensor is shown in W); the attribute
+    "source" is the inverter's sensor, or "calculated"."""
+
+    _attr_has_entity_name = True
+    _attr_should_poll = False
+
+    def __init__(self, description: SensorEntityDescription, entry: ConfigEntry) -> None:
+        self.entity_description = description
+        self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
+        self._attr_device_info = pv_device_info(entry)
+        self._attr_native_value = None
+        self._entry = entry
+        entity_map = entry.options.get(CONF_ENTITY_MAP, {})
+        self._pv_ids = [entity_map[key] for key in _PV_POWER_KEYS if entity_map.get(key)]
+        self._grid_id = entity_map.get(ENTITY_KEY_GRID_POWER) or None
+        self._battery_id = entity_map.get(ENTITY_KEY_BATTERY_POWER) or None
+        self._house_id: str | None = None
+
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        self._house_id = house_power_entity_id(self.hass, self._entry)
+        sources = (
+            [self._house_id]
+            if self._house_id
+            else [*self._pv_ids, self._grid_id, self._battery_id]
+        )
+
+        @callback
+        def _handle_source_update(_event) -> None:
+            self._recompute()
+
+        self.async_on_remove(
+            async_track_state_change_event(
+                self.hass, [entity_id for entity_id in sources if entity_id], _handle_source_update
+            )
+        )
+        self._recompute()
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        return {"source": self._house_id or _HOUSE_SOURCE_CALCULATED}
+
+    def _read(self, entity_id: str | None) -> float | None:
+        return read_float_state(self.hass.states.get(entity_id)) if entity_id else None
+
+    @callback
+    def _recompute(self) -> None:
+        if self._house_id:
+            state = self.hass.states.get(self._house_id)
+            value = read_float_state(state)
+            if value is not None and state.attributes.get("unit_of_measurement") == "kW":
+                value *= 1000
+        else:
+            grid = self._read(self._grid_id)
+            if grid is None:
+                value = None
+            else:
+                value = max(
+                    sum(self._read(entity_id) or 0.0 for entity_id in self._pv_ids)
+                    + grid * pv_properties.power_sign(self._entry, ENTITY_KEY_GRID_POWER)
+                    + (self._read(self._battery_id) or 0.0)
+                    * pv_properties.power_sign(self._entry, ENTITY_KEY_BATTERY_POWER),
+                    0.0,
+                )
+        new_value = None if value is None else round(value)
+        if new_value == self._attr_native_value:
+            return
+        self._attr_native_value = new_value
         self.async_write_ha_state()

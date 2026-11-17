@@ -85,7 +85,9 @@ from .data.inverter_derived_data import (
     derivable_entity_map_keys,
 )
 from .data.inverter_own_consumption import (
+    PwM_HOUSE_POWER_SENSORS,
     PwM_INVERTER_OWN_CONSUMPTION_SENSORS,
+    PwMngtHousePowerSensor,
     PwMngtInverterOwnConsumptionSensor,
 )
 from .base import use_description_key_as_translation_key
@@ -151,6 +153,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         sensors.append(entity)
 
     # Issue #77: the inverter's own consumption (W) and today's kWh of it.
+    # Issue #97: the house's power.
+    for description in PwM_HOUSE_POWER_SENSORS:
+        entity = PwMngtHousePowerSensor(description, entry)
+        LOGGER.info("Added PV house power sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
     for description in PwM_INVERTER_OWN_CONSUMPTION_SENSORS:
         entity = PwMngtInverterOwnConsumptionSensor(description, entry)
         LOGGER.info("Added PV inverter own consumption sensor with entity_id '%s'", entity.entity_id)
