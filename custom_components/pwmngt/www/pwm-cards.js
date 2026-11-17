@@ -2044,9 +2044,9 @@ const PWM_PHASE_CARD_STYLE = `
 
 /**
  * Phase load (issue #99): the main fuse's three phases on one ring, a third
- * each -- filled by the phase's current in % of the fuse, PwMngt's own limit
- * (fuse x PWM_FUSE_MARGIN) as a mark, the most loaded phase in the middle.
- * A phase over the limit gets a red stripe. Shown when the wizard's phase
+ * each -- filled by the phase's current in % of the fuse, the most loaded
+ * phase in the middle. A phase over PwMngt's own limit (fuse x
+ * PWM_FUSE_MARGIN) gets a red stripe. Shown when the wizard's phase
  * fields are filled in (sensor.py's PwM_PV_PHASE_LOAD_SENSORS).
  */
 class PwMPhaseLoadCard extends HTMLElement {
@@ -2177,16 +2177,6 @@ class PwMPhaseLoadCard extends HTMLElement {
       if (Number.isFinite(limit) && amps > limit) {
         arcs += pwmRingSegment(from, from + width * share, "#e53935", "", "butt", 5);
       }
-      if (Number.isFinite(limit) && fuse > 0) {
-        arcs += pwmRingSegment(
-          from + width * Math.min(limit / fuse, 1) - 0.3,
-          from + width * Math.min(limit / fuse, 1) + 0.3,
-          "var(--primary-text-color)",
-          "",
-          "butt",
-          18
-        );
-      }
       const label = labels[index];
       const value = Number.isFinite(amps) ? `${pwmFormatDecimal(amps)} A` : "–";
       texts += `<text x="${label.x}" y="${label.y}" text-anchor="${label.anchor}" font-size="13" font-weight="500" fill="${phase.text}">${value}</text>
@@ -2226,9 +2216,14 @@ class PwMPhaseLoadCard extends HTMLElement {
     };
     if (Number.isFinite(fuse)) add("", t.fuse(Math.round(fuse)));
     const known = phases.filter((phase) => Number.isFinite(phase.amps));
-    if (Number.isFinite(limit) && known.length) {
-      const free = Math.max(0, Math.floor(Math.min(...known.map((phase) => limit - phase.amps))));
-      add(free > 0 ? "" : "warn", t.free(free));
+    if (Number.isFinite(fuse) && known.length) {
+      // Free current = the fuse minus the most loaded phase (not PwMngt's
+      // 85 % limit) -- what is actually left before the fuse blows. Warns
+      // once a phase is above PwMngt's limit.
+      const highest = Math.max(...known.map((phase) => phase.amps));
+      const free = Math.max(0, Math.floor(fuse - highest));
+      const overLimit = Number.isFinite(limit) && highest > limit;
+      add(free > 0 && !overLimit ? "" : "warn", t.free(free));
     }
     return chips;
   }
