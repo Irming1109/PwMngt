@@ -291,6 +291,15 @@ PwM_SAVINGS_HEADLINE_SENSORS: list[SensorEntityDescription] = [
         state_class=SensorStateClass.TOTAL,
         native_unit_of_measurement="DKK",
     ),
+    # Issue #98 (Claus 2026-11-17): the two above added together.
+    SensorEntityDescription(
+        key="total_savings",
+        name="Total savings",
+        icon="mdi:cash-check",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.TOTAL,
+        native_unit_of_measurement="DKK",
+    ),
 ]
 
 _PERIOD_NAMES = {"today": "today", "month": "this month", "year": "this year"}
@@ -1478,7 +1487,7 @@ class PwMngtSavingsHeadlineSensor(RestoreEntity, SensorEntity):
         self._attr_native_value = 0.0
         self._entry = entry
         # 0 = own_production_savings, 1 = battery_charging_savings -- see
-        # signal_savings_update()'s payload order.
+        # signal_savings_update()'s payload order -- 2 = both (issue #98).
         self._value_index = value_index
 
     async def async_added_to_hass(self) -> None:
@@ -1522,14 +1531,32 @@ class PwMngtSavingsHeadlineSensor(RestoreEntity, SensorEntity):
         state = self.hass.states.get(entity_id) if entity_id else None
         if state is None:
             return None
-        attribute = ("own_production_savings", "battery_charging_savings")[self._value_index]
-        return _read_float_attribute(state, attribute)
+        own = _read_float_attribute(state, "own_production_savings")
+        battery = _read_float_attribute(state, "battery_charging_savings")
+        if self._value_index == 0:
+            return own
+        if self._value_index == 1:
+            return battery
+        if own is None or battery is None:
+            return None
+        return _headline_value(own, battery, self._value_index)
 
     @callback
     def _handle_update(self, own_production_savings: float, battery_charging_savings: float) -> None:
-        value = (own_production_savings, battery_charging_savings)[self._value_index]
-        self._attr_native_value = value
+        self._attr_native_value = _headline_value(
+            own_production_savings, battery_charging_savings, self._value_index
+        )
         self.async_write_ha_state()
+
+
+def _headline_value(own_production: float, battery_charging: float, value_index: int) -> float:
+    """The value of headline sensor value_index (see PwMngtSavingsHeadline
+    Sensor) -- issue #98: index 2 is both together."""
+    if value_index == 0:
+        return own_production
+    if value_index == 1:
+        return battery_charging
+    return round(own_production + battery_charging, 2)
 
 
 def _period_start(period: str, period_id: str | None) -> datetime | None:
