@@ -1997,7 +1997,7 @@ const PWM_PHASE_TEXTS = {
   en: {
     title: "Phase load",
     missing: "No phase loads picked in PwMngt's options (Solar PV Plant -> main fuse load L1-L3).",
-    summary: (phase, amps, kw) => `${phase} · total ${amps} A · about ${kw} kW`,
+    summary: (phase, amps) => `${phase} · ${amps} A`,
     over: (phase) => `${phase} over the limit`,
     ok: "Room on all phases",
     fuse: (amps) => `Fuse ${amps} A`,
@@ -2007,7 +2007,7 @@ const PWM_PHASE_TEXTS = {
   da: {
     title: "Fasebelastning",
     missing: "Ingen fasebelastning valgt i PwMngt's indstillinger (Solar PV Plant -> main fuse load L1-L3).",
-    summary: (phase, amps, kw) => `${phase} · i alt ${amps} A · ca. ${kw} kW`,
+    summary: (phase, amps) => `${phase} · ${amps} A`,
     over: (phase) => `${phase} over grænsen`,
     ok: "Plads på alle faser",
     fuse: (amps) => `Sikring ${amps} A`,
@@ -2024,7 +2024,6 @@ const PWM_PHASES = [
 ];
 // data/battery_charge_level.py's _TARIFF_FUSE_MARGIN: PwMngt's own limit.
 const PWM_FUSE_MARGIN = 0.85;
-const PWM_PHASE_VOLTS = 230;
 // Each phase's share of the ring, and the gap between them (% of the arc).
 const PWM_PHASE_SHARE = 100 / 3;
 const PWM_PHASE_GAP = 1.6;
@@ -2155,7 +2154,6 @@ class PwMPhaseLoadCard extends HTMLElement {
   _ring(t, phases, fuse, limit) {
     const known = phases.filter((phase) => Number.isFinite(phase.amps));
     const top = known.reduce((best, phase) => (!best || phase.amps > best.amps ? phase : best), null);
-    const total = known.reduce((sum, phase) => sum + Math.max(phase.amps, 0), 0);
     const pct = top && fuse > 0 ? Math.round((top.amps / fuse) * 100) : null;
     const over = known.filter((phase) => Number.isFinite(limit) && phase.amps > limit);
     // Label positions: the middle of each third of the ring.
@@ -2203,8 +2201,7 @@ class PwMPhaseLoadCard extends HTMLElement {
       ? `<text x="100" y="96" text-anchor="middle" font-size="36" font-weight="600" fill="${top.text}">${pct ?? "–"}<tspan font-size="18">%</tspan></text>
          <text x="100" y="118" text-anchor="middle" font-size="12" fill="var(--secondary-text-color)">${t.summary(
            top.name,
-           Math.round(total),
-           pwmFormatKw(total * PWM_PHASE_VOLTS)
+           Math.round(top.amps)
          )}</text>
          <text x="100" y="142" text-anchor="middle" font-size="13" font-weight="500"
            fill="${over.length ? "var(--error-color, #e53935)" : "var(--primary-text-color)"}">${
