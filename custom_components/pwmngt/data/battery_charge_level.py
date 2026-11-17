@@ -79,6 +79,11 @@ right at the limit, otherwise flipped 75 -> 50 -> 75 within one minute
 (two inverter commands, seen twice on Claus's 2026-11-02 night). A
 recheck is scheduled for when the wait ends, so going up doesn't depend
 on the fuse trigger (only fires at >= 20 A) or the next hourly run.
+Issue #95 (Claus 2026-11-17): when the fuse holds a planned charge hour
+at "internal" (Torsten's car charging at 31 A on a 25 A fuse at 04:00),
+it is looked at again every 5 minutes for the rest of the hour, so the
+charge resumes once there is room -- before, only one recheck after the
+10-minute wait, then the next hourly run.
 
 Deliberate difference from Node-RED (issue #22, Claus 2026-11-03): "Skal
 batteri lades" plans its hours as if the battery were empty, so there
@@ -212,6 +217,11 @@ _FUSE_RATE_LIMIT_SECONDS = 60
 # DIFF (issue #15, Claus 2026-11-03): after the fuse has forced a lower
 # level, wait this long before going up again -- see module docstring.
 _STEP_UP_HOLD_SECONDS = 10 * 60
+# Issue #95: while the fuse holds a planned charge hour at "internal" (e.g.
+# a car charging), look again this often, so the charge resumes in the
+# same hour once there is room -- the fuse trigger only fires while
+# charging.
+_FUSE_BLOCKED_RETRY_SECONDS = 5 * 60
 
 # DIFF (issue #22, Claus 2026-11-03): the night plan -- see module
 # docstring. Night = hours 0-5; the safety net stops at 06:00.
@@ -462,6 +472,18 @@ def calculate_battery_charge_level(
     if amps_allowed >= amps_needed_25:
         return "charge_now_25", night_plan
     return _COMMAND_INTERNAL, night_plan
+
+
+def fuse_blocked(result: str, night_plan: str | None, hour_is_cheap: bool, reached: bool) -> bool:
+    """Issue #95: a charge hour (cheap, or extended by the night plan)
+    held at "internal" while the target isn't reached -- the fuse left no
+    room even for "Charge 25"."""
+    return (
+        result == _COMMAND_INTERNAL
+        and night_plan != _NIGHT_SKIP
+        and (hour_is_cheap or night_plan == _NIGHT_EXTEND)
+        and not reached
+    )
 
 
 @dataclass
@@ -790,6 +812,11 @@ class PwMngtBatteryChargeLevelController:
             inputs.battery_soc is not None and inputs.battery_soc >= battery_target
         )
         self._apply_result(result, reached_target=battery_target if reached else None)
+        if (
+            fuse_blocked(result, night_plan, inputs.hour_is_cheap, reached)
+            and self._pending_step_up_recheck is None
+        ):
+            self._schedule_step_up_recheck(_FUSE_BLOCKED_RETRY_SECONDS)
 
     def _mark_night_hour(self, hour: int | None, result: str, night_plan: str | None) -> None:
         """Issue #24: tells battery_charge_status which planned night hour
