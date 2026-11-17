@@ -2188,7 +2188,7 @@ class PwMPhaseLoadCard extends HTMLElement {
         );
       }
       const label = labels[index];
-      const value = Number.isFinite(amps) ? pwmFormatDecimal(amps) : "–";
+      const value = Number.isFinite(amps) ? `${pwmFormatDecimal(amps)} A` : "–";
       if (index === 1) {
         texts += `<text x="${label.x}" y="${label.y}" text-anchor="middle" font-size="13" font-weight="500" fill="${phase.text}">${phase.name} ${value}</text>`;
       } else {
