@@ -1953,14 +1953,14 @@ pwmDefine("pwm-battery-ring-card", PwMBatteryRingCard);
 
 /** One coloured stretch of the battery ring, from..to in % of SoC. Butt
  * ends by default, so neighbouring stretches meet without overlapping. */
-function pwmRingSegment(from, to, color, cls, linecap = "butt") {
+function pwmRingSegment(from, to, color, cls, linecap = "butt", width = 14) {
   from = Math.max(0, from);
   to = Math.min(100, to);
   if (to <= from) return "";
   const length = (PWM_RING_ARC * (to - from)) / 100;
   const start = (PWM_RING_ARC * from) / 100;
   return `<circle cx="100" cy="100" r="${PWM_RING_RADIUS}" fill="none" stroke="${color}"
-    stroke-width="14" stroke-linecap="${linecap}" class="${cls || ""}"
+    stroke-width="${width}" stroke-linecap="${linecap}" class="${cls || ""}"
     stroke-dasharray="${length} ${PWM_RING_CIRCUMFERENCE}" stroke-dashoffset="${-start}"
     transform="rotate(135 100 100)"/>`;
 }
@@ -1991,6 +1991,265 @@ function pwmFormatHours(hours) {
   const minutes = Math.round(hours * 60);
   return `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, "0")}`;
 }
+
+/** Phase-load card texts (issue #99) -- same language pick as the ring. */
+const PWM_PHASE_TEXTS = {
+  en: {
+    title: "Phase load",
+    missing: "No phase loads picked in PwMngt's options (Solar PV Plant -> main fuse load L1-L3).",
+    summary: (phase, amps, kw) => `${phase} · total ${amps} A · about ${kw} kW`,
+    over: (phase) => `${phase} over the limit`,
+    ok: "Room on all phases",
+    fuse: (amps) => `Fuse ${amps} A`,
+    free: (amps) => `Free: ${amps} A`,
+    charging: (kw) => `Battery charging at ${kw} kW`,
+  },
+  da: {
+    title: "Fasebelastning",
+    missing: "Ingen fasebelastning valgt i PwMngt's indstillinger (Solar PV Plant -> main fuse load L1-L3).",
+    summary: (phase, amps, kw) => `${phase} · i alt ${amps} A · ca. ${kw} kW`,
+    over: (phase) => `${phase} over grænsen`,
+    ok: "Plads på alle faser",
+    fuse: (amps) => `Sikring ${amps} A`,
+    free: (amps) => `Ledig: ${amps} A`,
+    charging: (kw) => `Batteriet lader med ${kw} kW`,
+  },
+};
+
+// Issue #99: one colour per phase -- red is kept for warnings.
+const PWM_PHASES = [
+  { key: "main_fuse_load_l1", name: "L1", color: "#ab47bc", text: "#ce93d8" },
+  { key: "main_fuse_load_l2", name: "L2", color: "#43a047", text: "#81c784" },
+  { key: "main_fuse_load_l3", name: "L3", color: "#1e88e5", text: "#64b5f6" },
+];
+// data/battery_charge_level.py's _TARIFF_FUSE_MARGIN: PwMngt's own limit.
+const PWM_FUSE_MARGIN = 0.85;
+const PWM_PHASE_VOLTS = 230;
+// Each phase's share of the ring, and the gap between them (% of the arc).
+const PWM_PHASE_SHARE = 100 / 3;
+const PWM_PHASE_GAP = 1.6;
+
+const PWM_PHASE_CARD_STYLE = `
+  ha-card {
+    padding: 12px 12px 16px;
+    border-radius: var(--ha-card-border-radius, 18px);
+  }
+  svg { width: 100%; max-width: 260px; display: block; margin: auto; overflow: visible; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 4px; }
+  .chip { padding: 4px 10px; border-radius: 999px; font-size: 12px; white-space: nowrap;
+    color: var(--primary-text-color); background: var(--secondary-background-color); }
+  .chip.warn { background: rgba(229, 57, 53, 0.18); color: var(--error-color, #e53935); }
+  .status { margin-top: 8px; text-align: center; font-size: 12px; color: var(--secondary-text-color); }
+  .pwm-warning { color: var(--secondary-text-color); font-size: 13px; padding: 8px; }
+`;
+
+/**
+ * Phase load (issue #99): the main fuse's three phases on one ring, a third
+ * each -- filled by the phase's current in % of the fuse, PwMngt's own limit
+ * (fuse x PWM_FUSE_MARGIN) as a mark, the most loaded phase in the middle.
+ * A phase over the limit gets a red stripe. Shown when the wizard's phase
+ * fields are filled in (sensor.py's PwM_PV_PHASE_LOAD_SENSORS).
+ */
+class PwMPhaseLoadCard extends HTMLElement {
+  setConfig(config) {
+    this._config = config || {};
+    this._signature = undefined;
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this.shadowRoot) {
+      this.attachShadow({ mode: "open" });
+    }
+    this._resolveEntityIds();
+    const signature = this._stateSignature();
+    if (signature === this._signature) return;
+    this._signature = signature;
+    this._render();
+  }
+
+  getCardSize() {
+    return 5;
+  }
+
+  _texts() {
+    const language = (this._hass.locale && this._hass.locale.language) || this._hass.language || "en";
+    return PWM_PHASE_TEXTS[String(language).split("-")[0]] || PWM_PHASE_TEXTS.en;
+  }
+
+  /** Same registry-change caching as PwMngtBaseCard._resolveEntityIds(). */
+  _resolveEntityIds() {
+    if (
+      this._resolvedEntities === this._hass.entities &&
+      this._resolvedDevices === this._hass.devices
+    ) {
+      return;
+    }
+    this._resolvedEntities = this._hass.entities;
+    this._resolvedDevices = this._hass.devices;
+    this._ids = {
+      fuse: pwmFindEntityId(this._hass, "hub", "select", "tariff_fuse_size"),
+      command: pwmFindEntityId(this._hass, "pv", "select", "battery_command"),
+      maxCharge: pwmFindEntityId(this._hass, "pv", "select", "battery_max_charge_effect"),
+    };
+    for (const phase of PWM_PHASES) {
+      this._ids[phase.key] = pwmFindEntityId(this._hass, "pv", "sensor", phase.key);
+    }
+    this._signature = undefined;
+  }
+
+  _state(name) {
+    const entityId = this._ids[name];
+    return entityId ? this._hass.states[entityId] : undefined;
+  }
+
+  _number(name) {
+    const state = this._state(name);
+    if (!state) return NaN;
+    return state.state === "" ? NaN : Number(state.state);
+  }
+
+  _stateSignature() {
+    const parts = Object.keys(this._ids).map((name) => {
+      const state = this._state(name);
+      return state ? state.state : "-";
+    });
+    parts.push(this._texts().title);
+    return parts.join("#");
+  }
+
+  _render() {
+    const t = this._texts();
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+    const style = document.createElement("style");
+    style.textContent = PWM_PHASE_CARD_STYLE;
+    const card = document.createElement("ha-card");
+    if (this._config.title) card.header = this._config.title;
+    root.append(style, card);
+
+    const phases = PWM_PHASES.map((phase) => ({ ...phase, amps: this._number(phase.key) })).filter(
+      (phase) => this._ids[phase.key]
+    );
+    if (!phases.length) {
+      const warning = document.createElement("div");
+      warning.className = "pwm-warning";
+      warning.textContent = t.missing;
+      card.appendChild(warning);
+      return;
+    }
+    const fuse = this._number("fuse");
+    const limit = Number.isFinite(fuse) ? fuse * PWM_FUSE_MARGIN : NaN;
+
+    card.appendChild(this._ring(t, phases, fuse, limit));
+    card.appendChild(this._chips(t, phases, fuse, limit));
+    const status = this._chargingText(t);
+    if (status) {
+      const line = document.createElement("div");
+      line.className = "status";
+      line.textContent = status;
+      card.appendChild(line);
+    }
+  }
+
+  _ring(t, phases, fuse, limit) {
+    const known = phases.filter((phase) => Number.isFinite(phase.amps));
+    const top = known.reduce((best, phase) => (!best || phase.amps > best.amps ? phase : best), null);
+    const total = known.reduce((sum, phase) => sum + Math.max(phase.amps, 0), 0);
+    const pct = top && fuse > 0 ? Math.round((top.amps / fuse) * 100) : null;
+    const over = known.filter((phase) => Number.isFinite(limit) && phase.amps > limit);
+    // Label positions: the middle of each third of the ring.
+    const labels = [
+      { x: -6, y: 98, anchor: "end" },
+      { x: 100, y: -8, anchor: "middle" },
+      { x: 206, y: 98, anchor: "start" },
+    ];
+
+    let arcs = "";
+    let texts = "";
+    PWM_PHASES.forEach((phase, index) => {
+      const shown = phases.find((p) => p.key === phase.key);
+      const from = index * PWM_PHASE_SHARE;
+      const width = PWM_PHASE_SHARE - PWM_PHASE_GAP;
+      arcs += pwmRingSegment(from, from + width, "var(--divider-color)");
+      if (!shown) return;
+      const amps = shown.amps;
+      const share = Number.isFinite(amps) && fuse > 0 ? Math.min(Math.max(amps / fuse, 0), 1) : 0;
+      arcs += pwmRingSegment(from, from + width * share, phase.color);
+      if (Number.isFinite(limit) && amps > limit) {
+        arcs += pwmRingSegment(from, from + width * share, "#e53935", "", "butt", 5);
+      }
+      if (Number.isFinite(limit) && fuse > 0) {
+        arcs += pwmRingSegment(
+          from + width * Math.min(limit / fuse, 1) - 0.3,
+          from + width * Math.min(limit / fuse, 1) + 0.3,
+          "var(--primary-text-color)",
+          "",
+          "butt",
+          18
+        );
+      }
+      const label = labels[index];
+      const value = Number.isFinite(amps) ? pwmFormatDecimal(amps) : "–";
+      if (index === 1) {
+        texts += `<text x="${label.x}" y="${label.y}" text-anchor="middle" font-size="13" font-weight="500" fill="${phase.text}">${phase.name} ${value}</text>`;
+      } else {
+        texts += `<text x="${label.x}" y="${label.y}" text-anchor="${label.anchor}" font-size="13" font-weight="500" fill="${phase.text}">${value}</text>
+          <text x="${label.x}" y="${label.y + 14}" text-anchor="${label.anchor}" font-size="11" fill="${phase.text}">${phase.name}</text>`;
+      }
+    });
+
+    const centre = top
+      ? `<text x="100" y="96" text-anchor="middle" font-size="36" font-weight="600" fill="${top.text}">${pct ?? "–"}<tspan font-size="18">%</tspan></text>
+         <text x="100" y="118" text-anchor="middle" font-size="12" fill="var(--secondary-text-color)">${t.summary(
+           top.name,
+           Math.round(total),
+           pwmFormatKw(total * PWM_PHASE_VOLTS)
+         )}</text>
+         <text x="100" y="142" text-anchor="middle" font-size="13" font-weight="500"
+           fill="${over.length ? "var(--error-color, #e53935)" : "var(--primary-text-color)"}">${
+           over.length ? t.over(over.map((phase) => phase.name).join(", ")) : t.ok
+         }</text>`
+      : "";
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `
+      <svg viewBox="-24 -22 248 212">
+        ${arcs}
+        ${texts}
+        ${centre}
+        <text x="100" y="182" text-anchor="middle" font-size="13" fill="var(--secondary-text-color)">${this._config.name || t.title}</text>
+      </svg>`;
+    return wrap;
+  }
+
+  _chips(t, phases, fuse, limit) {
+    const chips = document.createElement("div");
+    chips.className = "chips";
+    const add = (cls, text) => {
+      const chip = document.createElement("span");
+      chip.className = `chip ${cls}`;
+      chip.textContent = text;
+      chips.appendChild(chip);
+    };
+    if (Number.isFinite(fuse)) add("", t.fuse(Math.round(fuse)));
+    const known = phases.filter((phase) => Number.isFinite(phase.amps));
+    if (Number.isFinite(limit) && known.length) {
+      const free = Math.max(0, Math.floor(Math.min(...known.map((phase) => limit - phase.amps))));
+      add(free > 0 ? "" : "warn", t.free(free));
+    }
+    return chips;
+  }
+
+  /** "Battery charging at N kW" while a charge_now_* command runs. */
+  _chargingText(t) {
+    const command = this._state("command");
+    const match = command ? /^charge_now_(\d+)$/.exec(command.state) : null;
+    const maxW = this._number("maxCharge");
+    if (!match || !Number.isFinite(maxW)) return "";
+    return t.charging(pwmFormatKw((maxW * Number(match[1])) / 100));
+  }
+}
+pwmDefine("pwm-phase-load-card", PwMPhaseLoadCard);
 
 // Register with Home Assistant's card picker so all three card types show
 // up there with a name/description, instead of only being addable by
@@ -2026,6 +2285,11 @@ const PWM_CUSTOM_CARDS = [
     type: "pwm-battery-ring-card",
     name: "PwM Battery ring",
     description: "Battery SoC as a ring: PV/grid share, min SoC, target, power and status.",
+  },
+  {
+    type: "pwm-phase-load-card",
+    name: "PwM Phase load",
+    description: "The main fuse's three phase loads as a ring, with PwMngt's limit and free current.",
   }
 ];
 // Skip the ones already listed -- this file may run twice (see pwmDefine()).

@@ -24,6 +24,9 @@ from homeassistant.util import dt as dt_util
 from .const import (
     DOMAIN,
     CONF_ENTITY_MAP,
+    ENTITY_KEY_MAIN_FUSE_LOAD_L1,
+    ENTITY_KEY_MAIN_FUSE_LOAD_L2,
+    ENTITY_KEY_MAIN_FUSE_LOAD_L3,
     CONF_ELECTRICITY_PRICE_SURCHARGE,
     ENTITY_KEY_BATTERY_SOC,
     ENTITY_KEY_BATTERY_PV_CHARGED,
@@ -135,6 +138,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
                 zero_if_unconfigured=entity_map_key in _ZERO_IF_UNCONFIGURED_PV_POWER_KEYS,
             )
             LOGGER.info("Added PV mirror sensor with entity_id '%s'", entity.entity_id)
+        sensors.append(entity)
+
+    # Issue #99: the main fuse's phase loads, for the phase-load card --
+    # only the phases picked in the wizard (optional fields).
+    for description, entity_map_key in PwM_PV_PHASE_LOAD_SENSORS:
+        if not entity_map.get(entity_map_key):
+            continue
+        entity = PwMngtPvMirrorSensor(description, entry, entity_map_key)
+        LOGGER.info("Added PV phase load sensor with entity_id '%s'", entity.entity_id)
         sensors.append(entity)
 
     for description, entity_map_keys in PwM_PV_SUM_SENSORS:
@@ -646,6 +658,30 @@ class PwMngtScaffoldSensor(SensorEntity):
         self._attr_unique_id = f"{entry.entry_id}_pv_{description.key}"
         self._attr_device_info = pv_device_info(entry)
         self._attr_native_value = None
+
+
+# Issue #99 (Claus 2026-11-17): the main fuse's three phase loads (A), as
+# picked in the wizard, so the phase-load card (www/pwm-cards.js) can find
+# them on the PV device like the other PwM cards find theirs.
+PwM_PV_PHASE_LOAD_SENSORS: list[tuple[SensorEntityDescription, str]] = [
+    (
+        SensorEntityDescription(
+            key=f"main_fuse_load_{phase}",
+            name=f"Main fuse load {phase.upper()}",
+            icon="mdi:current-ac",
+            device_class=SensorDeviceClass.CURRENT,
+            state_class=SensorStateClass.MEASUREMENT,
+            native_unit_of_measurement="A",
+            suggested_display_precision=1,
+        ),
+        entity_map_key,
+    )
+    for phase, entity_map_key in (
+        ("l1", ENTITY_KEY_MAIN_FUSE_LOAD_L1),
+        ("l2", ENTITY_KEY_MAIN_FUSE_LOAD_L2),
+        ("l3", ENTITY_KEY_MAIN_FUSE_LOAD_L3),
+    )
+]
 
 
 # ---------------------------------------------------------------------------
