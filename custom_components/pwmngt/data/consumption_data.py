@@ -70,11 +70,14 @@ from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, EntityCategory
 from homeassistant.core import HomeAssistant, State, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import event, restore_state
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.util import dt as dt_util
 
 from ..const import (
     CONF_ENTITY_MAP,
     DOMAIN,
+    ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY,
+    ENTITY_KEY_BATTERY_GRID_CHARGED_DAY,
     ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL,
 )
 from ..devices import CHARGERS, pv_device_info
@@ -424,6 +427,58 @@ def _charger_consumption(
     return total
 
 
+# Issue #94: a property counter that counts the battery's charging too
+# turns a night with a grid charge into a night with a high consumption --
+# the nightly target goes up, the next night charges more, and so on.
+# Tested on Claus's, Kasper's and Rene's nights 27/10-17/11 (night use
+# without the chargers against the grid charge): their house counters
+# gave slope 0.12-0.46 / r 0.12-0.34, their grid-import counters (which
+# do count the charge) 1.15-1.41 / r 0.70-0.84.
+ISSUE_CONSUMPTION_COUNTS_BATTERY = "consumption_counts_battery"
+_BATTERY_IN_CONSUMPTION_MIN_NIGHTS = 10
+_BATTERY_IN_CONSUMPTION_MIN_EACH = 3  # nights with and without a charge
+_CHARGE_NIGHT_KWH = 2.0
+_NO_CHARGE_NIGHT_KWH = 1.0
+_BATTERY_IN_CONSUMPTION_MIN_SLOPE = 0.7
+_BATTERY_IN_CONSUMPTION_MIN_R = 0.6
+
+
+def consumption_includes_battery_charge(nights: list[tuple[float, float]]) -> bool | None:
+    """Issue #94: whether a night's consumption (second value, kWh,
+    without the chargers) rises with that night's grid charge of the
+    battery (first value, kWh) as if the charge were part of it -- the
+    regression slope and correlation over the nights. None while there
+    aren't enough nights with and without a charge to tell."""
+    if len(nights) < _BATTERY_IN_CONSUMPTION_MIN_NIGHTS:
+        return None
+    charged = sum(1 for charge, _ in nights if charge >= _CHARGE_NIGHT_KWH)
+    uncharged = sum(1 for charge, _ in nights if charge < _NO_CHARGE_NIGHT_KWH)
+    if charged < _BATTERY_IN_CONSUMPTION_MIN_EACH or uncharged < _BATTERY_IN_CONSUMPTION_MIN_EACH:
+        return None
+    count = len(nights)
+    mean_x = sum(charge for charge, _ in nights) / count
+    mean_y = sum(use for _, use in nights) / count
+    sxy = sum((charge - mean_x) * (use - mean_y) for charge, use in nights)
+    sxx = sum((charge - mean_x) ** 2 for charge, _ in nights)
+    syy = sum((use - mean_y) ** 2 for _, use in nights)
+    if sxx <= 0 or syy <= 0:
+        return False
+    slope = sxy / sxx
+    correlation = sxy / math.sqrt(sxx * syy)
+    return slope >= _BATTERY_IN_CONSUMPTION_MIN_SLOPE and correlation >= _BATTERY_IN_CONSUMPTION_MIN_R
+
+
+def night_grid_charge(
+    day: date, series: dict[str, dict[int, float]], entity_id: str
+) -> float | None:
+    """Issue #94: the battery's grid charge (kWh) in the same night hours
+    as nighttime (17-24 + 00-06 of day)."""
+    timestamps = {
+        hour: int(moment.timestamp()) for hour, moment in day_boundaries(day).items()
+    }
+    return _charger_consumption(series, [entity_id], timestamps, ((17, 24), (0, 6)))
+
+
 def build_day(
     day: date,
     series: dict[str, dict[int, float]],
@@ -706,6 +761,51 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
             self._trim_histories(oldest)
             self._recompute()
             self.async_write_ha_state()
+            await self._async_check_battery_in_consumption(property_entity_id)
+
+    async def _async_check_battery_in_consumption(self, property_entity_id: str) -> None:
+        """Issue #94: a Repair while the property counter looks like it
+        counts the battery's grid charge too (see
+        consumption_includes_battery_charge()); cleared once it doesn't.
+        Left as it is while there's too little to tell."""
+        entity_map = self._entry.options.get(CONF_ENTITY_MAP, {})
+        grid_charge_entity_id = entity_map.get(
+            ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY
+        ) or entity_map.get(ENTITY_KEY_BATTERY_GRID_CHARGED_DAY)
+        if not grid_charge_entity_id:
+            return
+        night_use = {
+            entry["date"]: (
+                entry["nighttime_adjusted"]
+                if entry.get("nighttime_adjusted") is not None
+                else entry.get("nighttime")
+            )
+            for entry in self._daytime_history
+        }
+        days = sorted(date.fromisoformat(day) for day, use in night_use.items() if use is not None)
+        if not days:
+            return
+        series = await self._async_fetch_series([grid_charge_entity_id], days)
+        nights = []
+        for day in days:
+            charge = night_grid_charge(day, series, grid_charge_entity_id)
+            if charge is not None:
+                nights.append((charge, night_use[day.isoformat()]))
+        result = consumption_includes_battery_charge(nights)
+        if result is None:
+            return
+        if result:
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                ISSUE_CONSUMPTION_COUNTS_BATTERY,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=ISSUE_CONSUMPTION_COUNTS_BATTERY,
+                translation_placeholders={"entity_id": property_entity_id},
+            )
+        else:
+            ir.async_delete_issue(self.hass, DOMAIN, ISSUE_CONSUMPTION_COUNTS_BATTERY)
 
     async def _async_fetch_series(
         self, entity_ids: list[str], days: list[date]
