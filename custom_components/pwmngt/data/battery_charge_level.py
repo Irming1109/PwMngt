@@ -85,6 +85,10 @@ fuse trigger stopped the charge 3 minutes after it started), it is
 looked at again every 5 minutes for the rest of the hour, so the charge
 resumes once there is room -- before, only one recheck after the
 10-minute wait, then the next hourly run.
+Issue #102 (Claus 2026-11-18): the same 5-minute recheck while the fuse
+holds a planned charge hour below "Charge 75" -- Torsten's night charge
+started on "Charge 25" next to the car and stayed there for half an hour
+after the car stopped, because only a step *down* scheduled a recheck.
 
 Deliberate difference from Node-RED (issue #101, Claus 2026-11-17), one
 fuse rule for the automatic and the manual charge (fuse_check()):
@@ -234,10 +238,10 @@ _FUSE_RATE_LIMIT_SECONDS = 60
 # DIFF (issue #15, Claus 2026-11-03): after the fuse has forced a lower
 # level, wait this long before going up again -- see module docstring.
 _STEP_UP_HOLD_SECONDS = 10 * 60
-# Issue #95: while the fuse holds a planned charge hour at "internal" (e.g.
-# a car charging), look again this often, so the charge resumes in the
-# same hour once there is room -- the fuse trigger only fires while
-# charging.
+# Issue #95/#102: while the fuse holds a planned charge hour at "internal"
+# or below "Charge 75" (e.g. a car charging), look again this often, so the
+# charge resumes or steps up in the same hour once there is room -- the
+# fuse trigger only fires at >= 20 A, never when the load falls.
 _FUSE_BLOCKED_RETRY_SECONDS = 5 * 60
 
 # DIFF (issue #22, Claus 2026-11-03): the night plan -- see module
@@ -578,12 +582,16 @@ def _fuse_check_attribute(
     }
 
 
-def fuse_blocked(result: str, night_plan: str | None, hour_is_cheap: bool, reached: bool) -> bool:
-    """Issue #95: a charge hour (cheap, or extended by the night plan)
-    held at "internal" while the target isn't reached -- the fuse left no
-    room even for "Charge 25"."""
+def fuse_limited(result: str, night_plan: str | None, hour_is_cheap: bool, reached: bool) -> bool:
+    """A charge hour (cheap, or extended by the night plan) the fuse holds
+    back while the target isn't reached: at "internal", no room even for
+    "Charge 25" (issue #95), or on a level below "Charge 75" (issue #102)."""
+    held_back = result == _COMMAND_INTERNAL or (
+        _CHARGE_LEVEL_RANK.get(result, 0)
+        < _CHARGE_LEVEL_RANK[f"charge_now_{_AUTOMATIC_LEVELS[0]}"]
+    )
     return (
-        result == _COMMAND_INTERNAL
+        held_back
         and night_plan != _NIGHT_SKIP
         and (hour_is_cheap or night_plan == _NIGHT_EXTEND)
         and not reached
@@ -937,7 +945,7 @@ class PwMngtBatteryChargeLevelController:
             ),
         )
         if (
-            fuse_blocked(result, night_plan, inputs.hour_is_cheap, reached)
+            fuse_limited(result, night_plan, inputs.hour_is_cheap, reached)
             and self._pending_step_up_recheck is None
         ):
             self._schedule_step_up_recheck(_FUSE_BLOCKED_RETRY_SECONDS)
