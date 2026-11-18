@@ -748,6 +748,8 @@ const PWM_BATTERY_TEXTS = {
     lastChargeDone: (time, target) =>
       `Tonight's charge finished at ${time}${target !== null ? ` - target ${target}% reached` : ""}`,
     lastChargeStopped: (time) => `Tonight's charge stopped at ${time} - the target wasn't reached`,
+    planEnded: (time, target, soc) =>
+      `The charge plan ended at ${time} - the target of ${target}% wasn't reached${soc !== null ? ` (SoC ${soc}%)` : ""}`,
     kwh: (value) => `${value.toFixed(1)} kWh`,
     partialCharge: (pct, target, kwh) =>
       `Charges to ${pct}% from the grid - tomorrow's PV (${kwh} surplus expected) fills it up to the target of ${target}%`,
@@ -828,6 +830,8 @@ const PWM_BATTERY_TEXTS = {
     lastChargeDone: (time, target) =>
       `Nattens ladning færdig kl. ${time}${target !== null ? ` - target ${target} % nået` : ""}`,
     lastChargeStopped: (time) => `Nattens ladning stoppet kl. ${time} - target blev ikke nået`,
+    planEnded: (time, target, soc) =>
+      `Ladeplanen sluttede kl. ${time} - target ${target} % blev ikke nået${soc !== null ? ` (SoC ${soc} %)` : ""}`,
     kwh: (value) => `${value.toFixed(1).replace(".", ",")} kWh`,
     partialCharge: (pct, target, kwh) =>
       `Lades til ${pct} % fra nettet - solen i morgen (forventet ${kwh} overskud) fylder op til target ${target} %`,
@@ -1209,6 +1213,17 @@ class PwMBatteryCard extends HTMLElement {
     // Banners -- same order and conditions as the Node-RED card.
     if (!isAuto) {
       statusGroup.appendChild(this._banner("bad", t.manual));
+    } else if (chargingPct === null && this._planEnded(status) !== null) {
+      // Issue #103: today's planned hours are over but the target wasn't
+      // reached -- the plan stays "yes_today" until 16:55 (battery_data
+      // still uses it for the day), so say it has ended.
+      const end = this._planEnded(status);
+      const target = Math.round(Number(status.attributes.charge_target));
+      const socState = this._state("soc");
+      const soc = socState && Number.isFinite(Number(socState.state)) ? Math.round(Number(socState.state)) : null;
+      statusGroup.appendChild(
+        this._banner("warn", t.planEnded(`${String(end).padStart(2, "0")}:00`, target, soc))
+      );
     } else if (chargingPct === null || !planned) {
       const key =
         status.state === "not_calculated" && pwmBatteryRecheckHours()
@@ -1483,6 +1498,26 @@ class PwMBatteryCard extends HTMLElement {
       if (target !== null) return [t.surplusCovers(Math.round(target), kwh)];
     }
     return [];
+  }
+
+  /**
+   * Issue #103: the hour (0-23) today's charge plan ended at, while it is
+   * still "yes_today" with a target -- or null while a planned hour is
+   * still ahead or running. A night plan (hours 0-5) can be extended into
+   * the night's unplanned hours (#22), so it counts as over only from 06.
+   */
+  _planEnded(status) {
+    if (status.state !== "yes_today") return null;
+    if (!Number.isFinite(Number(status.attributes.charge_target))) return null;
+    const hours = (status.attributes.extended_hours || []).slice();
+    for (let hour = 0; hour < 24; hour++) {
+      if (status.attributes[`hour_${hour}`] === true) hours.push(hour);
+    }
+    if (!hours.length) return null;
+    const end = Math.max(...hours) + 1;
+    const now = new Date().getHours();
+    if (now < end || (end <= 6 && now < 6)) return null;
+    return end;
   }
 
   /**
