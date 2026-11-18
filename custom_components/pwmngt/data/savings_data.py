@@ -102,8 +102,14 @@ it pulled the sums up again on every start -- after a wizard re-run, after
 a pwmngt.adjust_savings correction (undoing it), or from a Node-RED sensor
 still counting. So once a seed sensor has been read, the sums are saved
 straight away (restore state) and the field is removed from the options;
-the wizard then shows it empty. Picking a sensor again seeds once more. A
-seed sensor without a value yet (e.g. not loaded) stays until it has one.
+the wizard then shows it empty. Picking a sensor again seeds once more.
+A seed sensor without a value at startup is watched and used the first
+time it gets one: Node-RED's sensors stay unavailable until Node-RED has
+connected, minutes after PwMngt started, so waiting for the next start
+never got there (Kasper, 2026-11-18). A seed field pointing at an entity
+that doesn't exist at all is removed straight away. A seed is history,
+not savings made today, so it moves the started periods' baselines along
+and the day/month/year totals don't jump.
 
 Why all 4 base sums (not just the two headline ones) have to be seeded
 together: own_production_savings and battery_charging_savings are both a
@@ -988,6 +994,7 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         self._ledger = SavingsLedger()
         self._pending_shift: Any = None
         self._pending_accumulate: Any = None
+        self._unsub_seed_watch: Any = None
 
         entity_map = entry.options.get(CONF_ENTITY_MAP, {})
         # "real" is read via hub_properties.electricity_price() instead
@@ -1019,13 +1026,10 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         restored = await self.async_get_last_extra_data()
         if restored is not None:
             self._ledger = PwMngtSavingsStoredData.from_dict(restored.as_dict()).ledger
-        used_seed_keys = self._seed_ledger()
-        if used_seed_keys:
-            # Issue #91: save the seeded sums before the fields go, so a
-            # crash can't lose both.
-            await async_get_restore_state(self.hass).async_dump_states()
-            self._remove_seed_fields(used_seed_keys)
+        await self._apply_seed()
+        self._remove_seed_fields(self._missing_seed_keys(), "entity not found")
         roll_periods(self._ledger, dt_util.now(), only_unstarted=True)
+        self._watch_pending_seeds()
 
         self.async_on_remove(
             event.async_track_time_change(
@@ -1068,6 +1072,7 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         Returns the entity_map keys whose seed sensor was read -- used
         once, issue #91 (see _remove_seed_fields())."""
         used: list[str] = []
+        before = real_savings(self._ledger)
         for key, entity_id in self._seed_entity_ids.items():
             value = self._seed_value(entity_id)
             if value is None:
@@ -1097,12 +1102,80 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         # must not undo an hourly high-water mark set since the last
         # reload just because this run's raw diff happens to be smaller.
         self._raise_headline_values()
+        self._shift_started_periods(before)
         return used
 
-    def _remove_seed_fields(self, keys: list[str]) -> None:
+    def _shift_started_periods(self, before: dict[str, float]) -> None:
+        """A seed is history, not savings made in the current day/month/
+        year: move the started periods' baselines by the seed's jump, so
+        their totals stay put. Periods not started yet (first run) are
+        started after the seed by roll_periods()."""
+        after = real_savings(self._ledger)
+        for baseline in self._ledger.periods.values():
+            if baseline.period_id is None:
+                continue
+            for kind in SAVINGS_PERIOD_KINDS:
+                jump = after[kind] - before[kind]
+                if jump:
+                    setattr(baseline, kind, round(getattr(baseline, kind) + jump, 2))
+
+    async def _apply_seed(self) -> bool:
+        """Seed from the seed sensors that have a value and remove their
+        fields (issue #91). Returns whether any was used."""
+        used_seed_keys = self._seed_ledger()
+        if not used_seed_keys:
+            return False
+        # Save the seeded sums before the fields go, so a crash can't
+        # lose both.
+        await async_get_restore_state(self.hass).async_dump_states()
+        self._remove_seed_fields(used_seed_keys, "used once")
+        return True
+
+    def _missing_seed_keys(self) -> list[str]:
+        """Seed fields whose entity exists neither as a state nor in the
+        entity registry -- deleted, so it will never get a value."""
+        registry = er.async_get(self.hass)
+        return [
+            key
+            for key, entity_id in self._seed_entity_ids.items()
+            if self.hass.states.get(entity_id) is None
+            and registry.async_get(entity_id) is None
+        ]
+
+    def _watch_pending_seeds(self) -> None:
+        """Issue #91: a seed sensor without a value at startup (Node-RED
+        not connected yet) is used the first time it gets one."""
+        if not self._seed_entity_ids:
+            return
+        self._unsub_seed_watch = event.async_track_state_change_event(
+            self.hass, list(self._seed_entity_ids.values()), self._handle_seed_state
+        )
+        self.async_on_remove(self._stop_seed_watch)
+
+    @callback
+    def _stop_seed_watch(self) -> None:
+        if self._unsub_seed_watch is not None:
+            self._unsub_seed_watch()
+            self._unsub_seed_watch = None
+
+    @callback
+    def _handle_seed_state(self, _event: Any) -> None:
+        self.hass.async_create_task(self._async_late_seed())
+
+    async def _async_late_seed(self) -> None:
+        if not await self._apply_seed():
+            return
+        if not self._seed_entity_ids:
+            self._stop_seed_watch()
+        self._write_state()
+        self._dispatch_headline_values()
+
+    def _remove_seed_fields(self, keys: list[str], reason: str) -> None:
         """Issue #91: take used seed fields out of the config entry's
         options, so they aren't applied again. PwMngt has no options
         update listener, so this doesn't reload anything."""
+        if not keys:
+            return
         options = dict(self._entry.options)
         entity_map = dict(options.get(CONF_ENTITY_MAP, {}))
         for key in keys:
@@ -1111,7 +1184,7 @@ class PwMngtSavingsDataSensor(RestoreEntity, SensorEntity):
         options[CONF_ENTITY_MAP] = entity_map
         self.hass.config_entries.async_update_entry(self._entry, options=options)
         LOGGER.info(
-            "PwMngt: savings seed field(s) %s used once and cleared", ", ".join(keys)
+            "PwMngt: savings seed field(s) %s cleared (%s)", ", ".join(keys), reason
         )
 
     def _raise_headline_values(self) -> None:
