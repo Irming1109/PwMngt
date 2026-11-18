@@ -63,12 +63,12 @@ Python, Home Assistant ≥ 2025.3 (`hacs.json`), ingen eksterne pakker ud over `
 ## Arbejdsgang (hver opgave)
 1. `git pull --autostash`. Kommer opgaven fra et issue: tildel dig selv og sæt `in-progress` (skillen `github-issue`). Læs relevante filer og den tilsvarende Node-RED-funktion; stil afklarende spørgsmål ved uklarheder – **altid med din anbefaling** til hvert spørgsmål, så der kan svares "anbefalingerne er ok".
 2. Byg ændringen. Nye config-felter: `const.py` + `config_flow.py` + platformfil + `strings.json`/`translations/*.json` + evt. `www/pwm-cards.js`.
-3. Bump `version` i `manifest.json` ved ændringer, der skal ud (format `0.4.03` – patch altid to cifre).
+3. Bump `version` i `manifest.json` ved ændringer, der skal ud (format `0.4.03` – patch altid to cifre) – **kun hvis den nuværende version allerede er udgivet** (der findes et tag `v<version>`). Er den ikke udgivet endnu, kommer ændringen med i den samme version. Der springes aldrig et versionsnummer over.
 4. `py_compile` uden fejl. Opdatér denne fil, hvis arkitekturen ændres. Nye fund undervejs oprettes som issues – ikke som noter her.
 5. Commit når der bedes om det, `git pull --autostash`, push. Sæt issuet til `in-test` med en kort kommentar (commits, version, hvad der skal tjekkes i HA). Deploy er et separat skridt ("Deploy").
 
 ## Version og deploy
-- Versionen står i `custom_components/pwmngt/manifest.json` og tagges `v<version>`. Patch er zero-padded til to cifre (`0.4.01`, ikke `0.4.1`).
+- Versionen står i `custom_components/pwmngt/manifest.json` og tagges `v<version>`. Patch er zero-padded til to cifre (`0.4.01`, ikke `0.4.1`). Hver release er præcis ét trin over den forrige (`0.5.12` → `0.5.13`, eller `0.6.00` ved et minor-bump) – `precheck.py` stopper en release, der springer et nummer over.
 - `RELEASE_NOTES.md` er git-ignoreret kladde – indholdet bliver tag-beskeden og release-teksten. `release.ps1` tagger med `--cleanup=verbatim`, ellers forsvinder Markdown-overskrifter (`##`).
 - `.github/workflows/release.yml` er kun en manuel reserve (Actions → Run workflow med tagget) – den starter ikke længere ved tag-push, og en release herfra står som "github-actions". Den henter tagget igen efter checkout (ellers mistes annotationen) og springer over, hvis releasen allerede findes.
 - HACS: releases siden v0.2.24 er "Latest" (ikke pre-release), så nye installationer får den nyeste version.

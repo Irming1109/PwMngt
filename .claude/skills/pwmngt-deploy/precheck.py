@@ -73,6 +73,16 @@ if current is None:
 elif previous and current <= previous:
     major, minor, patch = previous
     errors.append(f"Version {version} is not newer than {last_tag} - bump it (suggested: {major}.{minor}.{patch + 1:02d}).")
+elif previous:
+    # No version number is ever skipped: the next release is exactly one
+    # patch, minor (X.Y+1.00) or major (X+1.0.00) step above the last tag.
+    major, minor, patch = previous
+    allowed = {(major, minor, patch + 1), (major, minor + 1, 0), (major + 1, 0, 0)}
+    if current not in allowed:
+        errors.append(
+            f"Version {version} skips a number after {last_tag} - use {major}.{minor}.{patch + 1:02d} "
+            f"(or {major}.{minor + 1}.00 for a minor bump)."
+        )
 if git("tag", "-l", f"v{version}"):
     errors.append(f"Tag v{version} already exists.")
 

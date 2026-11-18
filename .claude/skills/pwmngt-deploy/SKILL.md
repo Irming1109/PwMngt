@@ -17,7 +17,7 @@ description: Use when Kasper or Claus says "Deploy" (or similar) for PwMngt - ru
 - Uncommitted changes in the working tree are never part of a release and are never committed by this skill (they may be the other developer's work in progress) - just mention them.
 
 ## 2. Version bump (only if missing)
-If the only errors are "not newer than the last tag" / "tag already exists", propose the next patch version (the script suggests it, e.g. `0.4.03` → `0.4.04`; a new feature segment may deserve a minor bump - ask). After the approval in step 4: change `version` in `custom_components/pwmngt/manifest.json`, commit only that file as `Bump version til 0.4.04`, `git pull --autostash`, push, and re-run the precheck.
+No version number is ever skipped: a release is exactly one step above the last tag (`0.5.12` → `0.5.13`, or `0.6.00` for a minor bump), and the precheck stops one that skips. If the error is "skips a number", propose setting `version` back to the next number (same commit message as below). If the only errors are "not newer than the last tag" / "tag already exists", propose the next patch version (the script suggests it, e.g. `0.4.03` → `0.4.04`; a new feature segment may deserve a minor bump - ask). After the approval in step 4: change `version` in `custom_components/pwmngt/manifest.json`, commit only that file as `Bump version til 0.4.04`, `git pull --autostash`, push, and re-run the precheck.
 
 ## 3. Release notes
 - Read the real diff: `git log <tag>..HEAD` and `git diff <tag> HEAD -- custom_components`. Never write notes from memory.
