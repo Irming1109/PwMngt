@@ -92,6 +92,13 @@ off the charge for tomorrow's PV surplus -- the PV refills it before the
 evening. With the full reserve as the floor, a charge cut by the surplus
 left the battery nothing to cover the daytime hours with (Kasper
 2026-11-12: charged to 33 %, floor 32 %, 1 of 8 % covered in 07-08).
+Issue #104 (Claus 2026-11-19): the battery only holds _DAY_CHARGE_CEILING
+less the evening reserve for the daytime hours. When they need more, only
+the dearest of them that fit are planned (whole hours first; the room left
+goes to the dearest hour after them, since the battery discharges in time
+order and stops at the floor) -- otherwise the battery ran empty in the
+morning and the card promised more kWh than it holds (10 kWh battery,
+reserve 49 %: 10.4 kWh promised, about 4.3 kWh room).
 
 Day end at 16:55 (issue #2, Node-RED: inject "16:55" on the same tab):
 a "yes_today" still standing then goes back to "not_calculated" and a
@@ -639,6 +646,34 @@ def worth_day_hours(
     return hours, total
 
 
+def fit_day_hours(
+    day_hours: list[int], prices_tomorrow: list[float], needs: dict[int, float], room_kwh: float
+) -> tuple[list[int], float]:
+    """Issue #104: (the daytime hours the battery's room covers, the energy
+    in kWh it covers in them) -- the dearest whole hours first, then the
+    room left in the dearest remaining hour after all of them (the battery
+    discharges in time order, so an earlier partial hour would take what a
+    later chosen hour needs). All of day_hours when they fit."""
+    total = sum(needs.get(hour, 0.0) for hour in day_hours)
+    if total <= room_kwh:
+        return day_hours, total
+    left = room_kwh
+    chosen: list[int] = []
+    rest: list[int] = []
+    for hour in sorted(day_hours, key=lambda h: (-prices_tomorrow[h], h)):
+        need = needs.get(hour, 0.0)
+        if 0 < need <= left:
+            chosen.append(hour)
+            left -= need
+        else:
+            rest.append(hour)
+    later = [hour for hour in rest if not chosen or hour > max(chosen)]
+    if later and left > 0.05:
+        chosen.append(later[0])
+        left = 0.0
+    return sorted(chosen), room_kwh - left
+
+
 def day_hour_needs(
     consumption: list[float | None] | None, pv: list[float | None] | None
 ) -> dict[int, float]:
@@ -817,6 +852,18 @@ def calculate_battery_charge_decision(
         inputs.battery_target,
         inputs.battery_min_soc + math.ceil(covered_kwh * TARGET_MARGIN / inputs.battery_size * 100),
     )
+    # Issue #104: only what fits above the evening reserve, in the dearest
+    # daytime hours -- see the module docstring.
+    if day_hours:
+        day_room_kwh = (
+            max(_DAY_CHARGE_CEILING - evening_reserve, 0.0) / 100 * inputs.battery_size / TARGET_MARGIN
+        )
+        day_hours, day_kwh = fit_day_hours(
+            day_hours,
+            inputs.prices_tomorrow,
+            day_hour_needs(inputs.day_hourly_consumption, inputs.pv_hourly_tomorrow),
+            day_room_kwh,
+        )
     day_pct = math.ceil(day_kwh * TARGET_MARGIN / inputs.battery_size * 100) if day_kwh > 0 else 0
     worth_target = min(max(_DAY_CHARGE_CEILING, evening_reserve), evening_reserve + day_pct)
     charge_target = partial_charge_target(
