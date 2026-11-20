@@ -796,8 +796,9 @@ const PWM_BATTERY_TEXTS = {
     cancelPostpone: "Cancel postponement",
     disableAuto: "Disable automatic charging",
     enableAuto: "Enable automatic charging",
-    confirmDisable:
-      "This also turns off the battery hold (min. SoC), so the battery can discharge freely. Continue?",
+    unlockHold: "🔒 Manual control - hold 2 s",
+    holdHint: "Hold the button for 2 seconds",
+    relock: "🔓 Lock",
     soc: "Battery SoC",
     missing: "PwMngt battery entities not found - is the Solar PV Plant set up?",
     // Issue #105: the night's charge target, chosen by hand.
@@ -896,8 +897,9 @@ const PWM_BATTERY_TEXTS = {
     cancelPostpone: "Annuller udskydning",
     disableAuto: "Deaktiver automatisk ladning",
     enableAuto: "Aktiver automatisk ladning",
-    confirmDisable:
-      "Det slår også batterilåsen (min. SoC) fra, så batteriet kan aflade frit. Fortsæt?",
+    unlockHold: "🔒 Manuel betjening - hold 2 sek.",
+    holdHint: "Hold knappen inde i 2 sekunder",
+    relock: "🔓 Lås",
     soc: "Batteri SoC",
     missing: "PwMngt's batteri-entities blev ikke fundet - er Solar PV Plant sat op?",
     // Issue #105: nattens ladeprocent, valgt manuelt.
@@ -960,6 +962,10 @@ function pwmLocalDate(date) {
 }
 
 const PWM_CHARGE_LEVELS = [25, 50, 75, 100];
+// Issue #110: how long "Manual control" is held, and how long the
+// guarded buttons stay visible.
+const PWM_MANUAL_HOLD_MS = 2000;
+const PWM_MANUAL_UNLOCK_MS = 60000;
 
 /** Issue #92: kW with one decimal (none when whole), e.g. 11.3 / 15. */
 function pwmKwText(kw, separator) {
@@ -1184,6 +1190,33 @@ const PWM_BATTERY_CARD_STYLE = `
     color: var(--text-primary-color, #fff);
     border-color: var(--primary-color);
   }
+  /* Issue #110: "Manual control" is held for 2 s to show the buttons. */
+  .pwm-buttons .pwm-wide {
+    grid-column: 1 / -1;
+  }
+  .pwm-buttons button.pwm-hold {
+    position: relative;
+    overflow: hidden;
+    touch-action: pan-y;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+  .pwm-hold-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 0;
+    background: var(--primary-color);
+    opacity: 0.3;
+    pointer-events: none;
+  }
+  .pwm-hold.holding .pwm-hold-fill {
+    width: 100%;
+    transition: width ${PWM_MANUAL_HOLD_MS}ms linear;
+  }
+  .pwm-hold-label {
+    position: relative;
+  }
 `;
 
 /**
@@ -1203,8 +1236,11 @@ const PWM_BATTERY_CARD_STYLE = `
  *   active. Under hold_min_soc/block_charging the hold or the sell decision
  *   would just set its own command again.
  * - battery_mode "manual" also pauses the battery hold in PwMngt (Node-RED
- *   never read pv_battery_mode), so the banner says so and disabling asks
- *   for confirmation.
+ *   never read pv_battery_mode), so the banner says so.
+ * - Issue #110: "Charge now", "Postpone" and "Disable automatic charging"
+ *   are hidden until "Manual control" has been held for 2 s, and lock
+ *   again after one use or 60 s. Stop / cancel postponement / enable
+ *   automatic are always shown -- they lead back to normal operation.
  * - A "Charge now" from the card is a manual charge (issue #17): the
  *   automation can't override it, only the main fuse can lower or pause it
  *   (battery_command's manual_charge attribute holds the chosen level), and
@@ -1225,8 +1261,9 @@ class PwMBatteryCard extends HTMLElement {
     }
     this._resolveEntityIds();
     // Issue #105: leave the night editor alone while it is open -- a
-    // re-render would reset the slider under the user's finger.
-    if (this._editor && this._editor.open) return;
+    // re-render would reset the slider under the user's finger. Same for
+    // the "Manual control" button while it is being held (#110).
+    if ((this._editor && this._editor.open) || this._holding) return;
     const signature = this._stateSignature();
     if (signature === this._signature) return;
     this._signature = signature;
@@ -1525,33 +1562,48 @@ class PwMBatteryCard extends HTMLElement {
     title.textContent = t.manualTitle;
     manualGroup.appendChild(title);
 
+    // Issue #110: the buttons that take over from the automation sit
+    // behind a 2 s hold on "Manual control", so they can't be hit by
+    // accident (e.g. while scrolling on a phone). The ones that lead back
+    // to normal operation are always shown.
     const buttons = document.createElement("div");
     buttons.className = "pwm-buttons";
-    for (const pct of PWM_CHARGE_LEVELS) {
-      if (pct === (manualPct !== null ? manualPct : chargingPct)) continue;
-      buttons.appendChild(
-        this._button(t.chargeNow(this._chargeLevel(t, pct)), () => this._setCommand(`charge_now_${pct}`))
-      );
-    }
+    const postponeButton = () =>
+      this._hass.callService("button", "press", { entity_id: this._ids.postpone });
+    const deferred = status.state === "no_deferred";
     if (chargingPct !== null || manualPct !== null) {
       buttons.appendChild(this._button(t.stop, () => this._setCommand("internal")));
     }
-    if (this._ids.postpone) {
-      const deferred = status.state === "no_deferred";
-      buttons.appendChild(
-        this._button(deferred ? t.cancelPostpone : t.postpone, () =>
-          this._hass.callService("button", "press", { entity_id: this._ids.postpone })
-        )
-      );
+    if (this._ids.postpone && deferred) {
+      buttons.appendChild(this._button(t.cancelPostpone, postponeButton));
     }
-    if (isAuto) {
-      buttons.appendChild(
-        this._button(t.disableAuto, () => {
-          if (window.confirm(t.confirmDisable)) this._setMode("manual");
-        })
-      );
-    } else {
+    if (!isAuto) {
       buttons.appendChild(this._button(t.enableAuto, () => this._setMode("auto")));
+    }
+
+    if (this._isUnlocked()) {
+      const guarded = (text, action) =>
+        this._button(text, () => {
+          action();
+          this._lockManual();
+        });
+      for (const pct of PWM_CHARGE_LEVELS) {
+        if (pct === (manualPct !== null ? manualPct : chargingPct)) continue;
+        buttons.appendChild(
+          guarded(t.chargeNow(this._chargeLevel(t, pct)), () => this._setCommand(`charge_now_${pct}`))
+        );
+      }
+      if (this._ids.postpone && !deferred) {
+        buttons.appendChild(guarded(t.postpone, postponeButton));
+      }
+      if (isAuto) {
+        buttons.appendChild(guarded(t.disableAuto, () => this._setMode("manual")));
+      }
+      const relock = this._button(t.relock, () => this._lockManual());
+      relock.className = "pwm-wide";
+      buttons.appendChild(relock);
+    } else {
+      buttons.appendChild(this._holdButton(t.unlockHold, t.holdHint, () => this._unlockManual()));
     }
     manualGroup.appendChild(buttons);
 
@@ -2035,6 +2087,111 @@ class PwMBatteryCard extends HTMLElement {
     button.textContent = text;
     button.addEventListener("click", onClick);
     return button;
+  }
+
+  /**
+   * Issue #110: a button that only fires after being held for
+   * PWM_MANUAL_HOLD_MS. Letting go, moving the finger (the browser then
+   * scrolls and cancels the pointer) or leaving the button aborts it.
+   */
+  _holdButton(text, hint, onHeld) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "pwm-hold pwm-wide";
+    const fill = document.createElement("span");
+    fill.className = "pwm-hold-fill";
+    const label = document.createElement("span");
+    label.className = "pwm-hold-label";
+    label.textContent = text;
+    button.append(fill, label);
+
+    let timer = null;
+    let hintTimer = null;
+    let startX = 0;
+    let startY = 0;
+    const cancel = () => {
+      if (timer === null) return;
+      clearTimeout(timer);
+      timer = null;
+      this._holding = false;
+      button.classList.remove("holding");
+    };
+    // A short tap explains how the button works, then shows its label again.
+    const release = () => {
+      if (timer === null) return;
+      cancel();
+      label.textContent = hint;
+      clearTimeout(hintTimer);
+      hintTimer = setTimeout(() => (label.textContent = text), 3000);
+    };
+    const start = () => {
+      if (timer !== null) return;
+      // Keep HA's state updates from re-rendering the button mid-hold.
+      this._holding = true;
+      button.classList.add("holding");
+      timer = setTimeout(() => {
+        timer = null;
+        this._holding = false;
+        onHeld();
+      }, PWM_MANUAL_HOLD_MS);
+    };
+    button.addEventListener("pointerdown", (ev) => {
+      if (ev.button !== 0) return;
+      startX = ev.clientX;
+      startY = ev.clientY;
+      start();
+    });
+    button.addEventListener("pointermove", (ev) => {
+      if (Math.hypot(ev.clientX - startX, ev.clientY - startY) > 10) cancel();
+    });
+    button.addEventListener("pointerup", release);
+    for (const name of ["pointercancel", "pointerleave"]) {
+      button.addEventListener(name, cancel);
+    }
+    // A long press would otherwise open the phone's context menu.
+    button.addEventListener("contextmenu", (ev) => ev.preventDefault());
+    button.addEventListener("keydown", (ev) => {
+      if ((ev.key === "Enter" || ev.key === " ") && !ev.repeat) {
+        ev.preventDefault();
+        start();
+      }
+    });
+    button.addEventListener("keyup", release);
+    button.addEventListener("blur", cancel);
+    return button;
+  }
+
+  _isUnlocked() {
+    return (this._unlockedUntil || 0) > Date.now();
+  }
+
+  /** Issue #110: show the guarded buttons; they lock again by themselves. */
+  _unlockManual() {
+    clearTimeout(this._relockTimer);
+    this._unlockedUntil = Date.now() + PWM_MANUAL_UNLOCK_MS;
+    this._relockTimer = setTimeout(() => this._lockManual(), PWM_MANUAL_UNLOCK_MS);
+    this._rerender();
+  }
+
+  _lockManual() {
+    clearTimeout(this._relockTimer);
+    this._relockTimer = null;
+    this._unlockedUntil = 0;
+    this._rerender();
+  }
+
+  /** Render now, unless the night editor is open (it renders when closed). */
+  _rerender() {
+    this._signature = undefined;
+    if (!this._hass || (this._editor && this._editor.open)) return;
+    this._signature = this._stateSignature();
+    this._render();
+  }
+
+  disconnectedCallback() {
+    clearTimeout(this._relockTimer);
+    this._relockTimer = null;
+    this._unlockedUntil = 0;
   }
 
   _setCommand(option) {
