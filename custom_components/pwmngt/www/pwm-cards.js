@@ -2664,6 +2664,683 @@ class PwMPhaseLoadCard extends HTMLElement {
 }
 pwmDefine("pwm-phase-load-card", PwMPhaseLoadCard);
 
+/* ---------------------------------------------------------------------------
+ * PwM Power flow card (issue #109): the house in the middle, any number of
+ * power entities around it (a ring, plus an optional left column for
+ * PV/grid/battery) and animated flow dots on the lines between them.
+ * Started as Claus's standalone "radial-power-card"; the type is new, so a
+ * dashboard still using the old card keeps working side by side.
+ * ------------------------------------------------------------------------- */
+
+/** Power flow card texts -- same language pick as PWM_BATTERY_TEXTS. */
+const PWM_FLOW_TEXTS = {
+  en: {
+    invalidConfig: "Invalid configuration",
+    general: "General",
+    center: "The house (middle)",
+    devices: "Devices around the house",
+    add: "+ Add device",
+    newDevice: "New device",
+    moveUp: "Move up",
+    moveDown: "Move down",
+    remove: "Remove",
+    secondaryHint:
+      'Extra lines can get a label in front (e.g. "in", "SoC") in YAML: secondary: [{entity: ..., label: in}]',
+    placementRing: "Ring around the house",
+    placementSide: "Column on the left (PV/grid/battery)",
+    flowOut: "Out of the house when positive (consumption, battery charging)",
+    flowIn: "Into the house when positive (solar, grid import, battery discharging)",
+    labels: {
+      title: "Title",
+      background: "Background (#000, theme, transparent)",
+      show_date: "Show date",
+      min_power: "Min. power for flow (W)",
+      entity: "Power entity (W/kW)",
+      name: "Name",
+      icon: "Icon",
+      color: "Colour (e.g. #ff5252)",
+      flow: "Direction when positive",
+      invert: "Invert sign",
+      hide_name: "Hide name",
+      secondary: "Extra lines (entities)",
+      subtract: "Subtract from the house's value",
+      placement: "Placement",
+      hide_below: "Hide below (W)",
+      center_size: "House size",
+      node_size: "Circle size",
+    },
+  },
+  da: {
+    invalidConfig: "Ugyldig konfiguration",
+    general: "Generelt",
+    center: "Huset (midten)",
+    devices: "Enheder rundt om huset",
+    add: "+ Tilføj enhed",
+    newDevice: "Ny enhed",
+    moveUp: "Flyt op",
+    moveDown: "Flyt ned",
+    remove: "Fjern",
+    secondaryHint:
+      'Ekstra linjer kan få en tekst foran (fx "in", "SoC") via YAML: secondary: [{entity: ..., label: in}]',
+    placementRing: "Ring om huset",
+    placementSide: "Kolonne til venstre (PV/net/batteri)",
+    flowOut: "Ud fra huset ved positiv værdi (forbrug, batteri der lader)",
+    flowIn: "Ind i huset ved positiv værdi (sol, net-import, batteri der aflader)",
+    labels: {
+      title: "Titel",
+      background: "Baggrund (#000, theme, transparent)",
+      show_date: "Vis dato",
+      min_power: "Min. effekt for flow (W)",
+      entity: "Effekt-entitet (W/kW)",
+      name: "Navn",
+      icon: "Ikon",
+      color: "Farve (fx #ff5252)",
+      flow: "Retning ved positiv værdi",
+      invert: "Vend fortegn",
+      hide_name: "Skjul navn",
+      secondary: "Ekstra linjer (entiteter)",
+      subtract: "Træk fra husets visning",
+      placement: "Placering",
+      hide_below: "Skjul under (W)",
+      center_size: "Husets størrelse",
+      node_size: "Cirkelstørrelse",
+    },
+  },
+};
+
+/** setConfig() runs before hass is set, so fall back to the page language. */
+function pwmFlowTexts(hass) {
+  const language =
+    (hass && ((hass.locale && hass.locale.language) || hass.language)) ||
+    document.documentElement.lang ||
+    "en";
+  return PWM_FLOW_TEXTS[String(language).split("-")[0]] || PWM_FLOW_TEXTS.en;
+}
+
+const PWM_FLOW_COLORS = ["#29b6f6", "#ff5252", "#ffd600", "#8c9eff", "#4f8cff", "#00e5ff",
+  "#ffab00", "#00b8d4", "#7c83ff", "#9ccc65", "#ff7043", "#f06292"];
+
+function pwmFlowToWatt(state) {
+  if (!state) return null;
+  const value = parseFloat(state.state);
+  if (isNaN(value)) return null;
+  const unit = String(state.attributes.unit_of_measurement || "W").trim();
+  if (unit === "kW") return value * 1000;
+  if (unit === "MW") return value * 1e6;
+  return value;
+}
+
+function pwmFlowFormatPower(watts, language) {
+  if (watts === null) return "—";
+  // A non-breaking space keeps number and unit together (issue #106).
+  if (Math.abs(watts) >= 1000) {
+    return (watts / 1000).toLocaleString(language, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + " kW";
+  }
+  return (Math.round(watts) || 0).toLocaleString(language) + " W";
+}
+
+function pwmFlowFormatState(hass, entityId) {
+  const state = hass.states[entityId];
+  if (!state) return "—";
+  if (typeof hass.formatEntityState === "function") return hass.formatEntityState(state);
+  const unit = state.attributes.unit_of_measurement;
+  return state.state + (unit ? " " + unit : "");
+}
+
+/** `secondary` may be one entity_id, a list of them, or {entity, label} objects. */
+function pwmFlowSecondaryList(secondary) {
+  if (!secondary) return [];
+  return (Array.isArray(secondary) ? secondary : [secondary])
+    .map((s) => (typeof s === "string" ? { entity: s } : s))
+    .filter((s) => s && s.entity);
+}
+
+function pwmFlowSecondaryText(hass, secondary) {
+  return pwmFlowSecondaryList(secondary)
+    .map((s) => (s.label ? s.label + " " : "") + pwmFlowFormatState(hass, s.entity))
+    .join("\n");
+}
+
+/** Drop empty values so the saved YAML only holds what the user chose. */
+function pwmFlowClean(object) {
+  const result = {};
+  Object.keys(object || {}).forEach((key) => {
+    const value = object[key];
+    if (value === undefined || value === null || value === "" || (Array.isArray(value) && !value.length)) return;
+    result[key] = value;
+  });
+  return result;
+}
+
+/** JSON with sorted keys, to recognise the editor's own config-changed echo. */
+function pwmFlowStableJson(object) {
+  return JSON.stringify(object, (key, value) => (value && typeof value === "object" && !Array.isArray(value)
+    ? Object.keys(value).sort().reduce((r, k) => { r[k] = value[k]; return r; }, {}) : value));
+}
+
+/** The entity picker only returns ids -- keep labels set in YAML. */
+function pwmFlowMergeSecondary(ids, old) {
+  const previous = pwmFlowSecondaryList(old);
+  return (ids || []).map((id) => {
+    const found = previous.find((x) => x.entity === id);
+    return found && found.label ? { entity: id, label: found.label } : id;
+  });
+}
+
+class PwMPowerFlowCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+  }
+
+  static getConfigElement() {
+    return document.createElement("pwm-power-flow-card-editor");
+  }
+
+  /**
+   * Pre-filled from PwMngt's own sensors, which are already normalised
+   * (pv_properties.power_sign()): Grid power + = buying and Battery power
+   * + = discharging, i.e. both flow into the house when positive -- the
+   * left column's default direction. House power includes the chargers,
+   * so they are subtracted from the middle to make the picture add up.
+   */
+  static getStubConfig(hass) {
+    const find = (device, key) => pwmFindEntityId(hass, device, "sensor", key);
+    const side = [
+      { key: "pv_total", icon: "mdi:solar-power-variant", color: "#ffd600" },
+      { key: "grid_power", icon: "mdi:transmission-tower", color: "#29b6f6" },
+      { key: "battery_power", icon: "mdi:home-battery", color: "#9ccc65" },
+    ]
+      .map((d) => ({ entity: find("pv", d.key), placement: "side", icon: d.icon, color: d.color }))
+      .filter((d) => d.entity);
+    const chargers = ["charger1", "charger2"]
+      .map((charger) => find(charger, "power"))
+      .filter(Boolean)
+      .map((entity) => ({ entity, icon: "mdi:ev-station", subtract: true }));
+    const house = find("pv", "house_power");
+    if (house || side.length) {
+      return { show_date: true, center: { entity: house || "" }, devices: [...side, ...chargers] };
+    }
+    // PwMngt's PV device is not set up: suggest any power sensors instead.
+    const power = Object.keys(hass.states).filter(
+      (e) => e.startsWith("sensor.") && hass.states[e].attributes.device_class === "power"
+    );
+    return {
+      show_date: true,
+      center: { entity: power[0] || "" },
+      devices: power.slice(1, 7).map((entity) => ({ entity })),
+    };
+  }
+
+  setConfig(config) {
+    if (!config) throw new Error(pwmFlowTexts(this._hass).invalidConfig);
+    this._config = {
+      min_power: 5,
+      ...config,
+      center: { ...(config.center || {}) },
+      devices: Array.isArray(config.devices) ? config.devices : [],
+    };
+    this._build();
+    if (this._hass) this._update();
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this._nodes) this._build();
+    this._update();
+  }
+
+  getCardSize() {
+    return 9;
+  }
+
+  /** Lays out the SVG lines and circles; `visible` hides devices below hide_below. */
+  _build(visible) {
+    const c = this._config;
+    if (!c) return;
+    visible = visible || c.devices.map(() => true);
+    this._visibleKey = visible.join();
+    const side = [];
+    const ring = [];
+    c.devices.forEach((d, i) => { if (visible[i]) (d.placement === "side" ? side : ring).push(i); });
+    const hasSide = side.length > 0;
+    const VW = hasSide ? 140 : 100; // viewBox width (the height is always 100)
+    const HX = hasSide ? 86 : 50; // the house's centre
+    const HY = 50;
+    const NS = Math.max(12, Math.min(34, Number(c.node_size) || 26)); // wanted circle size
+    const CD = Math.max(16, Math.min(40, Number(c.center_size) || 32)); // house diameter
+    const CR = CD / 2;
+    const pct = (x) => (x / VW) * 100;
+    const centerColor = c.center.color || "#29b6f6";
+
+    // Ring: a full circle -- or a 240° arc to the right when there is a left column.
+    const nr = ring.length;
+    const span = hasSide ? (240 * Math.PI) / 180 : 2 * Math.PI;
+    const ringStep = nr ? span / nr : 0;
+    // The circles must fit vertically (0..100) and not touch the house.
+    let ORBIT = 39;
+    let D = nr ? Math.min(NS, 2 * ORBIT * Math.sin(Math.min(ringStep, Math.PI) / 2) * 0.9) : NS;
+    ORBIT = Math.min(ORBIT, 49 - D / 2);
+    ORBIT = Math.max(ORBIT, CR + D / 2 + 4);
+    D = Math.min(D, 2 * (49 - ORBIT));
+    const R = D / 2;
+
+    // Left column
+    const ns = side.length;
+    const sideStep = ns > 1 ? 64 / (ns - 1) : 0;
+    const DS = ns > 1 ? Math.min(NS, sideStep * 0.9) : NS;
+    const RS = DS / 2;
+    const SX = RS + 1;
+
+    const geometry = [];
+    ring.forEach((i, k) => {
+      const angle = hasSide ? -span / 2 + (k + 0.5) * ringStep : -Math.PI / 2 + k * ringStep;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      geometry[i] = {
+        x: HX + ORBIT * cos, y: HY + ORBIT * sin, d: D,
+        p: `M${HX + CR * cos} ${HY + CR * sin} L${HX + (ORBIT - R) * cos} ${HY + (ORBIT - R) * sin}`,
+      };
+    });
+    side.forEach((i, k) => {
+      const y = ns > 1 ? 18 + k * sideStep : 50;
+      // Where the line meets the house's left side, spread by height.
+      const ea = Math.PI - ((y - HY) / 50) * 0.75;
+      const ex = HX + CR * Math.cos(ea);
+      const ey = HY + CR * Math.sin(ea);
+      const sx = SX + RS;
+      const dx = ex - sx;
+      geometry[i] = {
+        x: SX, y, d: DS,
+        // Drawn from the house outwards, the same direction as the ring's lines.
+        p: `M${ex} ${ey} C${ex - dx * 0.45} ${ey} ${sx + dx * 0.55} ${y} ${sx} ${y}`,
+      };
+    });
+
+    let svg = "";
+    let nodes = "";
+    c.devices.forEach((d, i) => {
+      const g = geometry[i];
+      if (!g) return; // hidden
+      const color = d.color || PWM_FLOW_COLORS[i % PWM_FLOW_COLORS.length];
+      svg += `<g class="line" data-i="${i}" style="--c:${color}"><path class="base" d="${g.p}"/><path class="dots" d="${g.p}"/></g>`;
+      nodes += `<div class="node dev" data-i="${i}" style="left:${pct(g.x)}%;top:${g.y}%;width:${pct(g.d)}%;--c:${color}">
+        <ha-icon></ha-icon><div class="val"></div><div class="name"></div><div class="sec"></div></div>`;
+    });
+
+    this.shadowRoot.innerHTML = `
+      <style>${PWM_FLOW_CARD_STYLE}</style>
+      <ha-card>
+        <div class="header"><span class="title"></span><span class="date"></span></div>
+        <div class="stage" style="aspect-ratio:${VW}/100;max-width:${VW * 6.4}px;--k:${100 / VW}">
+          <svg viewBox="0 0 ${VW} 100">${svg}</svg>
+          <div class="node center" style="left:${pct(HX)}%;top:${HY}%;width:${pct(CD)}%;--c:${centerColor}">
+            <ha-icon></ha-icon><div class="val"></div><div class="name"></div><div class="sec"></div>
+          </div>
+          ${nodes}
+        </div>
+      </ha-card>`;
+
+    const pick = (el) => ({
+      el,
+      icon: el.querySelector("ha-icon"),
+      val: el.querySelector(".val"),
+      name: el.querySelector(".name"),
+      sec: el.querySelector(".sec"),
+    });
+    const background = c.background || "#000";
+    this.shadowRoot.querySelector("ha-card").style.setProperty("--pwm-flow-card-bg",
+      background === "theme" ? "var(--ha-card-background, var(--card-background-color))" : background);
+    this._nodes = [];
+    this._lines = [];
+    this.shadowRoot.querySelectorAll(".node.dev").forEach((el) => (this._nodes[+el.dataset.i] = pick(el)));
+    this.shadowRoot.querySelectorAll(".line").forEach((el) => (this._lines[+el.dataset.i] = el));
+    this._center = pick(this.shadowRoot.querySelector(".node.center"));
+    this._durations = [];
+
+    this._nodes.forEach((node, i) =>
+      node && node.el.addEventListener("click", () => this._moreInfo(c.devices[i].entity))
+    );
+    this._center.el.addEventListener("click", () => this._moreInfo(c.center.entity));
+  }
+
+  _moreInfo(entityId) {
+    if (!entityId) return;
+    const event = new Event("hass-more-info", { bubbles: true, composed: true });
+    event.detail = { entityId };
+    this.dispatchEvent(event);
+  }
+
+  _fill(node, cfg, watts, language, defaultIcon) {
+    const state = this._hass.states[cfg.entity];
+    node.icon.setAttribute("icon", cfg.icon || (state && state.attributes.icon) || defaultIcon);
+    node.val.textContent = pwmFlowFormatPower(watts, language);
+    const name = cfg.hide_name ? "" : cfg.name || (state && state.attributes.friendly_name) || "";
+    node.name.textContent = name;
+    node.name.style.display = name ? "" : "none";
+    const secondary = pwmFlowSecondaryText(this._hass, cfg.secondary);
+    node.sec.textContent = secondary;
+    node.sec.style.display = secondary ? "" : "none";
+  }
+
+  _devicePower(device) {
+    let watts = pwmFlowToWatt(this._hass.states[device.entity]);
+    if (watts !== null && device.invert) watts = -watts;
+    return watts;
+  }
+
+  _update() {
+    const h = this._hass;
+    const c = this._config;
+    if (!h || !c || !this._nodes) return;
+    const language = (h.locale && h.locale.language) || h.language || "en";
+    const min = Number(c.min_power) || 0;
+
+    // Hide devices below their hide_below limit -- rebuild when that changes.
+    const powers = c.devices.map((d) => this._devicePower(d));
+    const visible = c.devices.map((d, i) => {
+      const limit = Number(d.hide_below);
+      if (!(limit > 0)) return true;
+      return powers[i] !== null && Math.abs(powers[i]) >= limit;
+    });
+    if (visible.join() !== this._visibleKey) this._build(visible);
+
+    const title = this.shadowRoot.querySelector(".title");
+    const date = this.shadowRoot.querySelector(".date");
+    title.textContent = c.title || "";
+    let dateText = "";
+    if (c.show_date) {
+      dateText = new Date().toLocaleDateString(language, { weekday: "long", day: "numeric", month: "long" });
+      dateText = dateText.charAt(0).toUpperCase() + dateText.slice(1);
+    }
+    date.textContent = dateText;
+    title.style.display = c.title ? "" : "none";
+    this.shadowRoot.querySelector(".header").style.display = c.title || dateText ? "" : "none";
+
+    // The middle shows the house's power minus the devices marked "subtract" (display only).
+    let centerWatts = pwmFlowToWatt(h.states[c.center.entity]);
+    if (centerWatts !== null) {
+      const subtracted = c.devices.reduce((sum, d, i) => sum + (d.subtract && powers[i] !== null ? powers[i] : 0), 0);
+      if (subtracted) centerWatts = Math.max(0, centerWatts - subtracted);
+    }
+    this._fill(this._center, { ...c.center, hide_name: c.center.hide_name ?? !c.center.name }, centerWatts, language, "mdi:home");
+
+    c.devices.forEach((d, i) => {
+      if (!this._nodes[i]) return; // hidden
+      const watts = powers[i];
+      this._fill(this._nodes[i], d, watts, language, "mdi:flash");
+
+      const line = this._lines[i];
+      const active = watts !== null && Math.abs(watts) >= min;
+      let inward = d.flow ? d.flow === "in" : d.placement === "side";
+      if (watts !== null && watts < 0) inward = !inward;
+      line.classList.toggle("active", active);
+      line.classList.toggle("in", inward);
+      this._nodes[i].el.classList.toggle("idle", !active);
+
+      if (active) {
+        // More power = faster dots; only touch the animation on a real change,
+        // since resetting --dur restarts it.
+        const duration = Math.max(0.6, Math.min(3, 3 - Math.log10(Math.abs(watts)) * 0.6));
+        if (!this._durations[i] || Math.abs(this._durations[i] - duration) > 0.15) {
+          this._durations[i] = duration;
+          line.style.setProperty("--dur", duration.toFixed(2) + "s");
+        }
+      }
+    });
+  }
+}
+
+const PWM_FLOW_CARD_STYLE = `
+  :host { --pwm-flow-bg: #000; --pwm-flow-fg: #fff; }
+  ha-card { padding: 12px; overflow: hidden; background: var(--pwm-flow-card-bg, var(--pwm-flow-bg));
+            font-family: var(--pwm-flow-font, Montserrat, var(--ha-font-family-body, Roboto), sans-serif); }
+  .header { display:flex; flex-wrap:wrap; justify-content:space-between; gap:4px 12px; padding:0 4px 4px;
+            font-size:1.25em; font-weight:500; color:var(--pwm-flow-fg); }
+  .stage { position:relative; width:100%; margin:0 auto; container-type:inline-size; }
+  svg { position:absolute; inset:0; width:100%; height:100%; overflow:visible; }
+  .line path { fill:none; stroke:var(--c); }
+  .line .base { stroke-width:.3; opacity:.3; transition:opacity .4s; }
+  .line.active .base { opacity:.9; stroke-width:.4; }
+  .line .dots { stroke-width:1.8; stroke-linecap:round; stroke-dasharray:0 5; opacity:0; }
+  .line.active .dots { opacity:1; animation:pwm-flow var(--dur,1.5s) linear infinite; }
+  .line.active.in .dots { animation-direction:reverse; }
+  @keyframes pwm-flow { from { stroke-dashoffset:0; } to { stroke-dashoffset:-5; } }
+  .node { position:absolute; transform:translate(-50%,-50%); aspect-ratio:1/1; border-radius:50%;
+          box-sizing:border-box; border:calc(.45cqw * var(--k,1)) solid var(--c);
+          background: radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--c) 12%, #07090c) 0%,
+                      color-mix(in srgb, var(--c) 5%, #030405) 75%);
+          box-shadow: 0 0 calc(.9cqw * var(--k,1)) color-mix(in srgb, var(--c) 45%, transparent);
+          display:flex; flex-direction:column; align-items:center; justify-content:center;
+          text-align:center; padding:calc(1.6cqw * var(--k,1)); overflow:hidden; cursor:pointer;
+          color:var(--pwm-flow-fg); -webkit-font-smoothing:antialiased; }
+  /* Text scales with the circle's own size. */
+  .node { container-type:inline-size; }
+  .node ha-icon { --mdc-icon-size:24cqw; color:var(--pwm-flow-fg); margin-bottom:2cqw; }
+  .val { font-weight:600; font-size:16cqw; line-height:1.15; white-space:nowrap; letter-spacing:.02em; }
+  .name, .sec { font-size:11cqw; line-height:1.2; white-space:pre-line; }
+  .name { font-weight:500; max-width:100%; overflow-wrap:anywhere; }
+  .sec { font-weight:500; opacity:.92; }
+  .center ha-icon { --mdc-icon-size:24cqw; }
+  .center .val { font-size:14cqw; }
+  .center .name, .center .sec { font-size:10cqw; }
+`;
+
+pwmDefine("pwm-power-flow-card", PwMPowerFlowCard);
+
+const PWM_FLOW_GENERAL_SCHEMA = [
+  { type: "grid", name: "", schema: [
+    { name: "title", selector: { text: {} } },
+    { name: "background", selector: { text: {} } },
+  ] },
+  { type: "grid", name: "", schema: [
+    { name: "show_date", selector: { boolean: {} } },
+    { name: "min_power", selector: { number: { min: 0, max: 1000, mode: "box", unit_of_measurement: "W" } } },
+    { name: "node_size", selector: { number: { min: 12, max: 34, step: 1, mode: "slider" } } },
+    { name: "center_size", selector: { number: { min: 16, max: 40, step: 1, mode: "slider" } } },
+  ] },
+];
+
+const PWM_FLOW_CENTER_SCHEMA = [
+  { name: "entity", selector: { entity: {} } },
+  { type: "grid", name: "", schema: [
+    { name: "name", selector: { text: {} } },
+    { name: "icon", selector: { icon: {} } },
+    { name: "color", selector: { text: {} } },
+  ] },
+  { name: "secondary", selector: { entity: { multiple: true } } },
+];
+
+/** Built per render: the dropdown labels follow the user's language. */
+function pwmFlowDeviceSchema(t) {
+  return [
+    { name: "entity", selector: { entity: {} } },
+    { type: "grid", name: "", schema: [
+      { name: "name", selector: { text: {} } },
+      { name: "icon", selector: { icon: {} } },
+      { name: "color", selector: { text: {} } },
+      { name: "placement", selector: { select: { mode: "dropdown", options: [
+        { value: "ring", label: t.placementRing },
+        { value: "side", label: t.placementSide },
+      ] } } },
+      { name: "flow", selector: { select: { mode: "dropdown", options: [
+        { value: "out", label: t.flowOut },
+        { value: "in", label: t.flowIn },
+      ] } } },
+      { name: "invert", selector: { boolean: {} } },
+      { name: "hide_name", selector: { boolean: {} } },
+      { name: "subtract", selector: { boolean: {} } },
+      { name: "hide_below", selector: { number: { min: 0, max: 100000, mode: "box", unit_of_measurement: "W" } } },
+    ] },
+    { name: "secondary", selector: { entity: { multiple: true } } },
+  ];
+}
+
+class PwMPowerFlowCardEditor extends HTMLElement {
+  setConfig(config) {
+    const json = pwmFlowStableJson(config);
+    if (json === this._lastJson) return; // our own change -- re-rendering would steal focus
+    this._config = JSON.parse(JSON.stringify(config)); // our own, unfrozen copy
+    this._config.center = this._config.center || {};
+    this._config.devices = this._config.devices || [];
+    this._lastJson = json;
+    this._render();
+  }
+
+  set hass(hass) {
+    const first = !this._hass;
+    this._hass = hass;
+    this.querySelectorAll("ha-form").forEach((form) => (form.hass = hass));
+    if (first) this._render(); // the texts follow hass's language
+  }
+
+  connectedCallback() {
+    this._ensureComponents().then(() => this._render());
+  }
+
+  /** ha-form is lazy-loaded by HA; loading a built-in card's editor pulls it in. */
+  async _ensureComponents() {
+    if (customElements.get("ha-form") && customElements.get("ha-selector")) return;
+    try {
+      const helpers = await window.loadCardHelpers();
+      const card = await helpers.createCardElement({ type: "entities", entities: [] });
+      if (card.constructor.getConfigElement) await card.constructor.getConfigElement();
+    } catch (e) {
+      // The editor still renders; HA loads ha-form itself on most pages.
+    }
+  }
+
+  _fire() {
+    // Always send a copy -- Home Assistant freezes the object it receives.
+    const out = JSON.parse(JSON.stringify(this._config));
+    this._lastJson = pwmFlowStableJson(out);
+    this.dispatchEvent(new CustomEvent("config-changed", {
+      detail: { config: out }, bubbles: true, composed: true,
+    }));
+  }
+
+  _form(container, schema, data, labels, onChange) {
+    const form = document.createElement("ha-form");
+    form.hass = this._hass;
+    form.schema = schema;
+    form.data = data;
+    form.computeLabel = (s) => labels[s.name] || s.name;
+    form.addEventListener("value-changed", (event) => {
+      event.stopPropagation();
+      form.data = event.detail.value;
+      onChange(event.detail.value);
+    });
+    container.appendChild(form);
+  }
+
+  _render() {
+    if (!this._config || !this.isConnected) return;
+    const c = this._config;
+    const t = pwmFlowTexts(this._hass);
+    this.innerHTML = `
+      <style>
+        .pwm-flow-sect { margin-bottom: 18px; }
+        .pwm-flow-sect h3 { margin: 0 0 8px; font-size: 1.05em; }
+        .pwm-flow-dev { border: 1px solid var(--divider-color); border-radius: 10px; padding: 10px; margin-bottom: 10px; }
+        .pwm-flow-dev-head { display:flex; align-items:center; gap:6px; margin-bottom:6px; font-weight:600; }
+        .pwm-flow-dev-head span { flex:1; }
+        .pwm-flow-btn { background:none; border:1px solid var(--divider-color); border-radius:6px;
+                        color:var(--primary-text-color); cursor:pointer; padding:2px 8px; font-size:14px; }
+        .pwm-flow-add { width:100%; padding:8px; background:var(--primary-color); color:var(--text-primary-color);
+                        border:none; border-radius:8px; cursor:pointer; font-size:14px; }
+        .pwm-flow-hint { font-size: 12px; opacity: .7; margin-top: 4px; }
+      </style>
+      <div class="pwm-flow-sect"><h3></h3><div id="g"></div></div>
+      <div class="pwm-flow-sect"><h3></h3><div id="c"></div></div>
+      <div class="pwm-flow-sect"><h3></h3><div id="d"></div>
+        <button class="pwm-flow-add" id="add"></button>
+        <div class="pwm-flow-hint"></div>
+      </div>`;
+    const headings = this.querySelectorAll("h3");
+    headings[0].textContent = t.general;
+    headings[1].textContent = t.center;
+    headings[2].textContent = t.devices;
+    this.querySelector("#add").textContent = t.add;
+    this.querySelector(".pwm-flow-hint").textContent = t.secondaryHint;
+
+    const generalKeys = ["title", "background", "show_date", "min_power", "node_size", "center_size"];
+    this._form(this.querySelector("#g"), PWM_FLOW_GENERAL_SCHEMA,
+      { title: c.title, background: c.background, show_date: c.show_date, min_power: c.min_power,
+        node_size: c.node_size || 26, center_size: c.center_size || 32 },
+      t.labels,
+      (v) => {
+        generalKeys.forEach((key) => {
+          if (v[key] === undefined || v[key] === "") delete c[key]; else c[key] = v[key];
+        });
+        this._fire();
+      });
+
+    this._form(this.querySelector("#c"), PWM_FLOW_CENTER_SCHEMA,
+      { ...c.center, secondary: pwmFlowSecondaryList(c.center.secondary).map((s) => s.entity) },
+      t.labels,
+      (v) => {
+        c.center = pwmFlowClean({ ...v, secondary: pwmFlowMergeSecondary(v.secondary, c.center.secondary) });
+        this._fire();
+      });
+
+    const list = this.querySelector("#d");
+    const deviceSchema = pwmFlowDeviceSchema(t);
+    c.devices.forEach((d, i) => {
+      const box = document.createElement("div");
+      box.className = "pwm-flow-dev";
+      const title = () => {
+        const state = this._hass && this._hass.states[d.entity];
+        return `#${i + 1} ${d.name || (state ? state.attributes.friendly_name : d.entity || t.newDevice)}`;
+      };
+      box.innerHTML = `<div class="pwm-flow-dev-head"><span></span>
+        <button class="pwm-flow-btn" data-a="up">▲</button>
+        <button class="pwm-flow-btn" data-a="down">▼</button>
+        <button class="pwm-flow-btn" data-a="del">✕</button></div>`;
+      const buttonTitles = { up: t.moveUp, down: t.moveDown, del: t.remove };
+      const head = box.querySelector("span");
+      head.textContent = title();
+      box.querySelectorAll("button").forEach((button) => {
+        button.title = buttonTitles[button.dataset.a];
+        button.addEventListener("click", () => {
+          const action = button.dataset.a;
+          if (action === "del") c.devices.splice(i, 1);
+          if (action === "up" && i > 0) [c.devices[i - 1], c.devices[i]] = [c.devices[i], c.devices[i - 1]];
+          if (action === "down" && i < c.devices.length - 1) [c.devices[i + 1], c.devices[i]] = [c.devices[i], c.devices[i + 1]];
+          this._fire();
+          this._render();
+        });
+      });
+      list.appendChild(box);
+      this._form(box, deviceSchema,
+        { ...d, placement: d.placement || "ring", flow: d.flow || (d.placement === "side" ? "in" : "out"),
+          secondary: pwmFlowSecondaryList(d.secondary).map((s) => s.entity) },
+        t.labels,
+        (v) => {
+          const next = pwmFlowClean({ ...v, secondary: pwmFlowMergeSecondary(v.secondary, d.secondary) });
+          const placementChanged = (v.placement || "ring") !== (d.placement || "ring");
+          if (placementChanged) delete next.flow; // use the new placement's default direction
+          // Leave defaults out of the YAML.
+          if (next.placement === "ring") delete next.placement;
+          if (next.flow === (next.placement === "side" ? "in" : "out")) delete next.flow;
+          ["invert", "hide_name", "subtract"].forEach((key) => { if (!next[key]) delete next[key]; });
+          if (!(Number(next.hide_below) > 0)) delete next.hide_below;
+          c.devices[i] = next;
+          d = next;
+          head.textContent = title();
+          this._fire();
+          if (placementChanged) this._render();
+        });
+    });
+
+    this.querySelector("#add").addEventListener("click", () => {
+      c.devices.push({});
+      this._fire();
+      this._render();
+    });
+  }
+}
+pwmDefine("pwm-power-flow-card-editor", PwMPowerFlowCardEditor);
+
 // Register with Home Assistant's card picker so all three card types show
 // up there with a name/description, instead of only being addable by
 // typing their `type:` manually in YAML.
@@ -2703,6 +3380,12 @@ const PWM_CUSTOM_CARDS = [
     type: "pwm-phase-load-card",
     name: "PwM Phase load",
     description: "The main fuse's three phase loads as a ring, with PwMngt's limit and free current.",
+  },
+  {
+    type: "pwm-power-flow-card",
+    name: "PwM Power flow",
+    description: "The house in the middle with PV, grid, battery and other devices around it and animated power flow.",
+    preview: true,
   }
 ];
 // Skip the ones already listed -- this file may run twice (see pwmDefine()).
