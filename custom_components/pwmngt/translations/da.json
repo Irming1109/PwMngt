@@ -300,7 +300,8 @@
           "no_charge_needed": "Nej (intet ladebehov)",
           "no_surplus": "Nej (overskud)",
           "no_price": "Nej (pris)",
-          "no_deferred": "Nej (udskudt)"
+          "no_deferred": "Nej (udskudt)",
+          "no_manual": "Nej (manuelt)"
         }
       },
       "battery_hold_power": {
@@ -409,6 +410,20 @@
           "description": "Kroner, der lægges til; negativt for at trække fra."
         }
       }
+    },
+    "set_night_charge_target": {
+      "name": "Vælg nattens ladeprocent",
+      "description": "Lader batteriet fra nettet til denne SoC (op til 100 %) i nat i stedet for automatikkens eget target -- kun denne ene nat. PwMngt genberegner ikke natten, mens valget gælder, og der planlægges ikke salg fra batteriet. På eller under minimum-SoC: ingen netladning i nat.",
+      "fields": {
+        "target": {
+          "name": "Target",
+          "description": "Den SoC (%), der lades til i nat; 0 = ingen netladning."
+        }
+      }
+    },
+    "reset_night_charge_target": {
+      "name": "Nulstil nattens ladeprocent",
+      "description": "Går tilbage til automatikkens egen plan for natladningen."
     }
   },
   "selector": {
@@ -425,6 +440,11 @@
         "battery_charging_savings_month": "Besparelse batteriladning denne måned",
         "battery_charging_savings_year": "Besparelse batteriladning i år"
       }
+    }
+  },
+  "exceptions": {
+    "no_night_plan": {
+      "message": "Der er ingen natplan at ændre lige nu -- nattens plan lægges, når morgendagens priser er kommet."
     }
   }
 }

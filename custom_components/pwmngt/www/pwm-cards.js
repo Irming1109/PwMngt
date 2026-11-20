@@ -737,6 +737,7 @@ const PWM_BATTERY_TEXTS = {
       no_surplus: "Battery is not charged tonight, PV surplus tomorrow",
       no_charge_needed: "Battery is not charged tonight, no charge needed",
       no_deferred: "Charging postponed one day",
+      no_manual: "Battery is not charged tonight - chosen manually",
       not_calculated: "Waiting for electricity prices (after 14)",
       not_calculated_recheck: "Not calculated yet - calculated at the next full hour",
     },
@@ -800,6 +801,24 @@ const PWM_BATTERY_TEXTS = {
       "This also turns off the battery hold (min. SoC), so the battery can discharge freely. Continue?",
     soc: "Battery SoC",
     missing: "PwMngt battery entities not found - is the Solar PV Plant set up?",
+    // Issue #105: the night's charge target, chosen by hand.
+    manualChosen: (pct) => `Chosen manually: charges to ${pct}% tonight`,
+    manualNone: "Chosen manually: no grid charge tonight",
+    autoWould: (pct) =>
+      pct > 0
+        ? `The automation would charge to ${pct}% - it takes over again tomorrow`
+        : "The automation wouldn't charge - it takes over again tomorrow",
+    editTonight: "Choose tonight's charge",
+    // Tomorrow is a dark day: the automation charges up to 100 %.
+    darkDay: "Very little sun tomorrow - so up to 100% instead of 95%",
+    editorNone: "No grid charge",
+    editorAuto: (label) => `Automatic: ${label}`,
+    quickNone: "No charge",
+    quickAuto: (label) => `Automatic (${label})`,
+    quickFull: (pct) => `Full (${pct}%)`,
+    useTonight: "Use tonight",
+    resetAuto: "Reset to automatic",
+    close: "Close",
   },
   da: {
     title: "Hus batteri styring",
@@ -819,6 +838,7 @@ const PWM_BATTERY_TEXTS = {
       no_surplus: "Batteri lades ikke i nat, PV-overskud i morgen",
       no_charge_needed: "Batteri lades ikke i nat, intet ladebehov",
       no_deferred: "Ladning udskudt 1 dag",
+      no_manual: "Batteri lades ikke i nat - valgt manuelt",
       not_calculated: "Afventer elpriser (efter 14)",
       not_calculated_recheck: "Ikke beregnet endnu - beregnes ved næste hele time",
     },
@@ -882,6 +902,24 @@ const PWM_BATTERY_TEXTS = {
       "Det slår også batterilåsen (min. SoC) fra, så batteriet kan aflade frit. Fortsæt?",
     soc: "Batteri SoC",
     missing: "PwMngt's batteri-entities blev ikke fundet - er Solar PV Plant sat op?",
+    // Issue #105: nattens ladeprocent, valgt manuelt.
+    manualChosen: (pct) => `Valgt manuelt: lades til ${pct} % i nat`,
+    manualNone: "Valgt manuelt: ingen netladning i nat",
+    autoWould: (pct) =>
+      pct > 0
+        ? `Automatikken ville lade til ${pct} % - den tager over igen i morgen`
+        : "Automatikken ville ikke lade - den tager over igen i morgen",
+    editTonight: "Vælg nattens ladning",
+    // I morgen er en mørk dag: automatikken lader op til 100 %.
+    darkDay: "Meget lidt sol i morgen - derfor op til 100 % i stedet for 95 %",
+    editorNone: "Ingen netladning",
+    editorAuto: (label) => `Automatik: ${label}`,
+    quickNone: "Ingen ladning",
+    quickAuto: (label) => `Automatik (${label})`,
+    quickFull: (pct) => `Fuld (${pct} %)`,
+    useTonight: "Brug i nat",
+    resetAuto: "Nulstil til automatik",
+    close: "Luk",
   },
 };
 
@@ -901,8 +939,27 @@ const PWM_BATTERY_STATUS_TONE = {
   no_surplus: "bad",
   no_charge_needed: "info",
   no_deferred: "warn",
+  no_manual: "warn",
   not_calculated: "bad",
 };
+
+// Issue #105: the statuses of a decided coming night -- its charge target
+// can be chosen by hand.
+const PWM_BATTERY_COMING_NIGHT_STATUSES = [
+  "yes_tomorrow",
+  "no_price",
+  "no_surplus",
+  "no_charge_needed",
+  "no_deferred",
+  "no_manual",
+];
+
+/** The local date as YYYY-MM-DD (as battery_charge_decision.py writes it). */
+function pwmLocalDate(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
+    date.getDate()
+  ).padStart(2, "0")}`;
+}
 
 const PWM_CHARGE_LEVELS = [25, 50, 75, 100];
 
@@ -1034,6 +1091,89 @@ const PWM_BATTERY_CARD_STYLE = `
   .pwm-note .pwm-pct {
     color: var(--primary-text-color);
   }
+  /* Issue #105: the night's charge target opens its editor. */
+  .pwm-pct-edit {
+    cursor: pointer;
+    text-decoration: underline dotted;
+    text-underline-offset: 3px;
+    white-space: nowrap;
+  }
+  .pwm-pct-edit ha-icon,
+  .pwm-edit-line ha-icon {
+    --mdc-icon-size: 16px;
+    margin-left: 3px;
+    vertical-align: -2px;
+  }
+  .pwm-edit-line {
+    cursor: pointer;
+  }
+  .pwm-edit-line:hover {
+    filter: brightness(1.08);
+  }
+  .pwm-edit-link {
+    display: block;
+    margin: 0 auto 8px;
+    font: inherit;
+    font-size: 14px;
+    padding: 6px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--divider-color);
+    background: transparent;
+    color: var(--primary-color);
+    cursor: pointer;
+  }
+  .pwm-editor {
+    border-top: 1px solid var(--divider-color);
+    margin-top: 8px;
+    padding-top: 10px;
+  }
+  .pwm-editor-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+  .pwm-editor-row input[type="range"] {
+    flex: 1;
+    min-width: 0;
+    accent-color: var(--primary-color);
+  }
+  .pwm-editor-row button {
+    font: inherit;
+    font-size: 18px;
+    width: 40px;
+    height: 40px;
+    border-radius: 8px;
+    border: 1px solid var(--divider-color);
+    background: color-mix(in srgb, var(--primary-text-color) 6%, var(--secondary-background-color));
+    color: var(--primary-text-color);
+    cursor: pointer;
+  }
+  .pwm-editor-value {
+    min-width: 76px;
+    text-align: right;
+    font-size: 20px;
+    font-weight: 500;
+    color: var(--primary-text-color);
+  }
+  .pwm-editor-quick {
+    grid-template-columns: repeat(3, 1fr);
+    margin-bottom: 8px;
+  }
+  .pwm-editor-actions {
+    display: flex;
+  }
+  .pwm-editor-actions button {
+    flex: 2;
+  }
+  .pwm-editor-actions button:last-child {
+    flex: 1;
+  }
+  .pwm-group .pwm-buttons button.primary {
+    background: var(--primary-color);
+    color: var(--text-primary-color, #fff);
+    border-color: var(--primary-color);
+  }
 `;
 
 /**
@@ -1074,6 +1214,9 @@ class PwMBatteryCard extends HTMLElement {
       this.attachShadow({ mode: "open" });
     }
     this._resolveEntityIds();
+    // Issue #105: leave the night editor alone while it is open -- a
+    // re-render would reset the slider under the user's finger.
+    if (this._editor && this._editor.open) return;
     const signature = this._stateSignature();
     if (signature === this._signature) return;
     this._signature = signature;
@@ -1111,6 +1254,8 @@ class PwMBatteryCard extends HTMLElement {
       maxCharge: pwmFindEntityId(this._hass, "pv", "select", "battery_max_charge_effect"),
       // Issues #59/#61: today's day plan (day_plan_* attributes).
       data: pwmFindEntityId(this._hass, "pv", "sensor", "battery_data"),
+      // Issue #105: the night editor's lowest value (= no grid charge).
+      minSoc: pwmFindEntityId(this._hass, "pv", "select", "battery_min_soc"),
     };
     this._signature = undefined;
   }
@@ -1134,7 +1279,7 @@ class PwMBatteryCard extends HTMLElement {
 
   /** Only re-render when something the card shows has changed. */
   _stateSignature() {
-    const parts = ["command", "mode", "status", "soc", "target", "maxCharge"].map((name) => {
+    const parts = ["command", "mode", "status", "soc", "target", "maxCharge", "minSoc"].map((name) => {
       const state = this._state(name);
       return state ? `${state.state}|${JSON.stringify(state.attributes)}` : "-";
     });
@@ -1211,6 +1356,7 @@ class PwMBatteryCard extends HTMLElement {
     }
 
     // Banners -- same order and conditions as the Node-RED card.
+    let statusBanner = null;
     if (!isAuto) {
       statusGroup.appendChild(this._banner("bad", t.manual));
     } else if (chargingPct === null && this._planEnded(status) !== null) {
@@ -1224,21 +1370,58 @@ class PwMBatteryCard extends HTMLElement {
       statusGroup.appendChild(
         this._banner("warn", t.planEnded(`${String(end).padStart(2, "0")}:00`, target, soc))
       );
-    } else if (chargingPct === null || !planned) {
+    } else if ((chargingPct === null || !planned) && !this._manualNight(status)) {
+      // Issue #105: a manual choice has its own banner below.
       const key =
         status.state === "not_calculated" && pwmBatteryRecheckHours()
           ? "not_calculated_recheck"
           : status.state;
       const text = t.status[key];
       if (text) {
-        statusGroup.appendChild(this._banner(PWM_BATTERY_STATUS_TONE[status.state], text));
+        statusBanner = this._banner(PWM_BATTERY_STATUS_TONE[status.state], text);
+        statusGroup.appendChild(statusBanner);
       }
     }
     // Issue #43: what the decision is based on, and how far tonight's
     // charge goes (a partial charge leaves the rest to tomorrow's PV).
     if (isAuto) {
-      for (const decision of this._decisionText(t, status)) {
-        statusGroup.appendChild(this._note(decision));
+      // Issue #105: the night's charge target can be chosen by hand --
+      // tapping its percentage opens the editor, or, when the night isn't
+      // charged, tapping the "not charged tonight" line.
+      const editable = this._nightEditable(status);
+      const manual = this._manualNight(status);
+      let editAttached = false;
+      if (manual) {
+        const banner = this._banner(
+          "warn",
+          manual.target > manual.minSoc ? t.manualChosen(Math.round(manual.target)) : t.manualNone
+        );
+        if (editable) editAttached = this._attachEditChip(banner) || this._attachEditLine(banner);
+        statusGroup.appendChild(banner);
+        statusGroup.appendChild(this._note(t.autoWould(Math.round(manual.auto))));
+      } else {
+        this._decisionText(t, status).forEach((decision, index) => {
+          const note = this._note(decision);
+          // Only a planned charge's first line starts with the charge
+          // target -- a "not charged" reason can name the nightly target.
+          if (editable && planned && index === 0) editAttached = this._attachEditChip(note);
+          statusGroup.appendChild(note);
+        });
+        // Claus 2026-11-20: before a dark day the plan may charge to 100 %.
+        if (planned && Number(status.attributes.charge_ceiling) === 100 && Number(status.attributes.charge_target) > 95) {
+          statusGroup.appendChild(this._note(t.darkDay));
+        }
+      }
+      if (editable && !editAttached && statusBanner) {
+        editAttached = this._attachEditLine(statusBanner);
+      }
+      if (editable && !editAttached && !(this._editor && this._editor.open)) {
+        const link = this._button(t.editTonight, () => this._openEditor(status));
+        link.className = "pwm-edit-link";
+        statusGroup.appendChild(link);
+      }
+      if (editable && this._editor && this._editor.open) {
+        statusGroup.appendChild(this._nightEditor(t, status, manual));
       }
     }
 
@@ -1383,6 +1566,189 @@ class PwMBatteryCard extends HTMLElement {
     for (const group of [statusGroup, nightGroup, todayGroup, manualGroup]) {
       if (group.childElementCount) content.appendChild(group);
     }
+  }
+
+  /**
+   * Issue #105: whether the night's charge target can be chosen now --
+   * mirrors manual_night() in data/battery_charge_decision.py: the running
+   * night (before 06) while its plan stands or was chosen by hand, or the
+   * coming night once it has been decided (tomorrow's prices are out after
+   * ~13). The action itself refuses anything else.
+   */
+  _nightEditable(status) {
+    const now = new Date();
+    const hour = now.getHours();
+    if (hour < 6) {
+      return status.state === "yes_today" || status.attributes.manual_night === pwmLocalDate(now);
+    }
+    if (hour < 12) return false;
+    return PWM_BATTERY_COMING_NIGHT_STATUSES.includes(status.state);
+  }
+
+  /**
+   * Issue #105: {target, auto, minSoc} while the night's charge target is
+   * chosen by hand, else null.
+   */
+  _manualNight(status) {
+    const a = status.attributes;
+    const target = Number(a.manual_target);
+    if (a.manual_target === null || a.manual_target === undefined || !Number.isFinite(target) || !a.manual_night) {
+      return null;
+    }
+    return { target, auto: Number(a.auto_charge_target) || 0, minSoc: this._minSoc() };
+  }
+
+  _minSoc() {
+    const state = this._state("minSoc");
+    const value = state ? Number(state.state) : NaN;
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  /** What the automation charges to tonight (%), 0 when it doesn't. */
+  _autoTarget(status) {
+    const manual = this._manualNight(status);
+    if (manual) return manual.auto;
+    const planned = status.state === "yes_today" || status.state === "yes_tomorrow";
+    const target = Number(status.attributes.charge_target);
+    return planned && Number.isFinite(target) ? target : 0;
+  }
+
+  /** Make the first percentage in el open the editor; false when it has none. */
+  _attachEditChip(el) {
+    const pct = el.querySelector(".pwm-pct");
+    if (!pct) return false;
+    pct.classList.add("pwm-pct-edit");
+    pct.setAttribute("role", "button");
+    pct.tabIndex = 0;
+    const icon = document.createElement("ha-icon");
+    icon.setAttribute("icon", "mdi:pencil");
+    pct.appendChild(icon);
+    this._makeEditTrigger(pct);
+    return true;
+  }
+
+  /** Make the whole line el open the editor, with a pencil after its text. */
+  _attachEditLine(el) {
+    el.classList.add("pwm-edit-line");
+    el.setAttribute("role", "button");
+    el.tabIndex = 0;
+    const icon = document.createElement("ha-icon");
+    icon.setAttribute("icon", "mdi:pencil");
+    el.appendChild(icon);
+    this._makeEditTrigger(el);
+    return true;
+  }
+
+  _makeEditTrigger(el) {
+    const open = () => this._openEditor(this._state("status"));
+    el.addEventListener("click", open);
+    el.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        open();
+      }
+    });
+  }
+
+  _openEditor(status) {
+    if (this._editor && this._editor.open) {
+      this._closeEditor();
+      return;
+    }
+    const manual = this._manualNight(status);
+    this._editor = { open: true, value: manual ? manual.target : this._autoTarget(status) };
+    this._signature = undefined;
+    this._render();
+  }
+
+  _closeEditor() {
+    this._editor = { open: false, value: null };
+    this._signature = undefined;
+    this._render();
+  }
+
+  /**
+   * Issue #105: slider and -/+ (5 % steps, min SoC to 100 %), shortcuts,
+   * "Use tonight" and -- while chosen by hand -- "Reset to automatic".
+   * At the min SoC (the slider's bottom) it means no grid charge.
+   */
+  _nightEditor(t, status, manual) {
+    const minSoc = this._minSoc();
+    const sliderMin = Math.floor(minSoc / 5) * 5;
+    // A manual target may always go to 100 % (Claus 2026-11-20).
+    const max = 100;
+    const auto = this._autoTarget(status);
+    // The automation's own value stays exact (54 %); the slider and -/+
+    // move in whole 5 % steps from it.
+    const clamp = (value) => Math.min(max, Math.max(sliderMin, Math.round(value)));
+    const label = (value) => (value <= minSoc ? t.editorNone : `${value} %`);
+    let value = clamp(this._editor.value ?? auto);
+
+    const panel = document.createElement("div");
+    panel.className = "pwm-editor";
+
+    const row = document.createElement("div");
+    row.className = "pwm-editor-row";
+    const minus = this._button("−", () => update(Math.ceil(value / 5) * 5 - 5));
+    minus.setAttribute("aria-label", "-5 %");
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = String(sliderMin);
+    slider.max = String(max);
+    slider.step = "5";
+    slider.value = String(value);
+    slider.addEventListener("input", () => update(Number(slider.value)));
+    const plus = this._button("+", () => update(Math.floor(value / 5) * 5 + 5));
+    plus.setAttribute("aria-label", "+5 %");
+    const shown = document.createElement("div");
+    shown.className = "pwm-editor-value";
+    row.append(minus, slider, plus, shown);
+
+    const autoNote = document.createElement("div");
+    autoNote.className = "pwm-note";
+    autoNote.textContent = auto > minSoc ? t.editorAuto(`${Math.round(auto)} %`) : t.editorAuto(t.editorNone);
+
+    const update = (next) => {
+      value = clamp(next);
+      this._editor.value = value;
+      slider.value = String(value);
+      shown.textContent = label(value);
+    };
+    update(value);
+
+    const quick = document.createElement("div");
+    quick.className = "pwm-buttons pwm-editor-quick";
+    quick.append(
+      this._button(t.quickNone, () => update(sliderMin)),
+      this._button(t.quickAuto(auto > minSoc ? `${Math.round(auto)} %` : t.editorNone), () =>
+        update(auto > minSoc ? auto : sliderMin)
+      ),
+      this._button(t.quickFull(max), () => update(max))
+    );
+
+    const actions = document.createElement("div");
+    actions.className = "pwm-buttons pwm-editor-actions";
+    const use = this._button(t.useTonight, () =>
+      this._callNightService("set_night_charge_target", { target: value <= minSoc ? 0 : value })
+    );
+    use.className = "primary";
+    actions.appendChild(use);
+    if (manual) {
+      actions.appendChild(this._button(t.resetAuto, () => this._callNightService("reset_night_charge_target", {})));
+    }
+    actions.appendChild(this._button(t.close, () => this._closeEditor()));
+
+    panel.append(row, autoNote, quick, actions);
+    return panel;
+  }
+
+  _callNightService(service, data) {
+    this._editor = { open: false, value: null };
+    Promise.resolve(this._hass.callService("pwmngt", service, data)).catch((err) =>
+      window.alert((err && err.message) || String(err))
+    );
+    this._signature = undefined;
+    this._render();
   }
 
   _group() {

@@ -174,6 +174,25 @@ Deliberate differences from Node-RED (each marked "DIFF" below):
   evening: it becomes ordinary grid cells in data/battery_data.py (used
   17-21, price-protected 21-06), and what is left counts in the night's
   SoC, so the night charges less up to the target.
+- DIFF (issue #105, Claus 2026-11-20 -- no Node-RED counterpart): the
+  user can pick the night's charge target on the battery card (actions
+  pwmngt.set_night_charge_target / reset_night_charge_target). It holds
+  for that one night only (manual_night = the date the night ends): the
+  plan is made once with charge_target = the user's value (cheapest hours
+  for it, no sale -- a sale would sell what the user chose to keep) and
+  no trigger re-plans it while it stands. At or below the min SoC it
+  means "no grid charge tonight" (status "no_manual"). auto_charge_target/
+  auto_status show what the automation would have chosen; a snapshot of
+  that plan (_auto_plan) is what "reset" goes back to once the night has
+  started (before it, reset simply plans again). Changed during the night
+  itself, the standing "yes_today" plan gets the new target and the
+  cheapest of the night's remaining hours (today's prices). A manual
+  target may always go to 100 %.
+- DIFF (Claus 2026-11-20 -- no Node-RED counterpart): the night charge is
+  planned to at most 95 % (_DAY_CHARGE_CEILING) -- or 100 % when
+  tomorrow's PV forecast 08-16 is at most a fifth of the average daytime
+  consumption 08-16 (night_charge_ceiling(), attribute charge_ceiling):
+  on such a dark day the PV won't fill the last 5 % anyway.
 Node-RED inputs not carried over because PwMngt doesn't have an
 abstracted equivalent yet, or because they're honestly unused:
 (none -- every input this function's result actually depends on now has
@@ -184,7 +203,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import Any
 
@@ -219,6 +238,8 @@ LOGGER = logging.getLogger(__name__)
 # sensor.pv_battery_charge.
 # ---------------------------------------------------------------------------
 
+_MANUAL_ATTRIBUTES = ("manual_target", "manual_night", "auto_charge_target", "auto_status")
+
 PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES: list[str] = [
     # Average price (kr/kWh) of the cheapest hours picked for grid
     # charging, and of the most expensive evening hours they're compared
@@ -250,6 +271,9 @@ PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES: list[str] = [
     # "yes_today" at midnight.
     "charge_target",
     "expected_pv_surplus",
+    # DIFF (Claus 2026-11-20): the highest SoC (%) the automation plans
+    # tonight's charge to -- 100 before a dark day, else 95.
+    "charge_ceiling",
     # Issue #50: the price an evening hour must reach to be worth charging
     # for (kr/kWh), those hours 17-23 tomorrow, the hours the charge covers
     # (those plus always 17-21), and the energy (kWh) the battery is
@@ -284,6 +308,10 @@ PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES: list[str] = [
     # the first of them starts) -- what the moved hours would have charged
     # tonight, never more than the plan's charge itself.
     "today_charge_pct",
+    # Issue #105: the user's own charge target (%) for one night, that
+    # night (YYYY-MM-DD, the date it ends), and what the automation would
+    # have chosen (charge target %, 0 = no grid charge, and its status).
+    *_MANUAL_ATTRIBUTES,
 ]
 
 PwM_BATTERY_CHARGE_DECISION_SENSORS: list[SensorEntityDescription] = [
@@ -302,6 +330,7 @@ PwM_BATTERY_CHARGE_DECISION_SENSORS: list[SensorEntityDescription] = [
             "no_surplus",        # Old: "Nej (overskud)"
             "no_price",          # Old: "Nej (pris)"
             "no_deferred",       # Old: "Nej (udskudt)"
+            "no_manual",         # Issue #105: no grid charge tonight, chosen by the user.
         ],
     ),
 ]
@@ -328,6 +357,14 @@ _BILLING_METHOD_FIXED_PRICE = "Fixed price"
 # the module docstring's note on the initial_state check fix.
 _STATUS_DEFERRED = "no_deferred"
 _STATUS_NOT_CALCULATED = "not_calculated"
+_STATUS_MANUAL_NO = "no_manual"  # Issue #105.
+_STATUS_YES_TODAY = "yes_today"
+_STATUS_YES_TOMORROW = "yes_tomorrow"
+# Issue #105: a manual target can still change the night that is running
+# until this hour; the night's charge hours are 0-5.
+_NIGHT_END_HOUR = 6
+# Kept when a manual target changes the running night's plan.
+_RUNTIME_ATTRIBUTES = ("skipped_hours", "extended_hours", "charge_watchdog", "last_charge")
 
 # battery_command (select.py) options meaning tonight's grid charge is
 # running -- stopped when the charge is postponed (see _handle_postpone).
@@ -349,6 +386,13 @@ _STROMLIGNING_TOMORROW_TRANSLATION_KEY = "tomorrow_available_vat"
 # min_soc ceiling).
 _DAY_HOURS = range(6, 17)
 _DAY_CHARGE_CEILING = 95
+# DIFF (Claus 2026-11-20): when tomorrow's PV forecast 08-16 is at most
+# this share of the average daytime consumption 08-16 (a dark day), the
+# night charge may go all the way to 100 % -- the PV won't fill it anyway.
+_LOW_PV_RATIO = 0.2
+_LOW_PV_CHARGE_CEILING = 100
+# Issue #105 (Claus 2026-11-20): a manual night target may always be 100 %.
+_MANUAL_CHARGE_CEILING = 100
 
 # Issue #64: the hours the battery may sell in (not 23, so a sale never
 # runs over midnight into the next day's books), the charge loss the sale
@@ -379,7 +423,7 @@ _DAY_END_HOUR_MINUTE = (16, 55)
 # "Prognose for imorgen" trigger-state's own constraints -- see module
 # docstring.
 _FORECAST_TOMORROW_THRESHOLD = 1.0
-_SKIP_RECOMPUTE_STATUSES = {"not_calculated", "no_price", "no_deferred"}
+_SKIP_RECOMPUTE_STATUSES = {"not_calculated", "no_price", "no_deferred", _STATUS_MANUAL_NO}
 
 # Hourly nudge (see module docstring). Node-RED: switch comparing against
 # "Ikke beregnet"/"Ja (i dag)", then time-range-switch 539e00bafbeb80df.
@@ -391,6 +435,7 @@ _CARRIED_TO_TODAY = frozenset(
     {
         "charge_target",
         "expected_pv_surplus",
+        "charge_ceiling",
         "break_even_price",
         "worth_hours",
         "covered_hours",
@@ -403,6 +448,7 @@ _CARRIED_TO_TODAY = frozenset(
         "sale_floors",
         "sale_kwh",
         "sale_profit",
+        *_MANUAL_ATTRIBUTES,
     }
 )
 _HOURLY_RECHECK_WINDOW_START = (14, 0)
@@ -420,6 +466,13 @@ def signal_postpone_battery_charge(entry_id: str) -> str:
 
 # What data/battery_charge_level.py reports about the current hour
 # (signal_charge_hour_marked(), issue #24).
+def signal_manual_charge_target(entry_id: str) -> str:
+    """Issue #105: dispatcher signal from services.py -- the user's own
+    charge target (%) for the night, or None to go back to the
+    automation's."""
+    return f"{DOMAIN}_{entry_id}_manual_charge_target"
+
+
 HOUR_MARK_SKIPPED = "skipped"
 HOUR_MARK_EXTENDED = "extended"
 HOUR_MARK_CHARGED = "charged"
@@ -515,6 +568,9 @@ class BatteryChargeInputs:
     # kr/kWh, same price basis as prices_tomorrow) and today's date.
     prices_today_remaining: dict[int, float] | None = None
     today: str | None = None
+    # Issue #105: the user's own charge target (%) for this night, or None
+    # for the automation's own.
+    manual_target: float | None = None
 
 
 def _average(values: list[float]) -> float:
@@ -768,6 +824,99 @@ def move_to_today(
     return kept, moved_to, moved_from
 
 
+def night_charge_ceiling(pv_forecast_8_16: float | None, day_consumption: float | None) -> int:
+    """The highest SoC (%) tonight's grid charge is planned to: 95, or 100
+    when tomorrow's PV forecast 08-16 (Solcast's normal estimate) is at
+    most _LOW_PV_RATIO of the average daytime consumption 08-16 -- both
+    must be known (see _DAY_CHARGE_CEILING)."""
+    if pv_forecast_8_16 is None or day_consumption is None or day_consumption <= 0:
+        return _DAY_CHARGE_CEILING
+    if pv_forecast_8_16 <= day_consumption * _LOW_PV_RATIO:
+        return _LOW_PV_CHARGE_CEILING
+    return _DAY_CHARGE_CEILING
+
+
+def effective_max_charge(battery_max_charge_raw: float | None) -> float:
+    """The charge power (W) the hour count is based on -- the battery's
+    max charge effect, only partly used (Node-RED's own factor)."""
+    raw = battery_max_charge_raw if battery_max_charge_raw is not None else _BATTERY_MAX_CHARGE_FALLBACK
+    return raw * _CHARGE_POWER_UTILIZATION
+
+
+def charge_hours_needed(target_pct: float, battery_size: float, battery_max_charge: float) -> int:
+    """The whole hours a grid charge to target_pct is planned with --
+    counted from empty, as Node-RED does (the charge stops at the target,
+    and #22 extends it into unplanned hours when it falls short)."""
+    charge_kwh = (battery_size * target_pct) / 100
+    return math.ceil((charge_kwh * 1000) / battery_max_charge * _CHARGETIME_SAFETY_MARGIN)
+
+
+def manual_night(
+    status: str, attributes: dict[str, Any], now: Any, tomorrow_prices_out: bool
+) -> str | None:
+    """Issue #105: the night (YYYY-MM-DD, the date it ends) a manual charge
+    target set now applies to, or None when there is no night plan to
+    change: the night that is running (before _NIGHT_END_HOUR, while its
+    plan stands or was set manually), else the coming one once tomorrow's
+    prices are out -- not today's own "yes_today" before 14:00, which is
+    the day plan after the night (as #75)."""
+    today = now.date().isoformat()
+    if now.hour < _NIGHT_END_HOUR and (
+        status == _STATUS_YES_TODAY or attributes.get("manual_night") == today
+    ):
+        return today
+    if tomorrow_prices_out and (
+        status != _STATUS_YES_TODAY or (now.hour, now.minute) >= _PRICE_CHANGE_KEEP_TODAY_UNTIL
+    ):
+        return (now + timedelta(days=1)).date().isoformat()
+    return None
+
+
+def carry_to_today(status: str, attributes: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    """The plan as local midnight leaves it (see _handle_midnight()):
+    "yes_tomorrow" becomes "yes_today" with the hour flags and
+    _CARRIED_TO_TODAY; "no_price"/"no_surplus"/"no_deferred" and issue
+    #105's "no_manual" go back to "not_calculated" (the last keeps the
+    manual attributes for the battery card); anything else is unchanged."""
+    cleared: dict[str, Any] = {key: None for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES}
+    if status == _STATUS_YES_TOMORROW:
+        cleared.update(
+            {
+                key: value
+                for key, value in attributes.items()
+                if key.startswith("hour_") or key in _CARRIED_TO_TODAY
+            }
+        )
+        return _STATUS_YES_TODAY, cleared
+    if status in ("no_price", "no_surplus", _STATUS_DEFERRED, _STATUS_MANUAL_NO):
+        if status == _STATUS_MANUAL_NO:
+            cleared.update({key: attributes.get(key) for key in _MANUAL_ATTRIBUTES})
+        return _STATUS_NOT_CALCULATED, cleared
+    return status, dict(attributes)
+
+
+def auto_charge_target(status: str, attributes: dict[str, Any]) -> float:
+    """Issue #105: what the automation's plan charges to tonight (%), 0
+    when it doesn't charge."""
+    if status not in (_STATUS_YES_TODAY, _STATUS_YES_TOMORROW):
+        return 0.0
+    try:
+        return float(attributes.get("charge_target") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def tonight_hours(prices_today: dict[int, float], from_hour: int, needed: int) -> list[int]:
+    """Issue #105: the cheapest of the running night's hours from
+    from_hour, as many as the charge needs (at least one, at most what is
+    left of the night)."""
+    night = sorted(
+        ((hour, price) for hour, price in prices_today.items() if from_hour <= hour < _NIGHT_END_HOUR),
+        key=lambda item: item[1],
+    )
+    return sorted(hour for hour, _price in night[: max(needed, 1)])
+
+
 def calculate_battery_charge_decision(
     inputs: BatteryChargeInputs,
 ) -> tuple[str, dict[str, Any]]:
@@ -778,11 +927,10 @@ def calculate_battery_charge_decision(
     which here means: don't touch the sensor, keep showing the last run's
     value.
     """
-    battery_max_charge = (
-        inputs.battery_max_charge_raw
-        if inputs.battery_max_charge_raw is not None
-        else _BATTERY_MAX_CHARGE_FALLBACK
-    ) * _CHARGE_POWER_UTILIZATION
+    battery_max_charge = effective_max_charge(inputs.battery_max_charge_raw)
+    manual = inputs.manual_target is not None
+    # DIFF (Claus 2026-11-20): 100 % before a dark day, else 95 %.
+    ceiling = night_charge_ceiling(inputs.expected_solar_tomorrow_8_16, inputs.day_consumption)
 
     price_tomorrow_day = [(h, inputs.prices_tomorrow[h]) for h in range(0, _DAY_END_HOUR)]
     price_tomorrow_evening = [
@@ -802,8 +950,7 @@ def calculate_battery_charge_decision(
         else None
     )
     def hours_needed(target_pct: float) -> int:
-        charge_kwh = (inputs.battery_size * target_pct) / 100
-        return math.ceil((charge_kwh * 1000) / battery_max_charge * _CHARGETIME_SAFETY_MARGIN)
+        return charge_hours_needed(target_pct, inputs.battery_size, battery_max_charge)
 
     prices_sorted_day = sorted(price_tomorrow_day, key=lambda item: item[1])
     prices_sorted_evening = sorted(price_tomorrow_evening, key=lambda item: item[1], reverse=True)
@@ -816,7 +963,7 @@ def calculate_battery_charge_decision(
     )
     full_hours = hours_needed(full_charge_target)
 
-    if full_hours <= 0:
+    if full_hours <= 0 and not manual:
         attributes: dict[str, Any] = {
             key: None for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
             if not key.startswith("hour_")
@@ -825,7 +972,7 @@ def calculate_battery_charge_decision(
             attributes[f"hour_{hour}"] = False
         return "no_charge_needed", attributes
 
-    avg_charge_price = _average([price for _hour, price in prices_sorted_day[:full_hours]])
+    avg_charge_price = _average([price for _hour, price in prices_sorted_day[: max(full_hours, 1)]])
     evening_hourly = evening_hour_consumption(inputs)
     break_even, worth_hours, covered_hours, covered_kwh = worth_charging(
         inputs.prices_tomorrow,
@@ -856,7 +1003,7 @@ def calculate_battery_charge_decision(
     # daytime hours -- see the module docstring.
     if day_hours:
         day_room_kwh = (
-            max(_DAY_CHARGE_CEILING - evening_reserve, 0.0) / 100 * inputs.battery_size / TARGET_MARGIN
+            max(ceiling - evening_reserve, 0.0) / 100 * inputs.battery_size / TARGET_MARGIN
         )
         day_hours, day_kwh = fit_day_hours(
             day_hours,
@@ -865,7 +1012,7 @@ def calculate_battery_charge_decision(
             day_room_kwh,
         )
     day_pct = math.ceil(day_kwh * TARGET_MARGIN / inputs.battery_size * 100) if day_kwh > 0 else 0
-    worth_target = min(max(_DAY_CHARGE_CEILING, evening_reserve), evening_reserve + day_pct)
+    worth_target = min(max(ceiling, evening_reserve), evening_reserve + day_pct)
     charge_target = partial_charge_target(
         worth_target, inputs.battery_size, expected_surplus, inputs.battery_min_soc
     )
@@ -894,7 +1041,7 @@ def calculate_battery_charge_decision(
         # each charges what hours_needed() counts on per hour.
         extra = [price for _hour, price in prices_sorted_day[base_hours:]]
         kwh_per_charge_hour = battery_max_charge / 1000 / _CHARGETIME_SAFETY_MARGIN / TARGET_MARGIN
-        room_kwh = max(_DAY_CHARGE_CEILING - house_target, 0.0) / 100 * inputs.battery_size / TARGET_MARGIN
+        room_kwh = max(ceiling - house_target, 0.0) / 100 * inputs.battery_size / TARGET_MARGIN
         max_power_kw = (
             inputs.battery_max_charge_raw
             if inputs.battery_max_charge_raw is not None
@@ -924,7 +1071,7 @@ def calculate_battery_charge_decision(
         for _attempt in range(3):
             sale_hours, sale_kwh, sale_profit, sold = best_sale(candidates)
             sale_pct = math.ceil(sale_kwh * TARGET_MARGIN / inputs.battery_size * 100) if sale_kwh > 0 else 0
-            charge_target = min(_DAY_CHARGE_CEILING, house_target + sale_pct)
+            charge_target = min(ceiling, house_target + sale_pct)
             charge_hours = [hour for hour, _price in prices_sorted_day[: max(hours_needed(charge_target), 1)]]
             last_charge_hour = max(charge_hours)
             if not sale_hours or min(sale_hours) > last_charge_hour:
@@ -936,6 +1083,12 @@ def calculate_battery_charge_decision(
         floors = sale_floors(
             sale_hours, house_kwh, covered_later, inputs.battery_min_soc, inputs.battery_size, sold
         )
+
+    # Issue #105: the user's own target for this night -- and no sale, which
+    # would sell what the user chose to keep (see the module docstring).
+    if manual:
+        charge_target = min(_MANUAL_CHARGE_CEILING, float(inputs.manual_target))
+        sale_hours, sale_kwh, sale_profit, floors = [], 0.0, 0.0, []
 
     cheapest_hours = prices_sorted_day[: max(hours_needed(charge_target), 1)]
     most_expensive_hours = prices_sorted_evening[:_NUM_MOST_EXPENSIVE_HOURS]
@@ -958,6 +1111,7 @@ def calculate_battery_charge_decision(
         "avg_most_expensive_hours": avg_most_expensive_hours,
         "price_difference": price_difference,
         "charge_target": charge_target,
+        "charge_ceiling": ceiling,
         "expected_pv_surplus": None if expected_surplus is None else round(expected_surplus, 2),
         "break_even_price": break_even,
         "worth_hours": worth_hours,
@@ -975,7 +1129,14 @@ def calculate_battery_charge_decision(
     for hour in range(24):
         attributes[f"hour_{hour}"] = hour in cheapest_hour_set
 
-    if inputs.billing_method == _BILLING_METHOD_FIXED_PRICE:
+    if manual:
+        # Issue #105: the user's choice wins over every reason not to charge
+        # (and over a postponement).
+        status = _STATUS_YES_TOMORROW if charge_target > inputs.battery_min_soc else _STATUS_MANUAL_NO
+        if status == _STATUS_MANUAL_NO:
+            for hour in range(24):
+                attributes[f"hour_{hour}"] = False
+    elif inputs.billing_method == _BILLING_METHOD_FIXED_PRICE:
         status = "no_price"
     elif inputs.previous_status == _STATUS_DEFERRED:
         status = _STATUS_DEFERRED
@@ -1031,15 +1192,26 @@ class PwMngtBatteryChargeDecisionStoredData(restore_state.ExtraStoredData):
 
     status: str | None
     attributes: dict[str, Any]
+    # Issue #105: {"target", "night"} and the automation's plan for that
+    # night ({"night", "status", "attributes"}) -- see the module docstring.
+    manual: dict[str, Any] | None = None
+    auto_plan: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
-        return {"status": self.status, "attributes": self.attributes}
+        return {
+            "status": self.status,
+            "attributes": self.attributes,
+            "manual": self.manual,
+            "auto_plan": self.auto_plan,
+        }
 
     @classmethod
     def from_dict(cls, restored: dict[str, Any]) -> "PwMngtBatteryChargeDecisionStoredData":
         return cls(
             status=restored.get("status"),
             attributes=dict(restored.get("attributes") or {}),
+            manual=restored.get("manual"),
+            auto_plan=restored.get("auto_plan"),
         )
 
 
@@ -1063,12 +1235,18 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         self._forecast_tomorrow_entity_id = entity_map.get(ENTITY_KEY_PV_FORECAST_TOMORROW) or None
         self._pending_hourly_recheck: Any = None
         self._pending_price_change: Any = None
+        self._tomorrow_entity_id: str | None = None
+        # Issue #105 -- see PwMngtBatteryChargeDecisionStoredData.
+        self._manual: dict[str, Any] | None = None
+        self._auto_plan: dict[str, Any] | None = None
 
     @property
     def extra_restore_state_data(self) -> PwMngtBatteryChargeDecisionStoredData:
         return PwMngtBatteryChargeDecisionStoredData(
             status=self._attr_native_value,
             attributes=dict(self._attr_extra_state_attributes),
+            manual=self._manual,
+            auto_plan=self._auto_plan,
         )
 
     async def async_added_to_hass(self) -> None:
@@ -1083,6 +1261,18 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
                     key: data.attributes.get(key)
                     for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
                 }
+            self._manual = data.manual
+            self._auto_plan = data.auto_plan
+            self._prune_manual()
+
+        # Issue #105: the battery card's manual night target.
+        self.async_on_remove(
+            async_dispatcher_connect(
+                self.hass,
+                signal_manual_charge_target(self._entry.entry_id),
+                self._handle_manual_target,
+            )
+        )
 
         # Issue #52: clear on "manual", decide again on "auto".
         battery_mode_entity_id = pv_properties.battery_mode_entity_id(self.hass, self._entry)
@@ -1230,6 +1420,9 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         only re-decides (and stops) while the status is "yes_today", so
         nothing would ever stop it."""
         cancelled = self._attr_native_value == _STATUS_DEFERRED
+        # Issue #105: postponing (or cancelling it) ends a manual target.
+        self._manual = None
+        self._auto_plan = None
         if cancelled:
             self._attr_native_value = _STATUS_NOT_CALCULATED
         else:
@@ -1295,27 +1488,145 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
           (2026-10-14), not part of Node-RED's own Midnat chain -- see
           module docstring.
         Any other status (already "yes_today", "not_calculated",
-        "no_charge_needed") is left alone.
+        "no_charge_needed") is left alone. Issue #43: tonight's charge
+        target carries over with the hours (carry_to_today()).
         """
-        if self._attr_native_value == "yes_tomorrow":
-            # Issue #43: tonight's charge target carries over with the hours.
-            hours = {
-                key: value
-                for key, value in self._attr_extra_state_attributes.items()
-                if key.startswith("hour_") or key in _CARRIED_TO_TODAY
-            }
-            self._attr_native_value = "yes_today"
-            self._attr_extra_state_attributes = {
-                key: None for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
-            }
-            self._attr_extra_state_attributes.update(hours)
+        self._prune_manual()
+        status, attributes = carry_to_today(
+            self._attr_native_value or _STATUS_NOT_CALCULATED, self._attr_extra_state_attributes
+        )
+        if status != self._attr_native_value:
+            self._attr_native_value = status
+            self._attr_extra_state_attributes = attributes
             self.async_write_ha_state()
-        elif self._attr_native_value in ("no_price", "no_surplus", _STATUS_DEFERRED):
-            self._attr_native_value = _STATUS_NOT_CALCULATED
-            self._attr_extra_state_attributes = {
-                key: None for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
+
+    def _prune_manual(self) -> None:
+        """Issue #105: forget a manual target (and its snapshot) once its
+        night is over."""
+        today = dt_util.now().date().isoformat()
+        if self._manual is not None and str(self._manual.get("night")) < today:
+            self._manual = None
+        if self._auto_plan is not None and str(self._auto_plan.get("night")) < today:
+            self._auto_plan = None
+
+    def _tomorrow_prices_out(self) -> bool:
+        state = self.hass.states.get(self._tomorrow_entity_id) if self._tomorrow_entity_id else None
+        return state is not None and state.state == "on"
+
+    @callback
+    def _handle_manual_target(self, target: float | None) -> None:
+        """Issue #105: the user's own charge target (%) for the night, or
+        None to go back to the automation's -- see the module docstring."""
+        now = dt_util.now()
+        self._prune_manual()
+        night = manual_night(
+            self._attr_native_value or _STATUS_NOT_CALCULATED,
+            self._attr_extra_state_attributes,
+            now,
+            self._tomorrow_prices_out(),
+        )
+        if night is None:
+            LOGGER.warning("PwMngt: no night charge plan to change right now -- manual target ignored")
+            return
+        tonight = night == now.date().isoformat()
+        if target is None:
+            self._manual = None
+            snapshot = self._auto_plan if self._auto_plan and self._auto_plan.get("night") == night else None
+            self._auto_plan = None
+            if tonight:
+                self._restore_auto_plan_tonight(snapshot)
+            else:
+                if snapshot is not None:
+                    self._attr_native_value = snapshot["status"]
+                    self._attr_extra_state_attributes = {
+                        key: snapshot["attributes"].get(key)
+                        for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
+                    }
+                    self.async_write_ha_state()
+                self._run()
+            return
+        self._manual = {"night": night, "target": min(_MANUAL_CHARGE_CEILING, max(float(target), 0.0))}
+        if tonight:
+            self._apply_manual_tonight(now)
+        else:
+            self._run(force=True)
+
+    def _restore_auto_plan_tonight(self, snapshot: dict[str, Any] | None) -> None:
+        """Issue #105: reset during the night -- back to the automation's
+        plan as midnight left it (the running night can't be planned
+        again: tomorrow's prices are not out)."""
+        if snapshot is None:
+            status, attributes = _STATUS_NOT_CALCULATED, {}
+        else:
+            status, attributes = carry_to_today(snapshot["status"], snapshot["attributes"])
+        current = self._attr_extra_state_attributes
+        restored = {key: attributes.get(key) for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES}
+        restored.update({key: current.get(key) for key in _RUNTIME_ATTRIBUTES})
+        for key in _MANUAL_ATTRIBUTES:
+            restored[key] = None
+        self._attr_native_value = status
+        self._attr_extra_state_attributes = restored
+        if status != _STATUS_YES_TODAY:
+            self._stop_running_charge()
+        self.async_write_ha_state()
+
+    def _apply_manual_tonight(self, now: Any) -> None:
+        """Issue #105: a manual target for the night that is running -- the
+        standing plan gets it, charged in the cheapest of the night's
+        remaining hours (today's prices); at or below the min SoC the grid
+        charge stops for the rest of the night."""
+        assert self._manual is not None
+        night = self._manual["night"]
+        target = float(self._manual["target"])
+        current = dict(self._attr_extra_state_attributes)
+        if self._auto_plan is None or self._auto_plan.get("night") != night:
+            self._auto_plan = {
+                "night": night,
+                "status": self._attr_native_value or _STATUS_NOT_CALCULATED,
+                "attributes": current,
             }
-            self.async_write_ha_state()
+        auto_status, auto_attributes = carry_to_today(
+            self._auto_plan["status"], self._auto_plan["attributes"]
+        )
+        plan: dict[str, Any] = {key: None for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES}
+        if auto_status == _STATUS_YES_TODAY:
+            plan.update({key: auto_attributes.get(key) for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES})
+        plan.update({key: current.get(key) for key in _RUNTIME_ATTRIBUTES})
+        plan.update(
+            {
+                "sale_hours": [],
+                "sale_floors": [],
+                "sale_kwh": 0.0,
+                "sale_profit": 0.0,
+                "manual_target": target,
+                "manual_night": night,
+                "auto_charge_target": auto_charge_target(auto_status, auto_attributes),
+                "auto_status": auto_status,
+            }
+        )
+        for hour in range(24):
+            plan[f"hour_{hour}"] = False
+        if target > pv_properties.battery_min_soc(self.hass, self._entry):
+            needed = charge_hours_needed(
+                target,
+                self._read_float_pv(pv_properties.battery_size_entity_id, 0.0) or 0.0,
+                effective_max_charge(
+                    self._read_float_pv(pv_properties.battery_max_charge_effect_entity_id, None)
+                ),
+            )
+            prices = hub_properties.electricity_prices_today(
+                self.hass, self._entry, now.strftime("%Y-%m-%d"), surcharge=False
+            )
+            for hour in tonight_hours(prices, now.hour, needed):
+                plan[f"hour_{hour}"] = True
+            plan["charge_target"] = target
+            status = _STATUS_YES_TODAY
+        else:
+            status = _STATUS_NOT_CALCULATED
+            self._stop_running_charge()
+        self._attr_native_value = status
+        self._attr_extra_state_attributes = plan
+        self.async_write_ha_state()
 
     @callback
     def _handle_charge_watchdog(self, watchdog: dict) -> None:
@@ -1515,11 +1826,24 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         self._run()
 
     @callback
-    def _run(self) -> None:
+    def _run(self, force: bool = False) -> None:
+        """One planning run for tomorrow's prices. Issue #105: a manual
+        target for that night is applied, and a plan already made with it
+        is left alone (force: the user just changed it)."""
         if pv_properties.is_battery_mode_manual(self.hass, self._entry):
             # select.battery_mode (select.py) is "manual" -- the whole
             # charge/no-charge automation is switched off (Claus,
             # 2026-10-14). Leave the sensor exactly as it is.
+            return
+
+        self._prune_manual()
+        night = (dt_util.now() + timedelta(days=1)).date().isoformat()
+        manual = self._manual if self._manual and self._manual.get("night") == night else None
+        if (
+            manual is not None
+            and not force
+            and self._attr_extra_state_attributes.get("manual_night") == night
+        ):
             return
 
         tomorrow_entity_id = getattr(self, "_tomorrow_entity_id", None)
@@ -1599,6 +1923,22 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         )
 
         status, attributes = calculate_battery_charge_decision(inputs)
+        if manual is not None:
+            # Issue #105: the automation's own plan stays as the snapshot
+            # "reset" goes back to, and as what the card says it would do.
+            self._auto_plan = {"night": night, "status": status, "attributes": attributes}
+            auto_status, auto_attributes = status, attributes
+            status, attributes = calculate_battery_charge_decision(
+                replace(inputs, manual_target=float(manual["target"]))
+            )
+            attributes.update(
+                {
+                    "manual_target": float(manual["target"]),
+                    "manual_night": night,
+                    "auto_charge_target": auto_charge_target(auto_status, auto_attributes),
+                    "auto_status": auto_status,
+                }
+            )
         self._attr_native_value = status
         self._attr_extra_state_attributes = attributes
         self.async_write_ha_state()

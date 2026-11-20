@@ -363,7 +363,8 @@
           "no_charge_needed": "No (no charge needed)",
           "no_surplus": "No (surplus)",
           "no_price": "No (price)",
-          "no_deferred": "No (deferred)"
+          "no_deferred": "No (deferred)",
+          "no_manual": "No (manual)"
         }
       },
       "battery_hold_power": {
@@ -434,6 +435,20 @@
           "description": "DKK to add; negative to subtract."
         }
       }
+    },
+    "set_night_charge_target": {
+      "name": "Set night charge target",
+      "description": "Charges the battery from the grid to this SoC (up to 100 %) tonight instead of the automation's own target -- for this one night only. PwMngt does not re-plan the night while it stands, and no battery sale is planned. At or below the minimum SoC: no grid charge tonight.",
+      "fields": {
+        "target": {
+          "name": "Target",
+          "description": "The SoC (%) to charge to tonight; 0 = no grid charge."
+        }
+      }
+    },
+    "reset_night_charge_target": {
+      "name": "Reset night charge target",
+      "description": "Goes back to the automation's own night charge plan."
     }
   },
   "selector": {
@@ -450,6 +465,11 @@
         "battery_charging_savings_month": "Battery charging savings this month",
         "battery_charging_savings_year": "Battery charging savings this year"
       }
+    }
+  },
+  "exceptions": {
+    "no_night_plan": {
+      "message": "There is no night charge plan to change right now -- tonight's plan is made when tomorrow's prices are out."
     }
   }
 }
