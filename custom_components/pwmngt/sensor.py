@@ -880,6 +880,21 @@ PwM_PV_DAILY_INTEGRAL_SENSORS: list[tuple[SensorEntityDescription, str]] = [
         ),
         "inverter_own_consumption",
     ),
+    # Issue #108 (Claus 2026-11-20) -- no Node-RED counterpart: today's
+    # PV production, the daily view of PV production (#85). Integrates the
+    # same PV total, so it matches that sensor's rise over the day.
+    (
+        SensorEntityDescription(
+            key="pv_production_today",
+            name="PV production today",
+            icon="mdi:solar-power-variant",
+            device_class=SensorDeviceClass.ENERGY,
+            state_class=SensorStateClass.TOTAL_INCREASING,
+            native_unit_of_measurement="kWh",
+            suggested_display_precision=2,
+        ),
+        "pv_total",
+    ),
 ]
 
 

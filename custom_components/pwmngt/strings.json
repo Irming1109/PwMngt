@@ -418,6 +418,9 @@
       },
       "inverter_own_consumption_today": {
         "name": "Inverter own consumption today"
+      },
+      "pv_production_today": {
+        "name": "PV production today"
       }
     }
   },
