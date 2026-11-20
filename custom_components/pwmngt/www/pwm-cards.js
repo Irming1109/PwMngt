@@ -1095,6 +1095,8 @@ const PWM_BATTERY_CARD_STYLE = `
   .pwm-pct {
     font-weight: 700;
     font-size: 1.12em;
+    /* "47 %" must not break between the number and the sign. */
+    white-space: nowrap;
   }
   .pwm-note .pwm-pct {
     color: var(--primary-text-color);
