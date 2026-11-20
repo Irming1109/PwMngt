@@ -774,8 +774,7 @@ const PWM_BATTERY_TEXTS = {
       `Plus about ${kwh} for selling at ${hours} - expected profit about ${profit} kr`,
     saleToday: (hours) => `Today the battery sells at ${hours}`,
     pvRelease: (hours, floor) => `Today the battery uses solar power at ${hours} - down to ${floor}%`,
-    pvReleaseNote: (kwh, instead, gain) =>
-      `About ${kwh} that would otherwise be used at ${instead} - expected gain about ${gain} kr`,
+    pvReleaseNote: (kwh, instead) => `About ${kwh} that would otherwise be used at ${instead}`,
     pvKept: (kwh) =>
       `Solar power above the evening reserve (about ${kwh}) is kept for later - today's remaining hours aren't dearer`,
     pvNight: (hours) => `${hours} tonight`,
@@ -875,8 +874,7 @@ const PWM_BATTERY_TEXTS = {
       `Plus ca. ${kwh} til salg kl. ${hours} - forventet gevinst ca. ${profit} kr`,
     saleToday: (hours) => `I dag sælger batteriet kl. ${hours}`,
     pvRelease: (hours, floor) => `I dag bruger batteriet solstrøm kl. ${hours} - ned til ${floor} %`,
-    pvReleaseNote: (kwh, instead, gain) =>
-      `Ca. ${kwh}, der ellers skulle bruges kl. ${instead} - forventet gevinst ca. ${gain} kr`,
+    pvReleaseNote: (kwh, instead) => `Ca. ${kwh}, der ellers skulle bruges kl. ${instead}`,
     pvKept: (kwh) =>
       `Solstrøm over aftenreserven (ca. ${kwh}) gemmes til senere - dagens resterende timer er ikke dyrere`,
     pvNight: (hours) => `${hours} i nat`,
@@ -1005,6 +1003,16 @@ const PWM_BATTERY_CARD_STYLE = `
   .pwm-banner.bad { background: var(--error-color, #db4437); }
   .pwm-banner.warn { background: var(--warning-color, #ffa600); }
   .pwm-banner.info { background: var(--info-color, #039be5); }
+  /* A banner's own explanation sits inside it, so it can't be read as
+     belonging to the next banner (Claus, 2026-11-20). */
+  .pwm-banner-note {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid color-mix(in srgb, currentColor 35%, transparent);
+    font-size: 14px;
+    font-weight: 400;
+    opacity: 0.9;
+  }
   .pwm-note {
     font-size: 15px;
     color: var(--secondary-text-color);
@@ -1488,8 +1496,13 @@ class PwMBatteryCard extends HTMLElement {
     // Issues #59/#61: today's day plan, while hours of it are still ahead.
     const dayPlan = this._dayPlanToday();
     if (isAuto && dayPlan) {
-      todayGroup.appendChild(this._banner("ok", t.dayPlanToday(pwmHourRanges(dayPlan.hours), dayPlan.reserve)));
-      if (dayPlan.source === "today") todayGroup.appendChild(this._note(t.dayPlanFromToday));
+      todayGroup.appendChild(
+        this._banner(
+          "ok",
+          t.dayPlanToday(pwmHourRanges(dayPlan.hours), dayPlan.reserve),
+          dayPlan.source === "today" ? t.dayPlanFromToday : null
+        )
+      );
     }
     // Issue #71: the PV energy above the evening reserve -- used in
     // today's dearest hours, or why it is kept.
@@ -1757,10 +1770,16 @@ class PwMBatteryCard extends HTMLElement {
     return group;
   }
 
-  _banner(tone, text) {
+  _banner(tone, text, noteText = null) {
     const banner = document.createElement("div");
     banner.className = `pwm-banner ${tone || "info"}`;
     this._fillWithPercentages(banner, text);
+    if (noteText) {
+      const note = document.createElement("div");
+      note.className = "pwm-banner-note";
+      this._fillWithPercentages(note, noteText);
+      banner.appendChild(note);
+    }
     return banner;
   }
 
@@ -1942,7 +1961,6 @@ class PwMBatteryCard extends HTMLElement {
     const nodes = [];
     // Issue #81: all of today's hours while some are left.
     if (hours.some((hour) => hour >= now)) {
-      nodes.push(this._banner("ok", t.pvRelease(pwmHourRanges(hours), Math.round(Number(a.pv_release_floor)))));
       const instead = (Array.isArray(a.pv_release_instead_hours) ? a.pv_release_instead_hours : []).map(Number);
       const evening = instead.filter((hour) => hour >= 12);
       const night = instead.filter((hour) => hour < 12);
@@ -1950,7 +1968,11 @@ class PwMBatteryCard extends HTMLElement {
       if (evening.length) parts.push(pwmHourRanges(evening));
       if (night.length) parts.push(t.pvNight(pwmHourRanges(night)));
       nodes.push(
-        this._note(t.pvReleaseNote(t.kwh(Number(a.pv_release_kwh) || 0), parts.join(t.and), Math.round(Number(a.pv_release_gain) || 0)))
+        this._banner(
+          "ok",
+          t.pvRelease(pwmHourRanges(hours), Math.round(Number(a.pv_release_floor))),
+          t.pvReleaseNote(t.kwh(Number(a.pv_release_kwh) || 0), parts.join(t.and))
+        )
       );
     } else if (Number(a.pv_release_extra_kwh) >= 1) {
       nodes.push(this._note(t.pvKept(t.kwh(Number(a.pv_release_extra_kwh)))));
