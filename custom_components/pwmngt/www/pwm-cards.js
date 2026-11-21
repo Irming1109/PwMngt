@@ -2865,6 +2865,8 @@ const PWM_FLOW_TEXTS = {
       hide_below: "Hide below (W)",
       center_size: "House size",
       node_size: "Circle size",
+      text_size: "Text size (%)",
+      name_on_arc: "Name on an arc above the circle",
     },
   },
   da: {
@@ -2901,6 +2903,8 @@ const PWM_FLOW_TEXTS = {
       hide_below: "Skjul under (W)",
       center_size: "Husets størrelse",
       node_size: "Cirkelstørrelse",
+      text_size: "Tekststørrelse (%)",
+      name_on_arc: "Navn på en bue over cirklen",
     },
   },
 };
@@ -3063,10 +3067,14 @@ class PwMPowerFlowCard extends HTMLElement {
     const hasSide = side.length > 0;
     const VW = hasSide ? 140 : 100; // viewBox width (the height is always 100)
     const HX = hasSide ? 86 : 50; // the house's centre
-    const HY = 50;
     const NS = Math.max(12, Math.min(34, Number(c.node_size) || 26)); // wanted circle size
     const CD = Math.max(16, Math.min(40, Number(c.center_size) || 32)); // house diameter
     const CR = CD / 2;
+    const TS = Math.max(50, Math.min(200, Number(c.text_size) || 100)) / 100; // text scale
+    // A name on an arc above the circle needs room above the top circles (LH).
+    const ARC = !!c.name_on_arc;
+    const LH = ARC ? NS * 0.11 * TS + 1.5 : 0;
+    const HY = 50 + LH / 2; // moved down so the top circle's name fits above it
     const pct = (x) => (x / VW) * 100;
     const centerColor = c.center.color || "#29b6f6";
 
@@ -3077,15 +3085,16 @@ class PwMPowerFlowCard extends HTMLElement {
     // The circles must fit vertically (0..100) and not touch the house.
     let ORBIT = 39;
     let D = nr ? Math.min(NS, 2 * ORBIT * Math.sin(Math.min(ringStep, Math.PI) / 2) * 0.9) : NS;
-    ORBIT = Math.min(ORBIT, 49 - D / 2);
+    ORBIT = Math.min(ORBIT, 49 - D / 2 - LH / 2);
     ORBIT = Math.max(ORBIT, CR + D / 2 + 4);
-    D = Math.min(D, 2 * (49 - ORBIT));
+    D = Math.min(D, 2 * (49 - ORBIT - LH / 2));
     const R = D / 2;
 
     // Left column
     const ns = side.length;
-    const sideStep = ns > 1 ? 64 / (ns - 1) : 0;
-    const DS = ns > 1 ? Math.min(NS, sideStep * 0.9) : NS;
+    const sideTop = 18 + LH / 2;
+    const sideStep = ns > 1 ? (82 - sideTop) / (ns - 1) : 0;
+    const DS = ns > 1 ? Math.min(NS, sideStep * 0.9 - LH) : NS;
     const RS = DS / 2;
     const SX = RS + 1;
 
@@ -3100,7 +3109,7 @@ class PwMPowerFlowCard extends HTMLElement {
       };
     });
     side.forEach((i, k) => {
-      const y = ns > 1 ? 18 + k * sideStep : 50;
+      const y = ns > 1 ? sideTop + k * sideStep : 50;
       // Where the line meets the house's left side, spread by height.
       const ea = Math.PI - ((y - HY) / 50) * 0.75;
       const ex = HX + CR * Math.cos(ea);
@@ -3114,6 +3123,18 @@ class PwMPowerFlowCard extends HTMLElement {
       };
     });
 
+    // The name follows the circle: a 270° arc from bottom-left over the top to
+    // bottom-right, centred at the top, so long names still have room.
+    const arcLabel = (id, x, y, d, scale) => {
+      const size = d * scale * TS;
+      const ra = d / 2 + 0.8;
+      const a = (3 * Math.PI) / 4;
+      const sx = x - ra * Math.sin(a), sy = y - ra * Math.cos(a);
+      const ex = x + ra * Math.sin(a);
+      return `<path id="arc-${id}" d="M${sx} ${sy} A${ra} ${ra} 0 1 1 ${ex} ${sy}" fill="none"/>
+        <text class="arc-name" data-arc="${id}" font-size="${size}" text-anchor="middle"><textPath href="#arc-${id}" startOffset="50%"></textPath></text>`;
+    };
+    let labels = ARC ? arcLabel("c", HX, HY, CD, 0.10) : "";
     let svg = "";
     let nodes = "";
     c.devices.forEach((d, i) => {
@@ -3121,6 +3142,7 @@ class PwMPowerFlowCard extends HTMLElement {
       if (!g) return; // hidden
       const color = d.color || PWM_FLOW_COLORS[i % PWM_FLOW_COLORS.length];
       svg += `<g class="line" data-i="${i}" style="--c:${color}"><path class="base" d="${g.p}"/><path class="dots" d="${g.p}"/></g>`;
+      if (ARC) labels += arcLabel(i, g.x, g.y, g.d, 0.11);
       nodes += `<div class="node dev" data-i="${i}" style="left:${pct(g.x)}%;top:${g.y}%;width:${pct(g.d)}%;--c:${color}">
         <ha-icon></ha-icon><div class="val"></div><div class="name"></div><div class="sec"></div></div>`;
     });
@@ -3129,8 +3151,8 @@ class PwMPowerFlowCard extends HTMLElement {
       <style>${PWM_FLOW_CARD_STYLE}</style>
       <ha-card>
         <div class="header"><span class="title"></span><span class="date"></span></div>
-        <div class="stage" style="aspect-ratio:${VW}/100;max-width:${VW * 6.4}px;--k:${100 / VW}">
-          <svg viewBox="0 0 ${VW} 100">${svg}</svg>
+        <div class="stage" style="aspect-ratio:${VW}/100;max-width:${VW * 6.4}px;--k:${100 / VW};--ts:${TS}">
+          <svg viewBox="0 0 ${VW} 100">${svg}<g class="labels">${labels}</g></svg>
           <div class="node center" style="left:${pct(HX)}%;top:${HY}%;width:${pct(CD)}%;--c:${centerColor}">
             <ha-icon></ha-icon><div class="val"></div><div class="name"></div><div class="sec"></div>
           </div>
@@ -3138,8 +3160,9 @@ class PwMPowerFlowCard extends HTMLElement {
         </div>
       </ha-card>`;
 
-    const pick = (el) => ({
+    const pick = (el, id) => ({
       el,
+      arc: this.shadowRoot.querySelector(`.arc-name[data-arc="${id}"] textPath`),
       icon: el.querySelector("ha-icon"),
       val: el.querySelector(".val"),
       name: el.querySelector(".name"),
@@ -3150,9 +3173,9 @@ class PwMPowerFlowCard extends HTMLElement {
       background === "theme" ? "var(--ha-card-background, var(--card-background-color))" : background);
     this._nodes = [];
     this._lines = [];
-    this.shadowRoot.querySelectorAll(".node.dev").forEach((el) => (this._nodes[+el.dataset.i] = pick(el)));
+    this.shadowRoot.querySelectorAll(".node.dev").forEach((el) => (this._nodes[+el.dataset.i] = pick(el, el.dataset.i)));
     this.shadowRoot.querySelectorAll(".line").forEach((el) => (this._lines[+el.dataset.i] = el));
-    this._center = pick(this.shadowRoot.querySelector(".node.center"));
+    this._center = pick(this.shadowRoot.querySelector(".node.center"), "c");
     this._durations = [];
 
     this._nodes.forEach((node, i) =>
@@ -3173,8 +3196,10 @@ class PwMPowerFlowCard extends HTMLElement {
     node.icon.setAttribute("icon", cfg.icon || (state && state.attributes.icon) || defaultIcon);
     node.val.textContent = pwmFlowFormatPower(watts, language);
     const name = cfg.hide_name ? "" : cfg.name || (state && state.attributes.friendly_name) || "";
-    node.name.textContent = name;
-    node.name.style.display = name ? "" : "none";
+    // With name_on_arc the name sits on the arc above the circle instead of inside it.
+    if (node.arc) node.arc.textContent = name;
+    node.name.textContent = node.arc ? "" : name;
+    node.name.style.display = name && !node.arc ? "" : "none";
     const secondary = pwmFlowSecondaryText(this._hass, cfg.secondary);
     node.sec.textContent = secondary;
     node.sec.style.display = secondary ? "" : "none";
@@ -3262,6 +3287,7 @@ const PWM_FLOW_CARD_STYLE = `
   .line .dots { stroke-width:1.8; stroke-linecap:round; stroke-dasharray:0 5; opacity:0; }
   .line.active .dots { opacity:1; animation:pwm-flow var(--dur,1.5s) linear infinite; }
   .line.active.in .dots { animation-direction:reverse; }
+  .arc-name { fill:var(--pwm-flow-fg); font-weight:500; letter-spacing:.03em; }
   @keyframes pwm-flow { from { stroke-dashoffset:0; } to { stroke-dashoffset:-5; } }
   .node { position:absolute; transform:translate(-50%,-50%); aspect-ratio:1/1; border-radius:50%;
           box-sizing:border-box; border:calc(.45cqw * var(--k,1)) solid var(--c);
@@ -3274,13 +3300,14 @@ const PWM_FLOW_CARD_STYLE = `
   /* Text scales with the circle's own size. */
   .node { container-type:inline-size; }
   .node ha-icon { --mdc-icon-size:24cqw; color:var(--pwm-flow-fg); margin-bottom:2cqw; }
-  .val { font-weight:600; font-size:16cqw; line-height:1.15; white-space:nowrap; letter-spacing:.02em; }
-  .name, .sec { font-size:11cqw; line-height:1.2; white-space:pre-line; }
+  /* --ts is the card's text_size option (1 = 100 %). */
+  .val { font-weight:600; font-size:calc(16cqw * var(--ts,1)); line-height:1.15; white-space:nowrap; letter-spacing:.02em; }
+  .name, .sec { font-size:calc(11cqw * var(--ts,1)); line-height:1.2; white-space:pre-line; }
   .name { font-weight:500; max-width:100%; overflow-wrap:anywhere; }
   .sec { font-weight:500; opacity:.92; }
   .center ha-icon { --mdc-icon-size:24cqw; }
-  .center .val { font-size:14cqw; }
-  .center .name, .center .sec { font-size:10cqw; }
+  .center .val { font-size:calc(14cqw * var(--ts,1)); }
+  .center .name, .center .sec { font-size:calc(10cqw * var(--ts,1)); }
 `;
 
 pwmDefine("pwm-power-flow-card", PwMPowerFlowCard);
@@ -3295,6 +3322,8 @@ const PWM_FLOW_GENERAL_SCHEMA = [
     { name: "min_power", selector: { number: { min: 0, max: 1000, mode: "box", unit_of_measurement: "W" } } },
     { name: "node_size", selector: { number: { min: 12, max: 34, step: 1, mode: "slider" } } },
     { name: "center_size", selector: { number: { min: 16, max: 40, step: 1, mode: "slider" } } },
+    { name: "text_size", selector: { number: { min: 50, max: 200, step: 5, mode: "slider" } } },
+    { name: "name_on_arc", selector: { boolean: {} } },
   ] },
 ];
 
@@ -3420,10 +3449,11 @@ class PwMPowerFlowCardEditor extends HTMLElement {
     this.querySelector("#add").textContent = t.add;
     this.querySelector(".pwm-flow-hint").textContent = t.secondaryHint;
 
-    const generalKeys = ["title", "background", "show_date", "min_power", "node_size", "center_size"];
+    const generalKeys = ["title", "background", "show_date", "min_power", "node_size", "center_size", "text_size", "name_on_arc"];
     this._form(this.querySelector("#g"), PWM_FLOW_GENERAL_SCHEMA,
       { title: c.title, background: c.background, show_date: c.show_date, min_power: c.min_power,
-        node_size: c.node_size || 26, center_size: c.center_size || 32 },
+        node_size: c.node_size || 26, center_size: c.center_size || 32,
+        text_size: c.text_size || 100, name_on_arc: c.name_on_arc },
       t.labels,
       (v) => {
         generalKeys.forEach((key) => {
