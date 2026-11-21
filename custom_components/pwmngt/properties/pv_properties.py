@@ -36,6 +36,14 @@ def battery_data_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | Non
     return _pv_entity_id(hass, entry, "sensor", "battery_data")
 
 
+def inverter_own_consumption_today_entity_id(
+    hass: HomeAssistant, entry: ConfigEntry
+) -> str | None:
+    """Entity id of the inverter's own consumption today (kWh, issue #77
+    -- PwM_PV_DAILY_INTEGRAL_SENSORS in sensor.py)."""
+    return _pv_entity_id(hass, entry, "sensor", "inverter_own_consumption_today")
+
+
 def solar_data_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
     """Entity id of data/solar_data.py's solar_data sensor (its
     "pv_forecast_8_16_tomorrow" etc. attributes -- Old:

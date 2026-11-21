@@ -55,6 +55,15 @@ Deliberate differences from Node-RED (Claus, 2026-11-03):
 - day_hourly_average_adjusted (issue #59, Claus 2026-11-09): each hour
   06-17 on its own, without the chargers -- the night charge can then
   cover the expensive daytime hours too (data/battery_charge_decision.py).
+- The inverter's own use (issue #111, Claus 2026-11-21): where the
+  property counter leaves it out (CONSUMPTION_EXCLUDES_INVERTER_PLATFORMS
+  -- Growatt), the evening/night figures (17-24 + 00-06) get it added
+  back, so Battery nightly target and the night charge plan for what the
+  battery really delivers: on Claus's Growatt ~288 W on top of the
+  house's ~2.2 kW while discharging (~13 %, against TARGET_MARGIN's 7 %).
+  Hours with a grid charge are left out -- that loss is paid by the grid,
+  not the battery. The daytime figures stay as measured: they are set
+  against Solcast's forecast, which already is the inverter's output.
 """
 
 import asyncio
@@ -75,12 +84,14 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     CONF_ENTITY_MAP,
+    CONSUMPTION_EXCLUDES_INVERTER_PLATFORMS,
     DOMAIN,
     ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY,
     ENTITY_KEY_BATTERY_GRID_CHARGED_DAY,
     ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL,
 )
 from ..devices import CHARGERS, pv_device_info
+from ..helpers.entity_registry_helper import entity_platform
 from ..helpers.history_helper import fetch_state_changes_since
 from ..helpers.state_helper import read_float_state
 from ..helpers.statistics_helper import fetch_hourly_sums
@@ -143,6 +154,10 @@ PwM_CONSUMPTION_DATA_ATTRIBUTES: list[str] = [
     "car_charger_consumption",
     # 08-16 -- not implemented yet (no heat pump category).
     "heat_pump_consumption",
+    # Issue #111: the inverter's own use (kWh) in the night hours 17-24 +
+    # 00-06 without grid-charge hours -- already part of the evening/night
+    # averages above. None where the property counter counts it itself.
+    "inverter_own_use_night_average",
     # Diagnostics, not averages: how many days the histories hold, and
     # the newest one (ISO date).
     "history_days",
@@ -178,8 +193,9 @@ _MAX_PLAUSIBLE_FULL_DAY_KWH = 250
 
 # Part of the source signature, so a change in what each history entry
 # holds rebuilds the histories from Recorder once. v2: nighttime_adjusted,
-# v3: late_evening (issue #58), v4: the day's single hours (issue #59).
-_HISTORY_FORMAT = "v4"
+# v3: late_evening (issue #58), v4: the day's single hours (issue #59),
+# v5: the inverter's own use in the evening/night figures (issue #111).
+_HISTORY_FORMAT = "v5"
 
 # Trimmed averages (see _average()): drop this share of the days at each
 # end -- one day at 7 days of history, two at 14, three at 21-30 -- but
@@ -366,7 +382,7 @@ def _average(
 def calculate_daytime_averages(
     history: list[dict[str, Any]], period_days: int, newest: date
 ) -> dict[str, float | None]:
-    """The 8 averages the daytime history supplies. Old Node-RED context
+    """The averages the daytime history supplies. Old Node-RED context
     list: "Dagtime_forbrug_liste"."""
     return {
         "early_morning_average": _average(history, "early_morning", period_days, newest),
@@ -388,6 +404,9 @@ def calculate_daytime_averages(
         ],
         "car_charger_consumption": _average(
             history, "car_charger", period_days, newest, trim=False
+        ),
+        "inverter_own_use_night_average": _average(
+            history, "inverter_night", period_days, newest
         ),
     }
 
@@ -479,11 +498,60 @@ def night_grid_charge(
     return _charger_consumption(series, [entity_id], timestamps, ((17, 24), (0, 6)))
 
 
+# Issue #111: the hours (each the hour starting at it) the inverter's own
+# use is added to, per figure -- the evening/night ones the battery covers.
+_INVERTER_EVENING_HOURS: tuple[int, ...] = (17, 18, 19, 20)
+_INVERTER_LATE_EVENING_HOURS: tuple[int, ...] = (21, 22, 23)
+_INVERTER_NIGHT_HOURS: tuple[int, ...] = (
+    *_INVERTER_EVENING_HOURS, *_INVERTER_LATE_EVENING_HOURS, 0, 1, 2, 3, 4, 5
+)
+# An hour whose grid charge reaches this (kWh) is a charge hour.
+_GRID_CHARGE_HOUR_KWH = 0.1
+
+
+def inverter_own_use(
+    day: date,
+    series: dict[str, dict[int, float]],
+    own_entity_id: str,
+    grid_charge_entity_id: str | None,
+    hours: tuple[int, ...],
+) -> float | None:
+    """Issue #111: kWh the inverter used itself in the given hours of day,
+    without the hours the battery charged from the grid (that loss is paid
+    by the grid, not the battery) or the grid-charge counter has no value
+    for. None if the own-use counter has no value for any of the hours --
+    e.g. days before it existed (issue #77)."""
+    tz = dt_util.get_default_time_zone()
+    own = series.get(own_entity_id, {})
+    charge = series.get(grid_charge_entity_id, {}) if grid_charge_entity_id else None
+    total = 0.0
+    found = False
+    for hour in hours:
+        start = int(datetime.combine(day, time(hour), tzinfo=tz).timestamp())
+        end = start + 3600
+        at_start, at_end = own.get(start), own.get(end)
+        if at_start is None or at_end is None or at_end < at_start:
+            continue
+        found = True
+        if charge is not None:
+            charge_start, charge_end = charge.get(start), charge.get(end)
+            if (
+                charge_start is None
+                or charge_end is None
+                or charge_end - charge_start >= _GRID_CHARGE_HOUR_KWH
+            ):
+                continue
+        total += at_end - at_start
+    return round(total, 2) if found else None
+
+
 def build_day(
     day: date,
     series: dict[str, dict[int, float]],
     property_entity_id: str,
     charger_entity_ids: list[str],
+    own_entity_id: str | None = None,
+    grid_charge_entity_id: str | None = None,
 ) -> dict[str, Any] | None:
     """One day's history figures from each source's cumulative values
     (see fetch_hourly_sums()/cumulative_at_boundaries()), or None if the
@@ -493,7 +561,11 @@ def build_day(
     configured charger has no data for 08/16 that day (or implausibly
     went down) -- daytime_adjusted is then None too, and that day is
     left out of those two averages only (see _average()). The same goes
-    for nighttime_adjusted with the chargers' 17-24 and 00-06 values."""
+    for nighttime_adjusted with the chargers' 17-24 and 00-06 values.
+
+    own_entity_id (issue #111): the inverter's own use, added to evening,
+    late_evening and nighttime (see inverter_own_use()) -- None where the
+    property counter counts it itself."""
     timestamps = {
         hour: int(moment.timestamp()) for hour, moment in day_boundaries(day).items()
     }
@@ -513,6 +585,19 @@ def build_day(
             values,
         )
         return None
+
+    values["inverter_night"] = None
+    if own_entity_id:
+        for name, hours in (
+            ("evening", _INVERTER_EVENING_HOURS),
+            ("late_evening", _INVERTER_LATE_EVENING_HOURS),
+            ("nighttime", _INVERTER_NIGHT_HOURS),
+        ):
+            own_use = inverter_own_use(day, series, own_entity_id, grid_charge_entity_id, hours)
+            if own_use is not None:
+                values[name] = round(values[name] + own_use, 2)
+            if name == "nighttime":
+                values["inverter_night"] = own_use
 
     car_charger = _charger_consumption(series, charger_entity_ids, timestamps, ((8, 16),))
     car_charger_night = _charger_consumption(
@@ -696,6 +781,21 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
             ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL
         ) or None
 
+    def _grid_charge_entity_id(self) -> str | None:
+        """The battery's grid-charge counter (hourly, else daily)."""
+        entity_map = self._entry.options.get(CONF_ENTITY_MAP, {})
+        return entity_map.get(ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY) or entity_map.get(
+            ENTITY_KEY_BATTERY_GRID_CHARGED_DAY
+        ) or None
+
+    def _inverter_own_use_entity_id(self, property_entity_id: str) -> str | None:
+        """Issue #111: the inverter's own use today, when the property
+        counter leaves it out (CONSUMPTION_EXCLUDES_INVERTER_PLATFORMS)."""
+        platform = entity_platform(self.hass, property_entity_id)
+        if platform not in CONSUMPTION_EXCLUDES_INVERTER_PLATFORMS:
+            return None
+        return pv_properties.inverter_own_consumption_today_entity_id(self.hass, self._entry)
+
     def _charger_entity_ids(self) -> list[str]:
         """Each installed charger's consumption source -- see
         charger_properties.consumption_source_entity_ids()."""
@@ -715,9 +815,14 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
                 )
                 return
             charger_entity_ids = self._charger_entity_ids()
+            own_entity_id = self._inverter_own_use_entity_id(property_entity_id)
+            grid_charge_entity_id = self._grid_charge_entity_id() if own_entity_id else None
+            own_sources = [
+                entity_id for entity_id in (own_entity_id, grid_charge_entity_id) if entity_id
+            ]
 
             signature = "|".join(
-                [_HISTORY_FORMAT, property_entity_id, *sorted(charger_entity_ids)]
+                [_HISTORY_FORMAT, property_entity_id, *sorted(charger_entity_ids), *own_sources]
             )
             if signature != self._source_signature:
                 if self._source_signature is not None:
@@ -743,11 +848,18 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
 
             if missing:
                 series = await self._async_fetch_series(
-                    [property_entity_id, *charger_entity_ids], missing
+                    [property_entity_id, *charger_entity_ids, *own_sources], missing
                 )
                 added = 0
                 for day in missing:
-                    values = build_day(day, series, property_entity_id, charger_entity_ids)
+                    values = build_day(
+                        day,
+                        series,
+                        property_entity_id,
+                        charger_entity_ids,
+                        own_entity_id,
+                        grid_charge_entity_id,
+                    )
                     if values is None:
                         continue
                     self._add_day(values)
@@ -768,10 +880,7 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
         counts the battery's grid charge too (see
         consumption_includes_battery_charge()); cleared once it doesn't.
         Left as it is while there's too little to tell."""
-        entity_map = self._entry.options.get(CONF_ENTITY_MAP, {})
-        grid_charge_entity_id = entity_map.get(
-            ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY
-        ) or entity_map.get(ENTITY_KEY_BATTERY_GRID_CHARGED_DAY)
+        grid_charge_entity_id = self._grid_charge_entity_id()
         if not grid_charge_entity_id:
             return
         night_use = {
@@ -856,6 +965,7 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
                     for hour in CONSUMPTION_DAY_HOURS
                 },
                 "car_charger": values["car_charger"],
+                "inverter_night": values["inverter_night"],
             }
         )
         self._evening_history.append({"date": day, "evening": values["evening"]})

@@ -468,6 +468,15 @@ INVERTER_HOUSE_POWER_NAMES: dict[str, str] = {
     GROWATT_MODBUS_PLATFORM: GROWATT_MODBUS_HOUSE_CONSUMPTION,
 }
 
+# Issue #111: inverter integrations whose house consumption counter (the
+# one auto-detect picks for ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL) leaves
+# the inverter's own use out -- data/consumption_data.py then adds it back
+# for the hours the battery covers. Growatt's "Load Energy Total" is the
+# load output only (Claus 2026-11-21: 4-6 kWh a day below the energy
+# balance). Not Kostal: its "Home Consumption Total" already carries most
+# of the inverter's loss (issue #56).
+CONSUMPTION_EXCLUDES_INVERTER_PLATFORMS: frozenset[str] = frozenset({GROWATT_MODBUS_PLATFORM})
+
 # ---------------------------------------------------------------------------
 # Segments: optional areas of PwMngt a given installation may not need.
 # "Power Management" itself isn't in this list -- it's mandatory and always
