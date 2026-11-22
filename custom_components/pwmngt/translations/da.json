@@ -424,6 +424,20 @@
     "reset_night_charge_target": {
       "name": "Nulstil nattens ladeprocent",
       "description": "Går tilbage til automatikkens egen plan for natladningen."
+    },
+    "charge_now": {
+      "name": "Lad batteriet nu",
+      "description": "Lader batteriet fra nettet nu med en andel af Battery max charge effect, til SoC når target (eller ladningen afbrydes). Tager over fra automatikken, mens den kører; hovedsikringen tjekkes stadig.",
+      "fields": {
+        "power": {
+          "name": "Effekt",
+          "description": "Andel (%) af Battery max charge effect."
+        },
+        "target_soc": {
+          "name": "Target SoC",
+          "description": "Den SoC (%), ladningen stopper ved."
+        }
+      }
     }
   },
   "selector": {

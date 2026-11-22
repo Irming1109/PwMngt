@@ -452,6 +452,20 @@
     "reset_night_charge_target": {
       "name": "Reset night charge target",
       "description": "Goes back to the automation's own night charge plan."
+    },
+    "charge_now": {
+      "name": "Charge battery now",
+      "description": "Charges the battery from the grid now at a share of Battery max charge effect, until the SoC reaches the target (or the charge is stopped). Takes over from the automation while it runs; the main fuse check still applies.",
+      "fields": {
+        "power": {
+          "name": "Power",
+          "description": "Share (%) of Battery max charge effect."
+        },
+        "target_soc": {
+          "name": "Target SoC",
+          "description": "The SoC (%) the charge stops at."
+        }
+      }
     }
   },
   "selector": {

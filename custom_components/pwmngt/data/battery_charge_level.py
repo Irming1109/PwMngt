@@ -135,7 +135,8 @@ battery_command select keeps the level in its manual_charge attribute
 (restored across a restart) and, while it is set, ignores every command
 from the automation -- night charge, sell decision, battery hold,
 postpone. It ends only when the user picks another command ("Stop
-charging"), when the SoC reaches 100 %, or when the battery has shown no
+charging"), when the SoC reaches 100 % -- issue #112: or the SoC chosen
+with it on the battery card (pwmngt.charge_now) --, or when the battery has shown no
 charge power for 5 minutes while a level was set (the inverter stopped at
 its own max SoC; not counted while the fuse holds it at "internal" or in
 the first 2 minutes after a new command). Meanwhile the fuse check always
@@ -180,7 +181,9 @@ from ..helpers.state_helper import read_float_state
 from ..properties import hub_properties, pv_properties
 from ..select import (
     ATTR_MANUAL_CHARGE,
+    ATTR_MANUAL_CHARGE_TARGET,
     CHARGE_NOW_OPTIONS,
+    MANUAL_CHARGE_FULL,
     signal_manual_charge,
     signal_set_battery_command,
 )
@@ -261,7 +264,6 @@ _NIGHT_EXTEND = "extend"
 # docstring. Checked this often while one runs (step up, stop checks); the
 # fuse trigger still steps down at once.
 _MANUAL_CHECK_SECONDS = 30
-_MANUAL_FULL_SOC = 100.0
 # No charge power for this long while a level is set: the inverter has
 # stopped on its own max SoC -- end the manual charge.
 _MANUAL_IDLE_STOP_SECONDS = 5 * 60
@@ -972,8 +974,9 @@ class PwMngtBatteryChargeLevelController:
         has stopped charging on its own, otherwise hold the requested
         level as far as the main fuse allows."""
         soc = self._read_soc()
-        if soc is not None and soc >= _MANUAL_FULL_SOC:
-            self._end_manual_charge("SoC reached 100 %")
+        target = self._read_manual_charge_target()
+        if soc is not None and soc >= target:
+            self._end_manual_charge(f"SoC reached {target:g} %")
             return
         if self._manual_charge_idle_too_long():
             self._end_manual_charge("no charge power for 5 minutes")
@@ -1141,7 +1144,7 @@ class PwMngtBatteryChargeLevelController:
         if soc is None:
             return False
         if self._read_manual_charge() is not None:
-            return soc >= _MANUAL_IDLE_STOP_MIN_SOC
+            return soc >= min(self._read_manual_charge_target(), _MANUAL_IDLE_STOP_MIN_SOC)
         target = self._read_target()
         return target is not None and soc >= target
 
@@ -1365,6 +1368,17 @@ class PwMngtBatteryChargeLevelController:
         state = self.hass.states.get(entity_id) if entity_id else None
         value = state.attributes.get(ATTR_MANUAL_CHARGE) if state is not None else None
         return value if value in CHARGE_NOW_OPTIONS else None
+
+    def _read_manual_charge_target(self) -> float:
+        """Issue #112: the SoC (%) a running manual charge stops at -- 100
+        when not chosen."""
+        entity_id = pv_properties.battery_command_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        value = state.attributes.get(ATTR_MANUAL_CHARGE_TARGET) if state is not None else None
+        try:
+            return float(value) if value is not None else MANUAL_CHARGE_FULL
+        except (TypeError, ValueError):
+            return MANUAL_CHARGE_FULL
 
     def _read_tariff_fuse_size(self) -> float | None:
         entity_id = hub_properties.tariff_fuse_size_entity_id(self.hass, self._entry)

@@ -725,7 +725,7 @@ const PWM_BATTERY_TEXTS = {
     charging: (level) => `Battery is charging at ${level}`,
     autoControls: "Tonight's charge is controlled by the automation",
     manualCharging: (level) => `Manual charge at ${level}`,
-    manualRuns: "Runs until 100% SoC or until stopped",
+    manualRuns: (target) => `Runs until ${target}% SoC or until stopped`,
     reducedByFuse: (level) => `Reduced from ${level} because of the main fuse - goes up again when there is room`,
     pausedByFuse: (level) => `Manual charge at ${level} paused because of the main fuse`,
     kw: (value) => `${pwmKwText(value, ".")} kW`,
@@ -790,15 +790,25 @@ const PWM_BATTERY_TEXTS = {
     surplusCoversWorth: (hours, kwh) =>
       `Tomorrow's PV surplus (${kwh}, cautious estimate) covers ${hours}, the hours tonight's charge would cover`,
     manualTitle: "Manual battery control",
-    chargeNow: (level) => `Charge now ${level}`,
+    // Issue #112: the title while the manual buttons are unlocked.
+    manualActiveTitle: "Manual control active",
+    // Issue #110: the title while the manual buttons are locked and the
+    // automation runs.
+    autoTitle: "Automatic operation active",
     stop: "Stop charging",
     postpone: "Postpone charging 1 day",
     cancelPostpone: "Cancel postponement",
     disableAuto: "Disable automatic charging",
     enableAuto: "Enable automatic charging",
-    unlockHold: "🔒 Manual control - hold 2 s",
+    unlockHold: "🔒 Unlock manual control - hold 2 s",
     holdHint: "Hold the button for 2 seconds",
     relock: "🔓 Lock",
+    relockToAuto: "🔒 Lock and go back to automatic operation",
+    // Issue #112: one "Charge now" with power and target SoC.
+    chargeNowButton: "Charge now",
+    chargePower: (level) => `Power: ${level}`,
+    chargeUntil: (pct) => `Charge to: ${pct}%`,
+    startCharge: "Start charging",
     soc: "Battery SoC",
     missing: "PwMngt battery entities not found - is the Solar PV Plant set up?",
     // Issue #105: the night's charge target, chosen by hand.
@@ -816,9 +826,9 @@ const PWM_BATTERY_TEXTS = {
     quickNone: "No charge",
     quickAuto: (label) => `Automatic (${label})`,
     quickFull: (pct) => `Full (${pct}%)`,
-    useTonight: "Use tonight",
+    useTonight: "Save and use tonight",
     resetAuto: "Reset to automatic",
-    close: "Close",
+    close: "Cancel",
   },
   da: {
     title: "Hus batteri styring",
@@ -826,7 +836,7 @@ const PWM_BATTERY_TEXTS = {
     charging: (level) => `Batteri lader nu med ${level}`,
     autoControls: "Nattens ladning styres af automatikken",
     manualCharging: (level) => `Manuel ladning med ${level}`,
-    manualRuns: "Kører til 100 % SoC, eller til den afbrydes",
+    manualRuns: (target) => `Kører til ${target} % SoC, eller til den afbrydes`,
     reducedByFuse: (level) => `Sænket fra ${level} pga. hovedsikring - går op igen, når der er plads`,
     pausedByFuse: (level) => `Manuel ladning med ${level} sat på pause pga. hovedsikring`,
     kw: (value) => `${pwmKwText(value, ",")} kW`,
@@ -891,15 +901,25 @@ const PWM_BATTERY_TEXTS = {
     surplusCoversWorth: (hours, kwh) =>
       `Forventet sol-overskud i morgen (${kwh}, forsigtigt skøn) dækker kl. ${hours}, de timer natladningen skulle dække`,
     manualTitle: "Manuel betjening af batteri",
-    chargeNow: (level) => `Lad nu ${level}`,
+    // Issue #112: overskriften, mens de manuelle knapper er låst op.
+    manualActiveTitle: "Manuel betjening aktiv",
+    // Issue #110: overskriften, mens de manuelle knapper er låst og
+    // automatikken kører.
+    autoTitle: "Automatisk drift aktiv",
     stop: "Afbryd ladning",
     postpone: "Udskyd ladning 1 dag",
     cancelPostpone: "Annuller udskydning",
     disableAuto: "Deaktiver automatisk ladning",
     enableAuto: "Aktiver automatisk ladning",
-    unlockHold: "🔒 Manuel betjening - hold 2 sek.",
+    unlockHold: "🔒 Lås op for manuel betjening - hold 2 sek.",
     holdHint: "Hold knappen inde i 2 sekunder",
     relock: "🔓 Lås",
+    relockToAuto: "🔒 Lås og gå tilbage til automatisk drift",
+    // Issue #112: én "Lad nu" med effekt og target-SoC.
+    chargeNowButton: "Lad nu",
+    chargePower: (level) => `Effekt: ${level}`,
+    chargeUntil: (pct) => `Lad til: ${pct} %`,
+    startCharge: "Start ladning",
     soc: "Batteri SoC",
     missing: "PwMngt's batteri-entities blev ikke fundet - er Solar PV Plant sat op?",
     // Issue #105: nattens ladeprocent, valgt manuelt.
@@ -917,9 +937,9 @@ const PWM_BATTERY_TEXTS = {
     quickNone: "Ingen ladning",
     quickAuto: (label) => `Automatik (${label})`,
     quickFull: (pct) => `Fuld (${pct} %)`,
-    useTonight: "Brug i nat",
+    useTonight: "Gem og brug i nat",
     resetAuto: "Nulstil til automatik",
-    close: "Luk",
+    close: "Afbryd",
   },
 };
 
@@ -961,7 +981,6 @@ function pwmLocalDate(date) {
   ).padStart(2, "0")}`;
 }
 
-const PWM_CHARGE_LEVELS = [25, 50, 75, 100];
 // Issue #110: how long "Manual control" is held, and how long the
 // guarded buttons stay visible.
 const PWM_MANUAL_HOLD_MS = 2000;
@@ -1143,6 +1162,9 @@ const PWM_BATTERY_CARD_STYLE = `
     margin-top: 8px;
     padding-top: 10px;
   }
+  .pwm-editor + .pwm-buttons {
+    margin-top: 8px;
+  }
   .pwm-editor-row {
     display: flex;
     align-items: center;
@@ -1164,6 +1186,13 @@ const PWM_BATTERY_CARD_STYLE = `
     background: color-mix(in srgb, var(--primary-text-color) 6%, var(--secondary-background-color));
     color: var(--primary-text-color);
     cursor: pointer;
+  }
+  .pwm-editor-value.pwm-editor-label {
+    min-width: 140px;
+    font-size: 16px;
+  }
+  .pwm-group .pwm-buttons button.active {
+    border-color: var(--primary-color);
   }
   .pwm-editor-value {
     min-width: 76px;
@@ -1263,7 +1292,7 @@ class PwMBatteryCard extends HTMLElement {
     // Issue #105: leave the night editor alone while it is open -- a
     // re-render would reset the slider under the user's finger. Same for
     // the "Manual control" button while it is being held (#110).
-    if ((this._editor && this._editor.open) || this._holding) return;
+    if (this._editing() || this._holding) return;
     const signature = this._stateSignature();
     if (signature === this._signature) return;
     this._signature = signature;
@@ -1479,7 +1508,7 @@ class PwMBatteryCard extends HTMLElement {
         statusGroup.appendChild(this._banner("ok", t.manualCharging(this._chargeLevel(t, chargingPct))));
       }
       statusGroup.appendChild(
-        this._note(chargingPct !== null && chargingPct < manualPct ? t.reducedByFuse(this._chargeLevel(t, manualPct)) : t.manualRuns)
+        this._note(chargingPct !== null && chargingPct < manualPct ? t.reducedByFuse(this._chargeLevel(t, manualPct)) : t.manualRuns(Math.round(this._manualChargeTarget())))
       );
     } else if (chargingPct !== null) {
       statusGroup.appendChild(this._banner("ok", t.charging(this._chargeLevel(t, chargingPct))));
@@ -1559,7 +1588,9 @@ class PwMBatteryCard extends HTMLElement {
     // Manual control.
     const title = document.createElement("div");
     title.className = "pwm-section-title";
-    title.textContent = t.manualTitle;
+    // Issue #110: while locked with the automation running, say so.
+    // Issue #112: unlocked, the manual control is active.
+    title.textContent = this._isUnlocked() ? t.manualActiveTitle : isAuto ? t.autoTitle : t.manualTitle;
     manualGroup.appendChild(title);
 
     // Issue #110: the buttons that take over from the automation sit
@@ -1581,31 +1612,41 @@ class PwMBatteryCard extends HTMLElement {
       buttons.appendChild(this._button(t.enableAuto, () => this._setMode("auto")));
     }
 
+    let relock = null;
     if (this._isUnlocked()) {
       const guarded = (text, action) =>
         this._button(text, () => {
           action();
           this._lockManual();
         });
-      for (const pct of PWM_CHARGE_LEVELS) {
-        if (pct === (manualPct !== null ? manualPct : chargingPct)) continue;
-        buttons.appendChild(
-          guarded(t.chargeNow(this._chargeLevel(t, pct)), () => this._setCommand(`charge_now_${pct}`))
-        );
-      }
+      // Issue #112: one "Charge now" -- it opens the power and target SoC
+      // sliders below.
+      const chargeNow = this._button(t.chargeNowButton, () => this._toggleChargeEditor(manualPct));
+      if (this._chargeEditor && this._chargeEditor.open) chargeNow.classList.add("active");
+      buttons.appendChild(chargeNow);
       if (this._ids.postpone && !deferred) {
         buttons.appendChild(guarded(t.postpone, postponeButton));
       }
       if (isAuto) {
         buttons.appendChild(guarded(t.disableAuto, () => this._setMode("manual")));
       }
-      const relock = this._button(t.relock, () => this._lockManual());
+      relock = this._button(isAuto ? t.relockToAuto : t.relock, () => this._lockManual());
       relock.className = "pwm-wide";
-      buttons.appendChild(relock);
     } else {
       buttons.appendChild(this._holdButton(t.unlockHold, t.holdHint, () => this._unlockManual()));
     }
     manualGroup.appendChild(buttons);
+    // Issue #112: the "Charge now" sliders right under its button, above
+    // the lock.
+    if (relock && this._chargeEditor && this._chargeEditor.open) {
+      manualGroup.appendChild(this._chargeNowEditor(t));
+      const lockRow = document.createElement("div");
+      lockRow.className = "pwm-buttons";
+      lockRow.appendChild(relock);
+      manualGroup.appendChild(lockRow);
+    } else if (relock) {
+      buttons.appendChild(relock);
+    }
 
     // SoC while charging (Node-RED: the gauge under "Lad nu").
     const soc = this._state("soc");
@@ -1806,6 +1847,91 @@ class PwMBatteryCard extends HTMLElement {
     actions.appendChild(this._button(t.close, () => this._closeEditor()));
 
     panel.append(row, autoNote, quick, actions);
+    return panel;
+  }
+
+  /** Issue #105/#112: whether one of the card's editors is open. */
+  _editing() {
+    return Boolean((this._editor && this._editor.open) || (this._chargeEditor && this._chargeEditor.open));
+  }
+
+  /** Issue #112: the SoC (%) the running manual charge stops at. */
+  _manualChargeTarget() {
+    const command = this._state("command");
+    const target = command ? Number(command.attributes.manual_charge_target) : NaN;
+    return Number.isFinite(target) ? target : 100;
+  }
+
+  _toggleChargeEditor(manualPct) {
+    if (this._chargeEditor && this._chargeEditor.open) {
+      this._closeChargeEditor();
+      return;
+    }
+    this._chargeEditor = {
+      open: true,
+      power: manualPct !== null ? manualPct : 100,
+      soc: manualPct !== null ? this._manualChargeTarget() : 100,
+    };
+    this._signature = undefined;
+    this._render();
+  }
+
+  _closeChargeEditor() {
+    this._chargeEditor = { open: false };
+    this._rerender();
+  }
+
+  /**
+   * Issue #112: "Charge now" -- power in 25 % steps of Battery max charge
+   * effect (shown in kW) and the SoC it stops at, 1 % steps from the min
+   * SoC to 100 % (default 100 %).
+   */
+  _chargeNowEditor(t) {
+    const editor = this._chargeEditor;
+    const minSoc = Math.max(1, Math.round(this._minSoc()));
+    const panel = document.createElement("div");
+    panel.className = "pwm-editor";
+
+    const sliderRow = (min, max, step, value, onInput) => {
+      const row = document.createElement("div");
+      row.className = "pwm-editor-row";
+      const slider = document.createElement("input");
+      slider.type = "range";
+      slider.min = String(min);
+      slider.max = String(max);
+      slider.step = String(step);
+      slider.value = String(value);
+      const shown = document.createElement("div");
+      shown.className = "pwm-editor-value pwm-editor-label";
+      slider.addEventListener("input", () => onInput(Number(slider.value), shown));
+      row.append(slider, shown);
+      onInput(value, shown);
+      return row;
+    };
+
+    const power = sliderRow(25, 100, 25, editor.power, (value, shown) => {
+      editor.power = value;
+      shown.textContent = t.chargePower(this._chargeLevel(t, value));
+    });
+    editor.soc = Math.min(100, Math.max(minSoc, Math.round(editor.soc)));
+    const soc = sliderRow(minSoc, 100, 1, editor.soc, (value, shown) => {
+      editor.soc = value;
+      shown.textContent = t.chargeUntil(value);
+    });
+
+    const actions = document.createElement("div");
+    actions.className = "pwm-buttons pwm-editor-actions";
+    const start = this._button(t.startCharge, () => {
+      this._chargeEditor = { open: false };
+      Promise.resolve(
+        this._hass.callService("pwmngt", "charge_now", { power: editor.power, target_soc: editor.soc })
+      ).catch((err) => window.alert((err && err.message) || String(err)));
+      this._lockManual();
+    });
+    start.className = "primary";
+    actions.append(start, this._button(t.close, () => this._closeChargeEditor()));
+
+    panel.append(power, soc, actions);
     return panel;
   }
 
@@ -2183,7 +2309,7 @@ class PwMBatteryCard extends HTMLElement {
   /** Render now, unless the night editor is open (it renders when closed). */
   _rerender() {
     this._signature = undefined;
-    if (!this._hass || (this._editor && this._editor.open)) return;
+    if (!this._hass || this._editing()) return;
     this._signature = this._stateSignature();
     this._render();
   }
@@ -2847,6 +2973,10 @@ const PWM_FLOW_TEXTS = {
     placementSide: "Column on the left (PV/grid/battery)",
     flowOut: "Out of the house when positive (consumption, battery charging)",
     flowIn: "Into the house when positive (solar, grid import, battery discharging)",
+    roleAuto: "Automatic (PwMngt's own sensors)",
+    rolePv: "Solar (top)",
+    roleGrid: "Grid (middle)",
+    roleBattery: "Battery (bottom)",
     labels: {
       title: "Title",
       background: "Background (#000, theme, transparent)",
@@ -2863,6 +2993,7 @@ const PWM_FLOW_TEXTS = {
       subtract: "Subtract from the house's value",
       placement: "Placement",
       hide_below: "Hide below (W)",
+      role: "Role in the left column",
       center_size: "House size",
       node_size: "Circle size",
       text_size: "Text size (%)",
@@ -2885,6 +3016,10 @@ const PWM_FLOW_TEXTS = {
     placementSide: "Kolonne til venstre (PV/net/batteri)",
     flowOut: "Ud fra huset ved positiv værdi (forbrug, batteri der lader)",
     flowIn: "Ind i huset ved positiv værdi (sol, net-import, batteri der aflader)",
+    roleAuto: "Automatisk (PwMngt's egne sensorer)",
+    rolePv: "Solceller (øverst)",
+    roleGrid: "Net (midten)",
+    roleBattery: "Batteri (nederst)",
     labels: {
       title: "Titel",
       background: "Baggrund (#000, theme, transparent)",
@@ -2901,6 +3036,7 @@ const PWM_FLOW_TEXTS = {
       subtract: "Træk fra husets visning",
       placement: "Placering",
       hide_below: "Skjul under (W)",
+      role: "Rolle i venstre kolonne",
       center_size: "Husets størrelse",
       node_size: "Cirkelstørrelse",
       text_size: "Tekststørrelse (%)",
@@ -2988,6 +3124,49 @@ function pwmFlowMergeSecondary(ids, old) {
   });
 }
 
+// Issue #113: the left column's fixed roles -- solar on top, grid in the
+// middle, battery at the bottom -- recognised by PwMngt's own sensors when
+// the device has no "role" of its own.
+const PWM_FLOW_ROLES = ["pv", "grid", "battery"];
+const PWM_FLOW_ROLE_KEYS = { pv_total: "pv", grid_power: "grid", battery_power: "battery" };
+
+/**
+ * Issue #113: dot speed (seconds per dot spacing) -- a lot faster with more
+ * power, so the biggest flow stands out: 100 W ~3.6 s, 1 kW 2 s, 4.5 kW
+ * ~0.7 s, 10 kW ~0.35 s.
+ */
+function pwmFlowDuration(watts) {
+  return Math.max(0.3, Math.min(4, 4 / (1 + Math.abs(watts) / 1000)));
+}
+
+/**
+ * Issue #113: how PV, grid and battery power split between each other and
+ * the house (all W, >= 0). pv = production; grid > 0 buying, < 0 selling;
+ * battery > 0 discharging, < 0 charging. Selling comes from the PV first,
+ * then the battery; charging from the PV first, then the grid; the rest
+ * goes to the house.
+ */
+function pwmFlowSplit(pv, grid, battery) {
+  const p = Math.max(pv || 0, 0);
+  const gridIn = Math.max(grid || 0, 0);
+  const gridOut = Math.max(-(grid || 0), 0);
+  const batteryOut = Math.max(battery || 0, 0);
+  const batteryIn = Math.max(-(battery || 0), 0);
+  const pvToGrid = Math.min(p, gridOut);
+  const batteryToGrid = Math.min(batteryOut, gridOut - pvToGrid);
+  const pvToBattery = Math.min(p - pvToGrid, batteryIn);
+  const gridToBattery = Math.min(gridIn, batteryIn - pvToBattery);
+  return {
+    pvToGrid,
+    batteryToGrid,
+    pvToBattery,
+    gridToBattery,
+    pvToHouse: Math.max(p - pvToGrid - pvToBattery, 0),
+    gridToHouse: Math.max(gridIn - gridToBattery, 0),
+    batteryToHouse: Math.max(batteryOut - batteryToGrid, 0),
+  };
+}
+
 class PwMPowerFlowCard extends HTMLElement {
   constructor() {
     super();
@@ -3012,7 +3191,13 @@ class PwMPowerFlowCard extends HTMLElement {
       { key: "grid_power", icon: "mdi:transmission-tower", color: "#29b6f6" },
       { key: "battery_power", icon: "mdi:home-battery", color: "#9ccc65" },
     ]
-      .map((d) => ({ entity: find("pv", d.key), placement: "side", icon: d.icon, color: d.color }))
+      .map((d) => ({
+        entity: find("pv", d.key),
+        placement: "side",
+        role: PWM_FLOW_ROLE_KEYS[d.key],
+        icon: d.icon,
+        color: d.color,
+      }))
       .filter((d) => d.entity);
     const chargers = ["charger1", "charger2"]
       .map((charger) => find(charger, "power"))
@@ -3060,7 +3245,8 @@ class PwMPowerFlowCard extends HTMLElement {
     const c = this._config;
     if (!c) return;
     visible = visible || c.devices.map(() => true);
-    this._visibleKey = visible.join();
+    const roles = this._sideRoles();
+    this._visibleKey = this._layoutKey(visible, roles);
     const side = [];
     const ring = [];
     c.devices.forEach((d, i) => { if (visible[i]) (d.placement === "side" ? side : ring).push(i); });
@@ -3090,13 +3276,21 @@ class PwMPowerFlowCard extends HTMLElement {
     D = Math.min(D, 2 * (49 - ORBIT - LH / 2));
     const R = D / 2;
 
-    // Left column
+    // Left column. Issue #113: with solar, grid and battery recognised
+    // (each side device has its own role) they keep fixed places -- solar on
+    // top, grid in the middle moved a little right, battery at the bottom --
+    // and get lines between each other.
+    const sideRoles = side.map((i) => roles[i]);
+    const fixed = side.length > 0 && sideRoles.every(Boolean) && new Set(sideRoles).size === sideRoles.length;
     const ns = side.length;
+    const slots = fixed ? PWM_FLOW_ROLES.length : ns;
     const sideTop = 18 + LH / 2;
-    const sideStep = ns > 1 ? (82 - sideTop) / (ns - 1) : 0;
-    const DS = ns > 1 ? Math.min(NS, sideStep * 0.9 - LH) : NS;
+    const sideStep = slots > 1 ? (82 - sideTop) / (slots - 1) : 0;
+    const DS = slots > 1 ? Math.min(NS, sideStep * 0.9 - LH) : NS;
     const RS = DS / 2;
     const SX = RS + 1;
+    const GRID_SHIFT = fixed ? DS * 0.45 : 0;
+    this._roleIndex = {};
 
     const geometry = [];
     ring.forEach((i, k) => {
@@ -3109,15 +3303,18 @@ class PwMPowerFlowCard extends HTMLElement {
       };
     });
     side.forEach((i, k) => {
-      const y = ns > 1 ? sideTop + k * sideStep : 50;
+      const slot = fixed ? PWM_FLOW_ROLES.indexOf(roles[i]) : k;
+      const y = fixed || ns > 1 ? sideTop + slot * sideStep : 50;
+      const x = fixed && roles[i] === "grid" ? SX + GRID_SHIFT : SX;
+      if (fixed) this._roleIndex[roles[i]] = i;
       // Where the line meets the house's left side, spread by height.
       const ea = Math.PI - ((y - HY) / 50) * 0.75;
       const ex = HX + CR * Math.cos(ea);
       const ey = HY + CR * Math.sin(ea);
-      const sx = SX + RS;
+      const sx = x + RS;
       const dx = ex - sx;
       geometry[i] = {
-        x: SX, y, d: DS,
+        x, y, d: DS,
         // Drawn from the house outwards, the same direction as the ring's lines.
         p: `M${ex} ${ey} C${ex - dx * 0.45} ${ey} ${sx + dx * 0.55} ${y} ${sx} ${y}`,
       };
@@ -3147,6 +3344,39 @@ class PwMPowerFlowCard extends HTMLElement {
         <ha-icon></ha-icon><div class="val"></div><div class="name"></div><div class="sec"></div></div>`;
     });
 
+    // Issue #113: the lines between solar, grid and battery (drawn from the
+    // first to the second; dots run backwards for the other way).
+    const at = (role) => geometry[this._roleIndex[role]];
+    const edge = (from, to) => {
+      const dx = to.x - from.x, dy = to.y - from.y, len = Math.hypot(dx, dy) || 1;
+      return [from.x + (dx / len) * RS, from.y + (dy / len) * RS];
+    };
+    const links = {};
+    if (at("pv") && at("grid")) {
+      const [ax, ay] = edge(at("pv"), at("grid")), [bx, by] = edge(at("grid"), at("pv"));
+      links.pv_grid = `M${ax} ${ay} L${bx} ${by}`;
+    }
+    if (at("grid") && at("battery")) {
+      const [ax, ay] = edge(at("grid"), at("battery")), [bx, by] = edge(at("battery"), at("grid"));
+      links.grid_battery = `M${ax} ${ay} L${bx} ${by}`;
+    }
+    if (at("pv") && at("battery")) {
+      // Down the left side, outside the grid circle (moved right for room).
+      const pv = at("pv"), bat = at("battery");
+      const ax = pv.x - RS * 0.8, ay = pv.y + RS * 0.6;
+      const bx = bat.x - RS * 0.8, by = bat.y - RS * 0.6;
+      links.pv_battery = `M${ax} ${ay} C${ax - 2} ${ay + 12} ${bx - 2} ${by - 12} ${bx} ${by}`;
+    }
+    // Faint in the first end's colour until power runs on it.
+    const linkColor = (role) => {
+      const i = this._roleIndex[role];
+      return c.devices[i].color || PWM_FLOW_COLORS[i % PWM_FLOW_COLORS.length];
+    };
+    Object.keys(links).forEach((key) => {
+      const color = linkColor(key.split("_")[0]);
+      svg = `<g class="line link" data-link="${key}" style="--c:${color}"><path class="base" d="${links[key]}"/><path class="dots" d="${links[key]}"/></g>` + svg;
+    });
+
     this.shadowRoot.innerHTML = `
       <style>${PWM_FLOW_CARD_STYLE}</style>
       <ha-card>
@@ -3174,7 +3404,10 @@ class PwMPowerFlowCard extends HTMLElement {
     this._nodes = [];
     this._lines = [];
     this.shadowRoot.querySelectorAll(".node.dev").forEach((el) => (this._nodes[+el.dataset.i] = pick(el, el.dataset.i)));
-    this.shadowRoot.querySelectorAll(".line").forEach((el) => (this._lines[+el.dataset.i] = el));
+    this.shadowRoot.querySelectorAll(".line[data-i]").forEach((el) => (this._lines[+el.dataset.i] = el));
+    this._links = {};
+    this.shadowRoot.querySelectorAll(".line[data-link]").forEach((el) => (this._links[el.dataset.link] = el));
+    this._linkDurations = {};
     this._center = pick(this.shadowRoot.querySelector(".node.center"), "c");
     this._durations = [];
 
@@ -3182,6 +3415,33 @@ class PwMPowerFlowCard extends HTMLElement {
       node && node.el.addEventListener("click", () => this._moreInfo(c.devices[i].entity))
     );
     this._center.el.addEventListener("click", () => this._moreInfo(c.center.entity));
+  }
+
+  /** Issue #113: each device's left-column role (pv/grid/battery) or null. */
+  _sideRoles() {
+    const entities = (this._hass && this._hass.entities) || {};
+    return this._config.devices.map((d) => {
+      if (d.placement !== "side") return null;
+      if (PWM_FLOW_ROLES.includes(d.role)) return d.role;
+      const entry = entities[d.entity];
+      return entry && entry.platform === PWM_DOMAIN ? PWM_FLOW_ROLE_KEYS[entry.translation_key] || null : null;
+    });
+  }
+
+  _layoutKey(visible, roles) {
+    return visible.join() + "|" + roles.join();
+  }
+
+  /** Issue #113: start or speed up a line's dots -- only on a real change,
+   * since resetting --dur restarts the animation. */
+  _animate(line, cache, key, watts, inward) {
+    line.classList.add("active");
+    line.classList.toggle("in", inward);
+    const duration = pwmFlowDuration(watts);
+    if (!cache[key] || Math.abs(cache[key] - duration) / cache[key] > 0.12) {
+      cache[key] = duration;
+      line.style.setProperty("--dur", duration.toFixed(2) + "s");
+    }
   }
 
   _moreInfo(entityId) {
@@ -3225,7 +3485,25 @@ class PwMPowerFlowCard extends HTMLElement {
       if (!(limit > 0)) return true;
       return powers[i] !== null && Math.abs(powers[i]) >= limit;
     });
-    if (visible.join() !== this._visibleKey) this._build(visible);
+    if (this._layoutKey(visible, this._sideRoles()) !== this._visibleKey) this._build(visible);
+
+    // Issue #113: with solar, grid and battery in fixed places, their power
+    // is split between each other and the house (positive = into the house,
+    // the left column's default direction).
+    const role = (name) => (this._roleIndex ? this._roleIndex[name] : undefined);
+    const inward = (i) => {
+      if (i === undefined || powers[i] === null) return 0;
+      return c.devices[i].flow === "out" ? -powers[i] : powers[i];
+    };
+    const split = this._roleIndex && Object.keys(this._roleIndex).length
+      ? pwmFlowSplit(inward(role("pv")), inward(role("grid")), inward(role("battery")))
+      : null;
+    const houseShare = {};
+    if (split) {
+      if (role("pv") !== undefined) houseShare[role("pv")] = split.pvToHouse;
+      if (role("grid") !== undefined) houseShare[role("grid")] = split.gridToHouse;
+      if (role("battery") !== undefined) houseShare[role("battery")] = split.batteryToHouse;
+    }
 
     const title = this.shadowRoot.querySelector(".title");
     const date = this.shadowRoot.querySelector(".date");
@@ -3254,21 +3532,41 @@ class PwMPowerFlowCard extends HTMLElement {
 
       const line = this._lines[i];
       const active = watts !== null && Math.abs(watts) >= min;
-      let inward = d.flow ? d.flow === "in" : d.placement === "side";
-      if (watts !== null && watts < 0) inward = !inward;
-      line.classList.toggle("active", active);
-      line.classList.toggle("in", inward);
       this._nodes[i].el.classList.toggle("idle", !active);
-
-      if (active) {
-        // More power = faster dots; only touch the animation on a real change,
-        // since resetting --dur restarts it.
-        const duration = Math.max(0.6, Math.min(3, 3 - Math.log10(Math.abs(watts)) * 0.6));
-        if (!this._durations[i] || Math.abs(this._durations[i] - duration) > 0.15) {
-          this._durations[i] = duration;
-          line.style.setProperty("--dur", duration.toFixed(2) + "s");
-        }
+      // Issue #113: solar/grid/battery's line to the house only carries the
+      // house's share -- the rest runs on the lines between them.
+      const share = houseShare[i];
+      const amount = share !== undefined ? share : watts;
+      if (amount === null || !(Math.abs(amount) >= min) || amount === 0) {
+        line.classList.remove("active");
+        return;
       }
+      let towardsHouse = d.flow ? d.flow === "in" : d.placement === "side";
+      if (share !== undefined) towardsHouse = true;
+      else if (watts < 0) towardsHouse = !towardsHouse;
+      this._animate(line, this._durations, i, amount, towardsHouse);
+    });
+
+    // Issue #113: the lines between solar, grid and battery, in the colour
+    // of where the power comes from.
+    const color = (i) => (i === undefined ? "#fff" : c.devices[i].color || PWM_FLOW_COLORS[i % PWM_FLOW_COLORS.length]);
+    const flows = {
+      pv_grid: split ? [split.pvToGrid, 0] : [0, 0],
+      grid_battery: split ? [split.gridToBattery, split.batteryToGrid] : [0, 0],
+      pv_battery: split ? [split.pvToBattery, 0] : [0, 0],
+    };
+    const ends = { pv_grid: ["pv", "grid"], grid_battery: ["grid", "battery"], pv_battery: ["pv", "battery"] };
+    Object.keys(this._links || {}).forEach((key) => {
+      const line = this._links[key];
+      const [forward, backward] = flows[key];
+      const watts = Math.max(forward, backward);
+      if (!(watts >= min) || watts === 0) {
+        line.classList.remove("active");
+        return;
+      }
+      const reverse = backward > forward;
+      line.style.setProperty("--c", color(role(ends[key][reverse ? 1 : 0])));
+      this._animate(line, this._linkDurations, key, watts, reverse);
     });
   }
 }
@@ -3352,6 +3650,12 @@ function pwmFlowDeviceSchema(t) {
       { name: "flow", selector: { select: { mode: "dropdown", options: [
         { value: "out", label: t.flowOut },
         { value: "in", label: t.flowIn },
+      ] } } },
+      { name: "role", selector: { select: { mode: "dropdown", options: [
+        { value: "auto", label: t.roleAuto },
+        { value: "pv", label: t.rolePv },
+        { value: "grid", label: t.roleGrid },
+        { value: "battery", label: t.roleBattery },
       ] } } },
       { name: "invert", selector: { boolean: {} } },
       { name: "hide_name", selector: { boolean: {} } },
@@ -3500,6 +3804,7 @@ class PwMPowerFlowCardEditor extends HTMLElement {
       list.appendChild(box);
       this._form(box, deviceSchema,
         { ...d, placement: d.placement || "ring", flow: d.flow || (d.placement === "side" ? "in" : "out"),
+          role: d.role || "auto",
           secondary: pwmFlowSecondaryList(d.secondary).map((s) => s.entity) },
         t.labels,
         (v) => {
@@ -3508,6 +3813,7 @@ class PwMPowerFlowCardEditor extends HTMLElement {
           if (placementChanged) delete next.flow; // use the new placement's default direction
           // Leave defaults out of the YAML.
           if (next.placement === "ring") delete next.placement;
+          if (next.role === "auto" || next.placement !== "side") delete next.role;
           if (next.flow === (next.placement === "side" ? "in" : "out")) delete next.flow;
           ["invert", "hide_name", "subtract"].forEach((key) => { if (!next[key]) delete next[key]; });
           if (!(Number(next.hide_below) > 0)) delete next.hide_below;

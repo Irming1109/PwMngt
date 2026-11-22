@@ -47,6 +47,13 @@ def signal_manual_charge(entry_id: str) -> str:
     return f"{DOMAIN}_{entry_id}_manual_charge"
 
 
+def signal_start_manual_charge(entry_id: str) -> str:
+    """Issue #112: dispatcher signal from services.py (pwmngt.charge_now) --
+    start a manual charge. Payload: the charge_now_* option and the SoC (%)
+    it stops at."""
+    return f"{DOMAIN}_{entry_id}_start_manual_charge"
+
+
 def signal_sell_override(entry_id: str) -> str:
     """Dispatcher signal data/battery_sell_decision.py sends when the
     "force sell" override boolean changes (issue #51). Payload: one of
@@ -79,6 +86,11 @@ CHARGE_NOW_OPTIONS = frozenset(
 # (None when there is none). Read by data/battery_charge_level.py and the
 # battery card (www/pwm-cards.js).
 ATTR_MANUAL_CHARGE = "manual_charge"
+
+# Issue #112: battery_command attribute holding the SoC (%) a running
+# manual charge stops at -- 100 unless chosen on the battery card.
+ATTR_MANUAL_CHARGE_TARGET = "manual_charge_target"
+MANUAL_CHARGE_FULL = 100.0
 
 # battery_command attribute holding the command that was active when the
 # "force sell" override turned on (issue #51; None when not overriding).
@@ -589,6 +601,8 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
         self._is_battery_command = description.key == "battery_command"
         # Issue #17: level of a running manual charge (battery_command only).
         self._manual_charge: str | None = None
+        # Issue #112: the SoC (%) it stops at.
+        self._manual_charge_target: float | None = None
         # Issue #51: battery_command before the "force sell" override.
         self._command_before_sell_override: str | None = None
         # Issue #101: the last fuse check (battery_command only).
@@ -600,6 +614,7 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
             return None
         return {
             ATTR_MANUAL_CHARGE: self._manual_charge,
+            ATTR_MANUAL_CHARGE_TARGET: self._manual_charge_target,
             ATTR_COMMAND_BEFORE_SELL_OVERRIDE: self._command_before_sell_override,
             ATTR_LAST_FUSE_CHECK: self._last_fuse_check,
         }
@@ -630,6 +645,10 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
                 manual_charge = last_state.attributes.get(ATTR_MANUAL_CHARGE)
                 if manual_charge in CHARGE_NOW_OPTIONS:
                     self._manual_charge = manual_charge
+                    target = last_state.attributes.get(ATTR_MANUAL_CHARGE_TARGET)
+                    self._manual_charge_target = (
+                        float(target) if isinstance(target, (int, float)) else MANUAL_CHARGE_FULL
+                    )
                 before_override = last_state.attributes.get(ATTR_COMMAND_BEFORE_SELL_OVERRIDE)
                 if before_override in self.entity_description.options:
                     self._command_before_sell_override = before_override
@@ -647,6 +666,13 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
                     self.hass,
                     signal_manual_charge(self._entry_id),
                     self._handle_manual_charge,
+                )
+            )
+            self.async_on_remove(
+                async_dispatcher_connect(
+                    self.hass,
+                    signal_start_manual_charge(self._entry_id),
+                    self._handle_start_manual_charge,
                 )
             )
             self.async_on_remove(
@@ -680,6 +706,7 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
             return
         if option is None:
             self._manual_charge = None
+            self._manual_charge_target = None
             option = "internal"
         elif option not in self.entity_description.options:
             LOGGER.warning("%s: ignoring unknown option '%s'", self.entity_id, option)
@@ -722,6 +749,22 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
             self._last_fuse_check = None
         self.async_write_ha_state()
 
+    @callback
+    def _handle_start_manual_charge(self, option: str, target: float) -> None:
+        """Issue #112: a manual charge at this level that stops at target
+        (SoC %) -- otherwise the same as picking the level by hand."""
+        if option not in CHARGE_NOW_OPTIONS:
+            LOGGER.warning("%s: ignoring unknown charge level '%s'", self.entity_id, option)
+            return
+        LOGGER.info("%s set to '%s' until %s %% SoC", self.entity_id, option, target)
+        self._manual_charge = option
+        self._manual_charge_target = float(target)
+        self._command_before_sell_override = None
+        if option != self._attr_current_option:
+            self._last_fuse_check = None
+        self._attr_current_option = option
+        self.async_write_ha_state()
+
     async def async_select_option(self, option: str) -> None:
         """Store the chosen option locally. On battery_command, a
         charge_now_* picked by the user starts a manual charge and any
@@ -729,6 +772,9 @@ class PwMngtSelect(SelectEntity, RestoreEntity):
         LOGGER.info("%s set to '%s'", self.entity_id, option)
         if self._is_battery_command:
             self._manual_charge = option if option in CHARGE_NOW_OPTIONS else None
+            # Issue #112: picked directly (not through pwmngt.charge_now),
+            # a manual charge runs to full as before.
+            self._manual_charge_target = MANUAL_CHARGE_FULL if self._manual_charge else None
             # Issue #51: a command picked by hand takes over from the
             # override -- nothing to restore when it turns off.
             self._command_before_sell_override = None

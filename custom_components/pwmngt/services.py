@@ -14,6 +14,7 @@ from .data.battery_charge_decision import (
     signal_manual_charge_target,
 )
 from .properties import pv_properties
+from .select import signal_start_manual_charge
 from .data.savings_data import (
     ADJUSTABLE_SAVINGS_PERIODS,
     ADJUSTABLE_SAVINGS_TOTALS,
@@ -42,6 +43,19 @@ SERVICE_SET_NIGHT_CHARGE_TARGET = "set_night_charge_target"
 SERVICE_RESET_NIGHT_CHARGE_TARGET = "reset_night_charge_target"
 ATTR_TARGET = "target"
 
+# Issue #112: a manual "Charge now" at a share of Battery max charge effect
+# (25/50/75/100 %) that stops at a chosen SoC.
+SERVICE_CHARGE_NOW = "charge_now"
+ATTR_POWER = "power"
+ATTR_TARGET_SOC = "target_soc"
+
+_CHARGE_NOW_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_POWER): vol.All(vol.Coerce(int), vol.In([25, 50, 75, 100])),
+        vol.Optional(ATTR_TARGET_SOC, default=100): vol.All(vol.Coerce(float), vol.Range(min=1, max=100)),
+    }
+)
+
 _SET_NIGHT_CHARGE_TARGET_SCHEMA = vol.Schema(
     {vol.Required(ATTR_TARGET): vol.All(vol.Coerce(float), vol.Range(min=0, max=100))}
 )
@@ -50,7 +64,7 @@ _SET_NIGHT_CHARGE_TARGET_SCHEMA = vol.Schema(
 async def async_setup_services(hass: HomeAssistant) -> None:
     """Register the pwmngt integration's services (actions). Called from
     async_setup_entry, so registering is skipped when already done."""
-    if hass.services.has_service(DOMAIN, SERVICE_RESET_NIGHT_CHARGE_TARGET):
+    if hass.services.has_service(DOMAIN, SERVICE_CHARGE_NOW):
         return
 
     async def _adjust_savings(call: ServiceCall) -> None:
@@ -108,4 +122,18 @@ async def async_setup_services(hass: HomeAssistant) -> None:
     )
     hass.services.async_register(
         DOMAIN, SERVICE_RESET_NIGHT_CHARGE_TARGET, _reset_night_charge_target
+    )
+
+    async def _charge_now(call: ServiceCall) -> None:
+        """Issue #112: start a manual charge that stops at target_soc."""
+        for entry in hass.config_entries.async_loaded_entries(DOMAIN):
+            async_dispatcher_send(
+                hass,
+                signal_start_manual_charge(entry.entry_id),
+                f"charge_now_{call.data[ATTR_POWER]}",
+                call.data[ATTR_TARGET_SOC],
+            )
+
+    hass.services.async_register(
+        DOMAIN, SERVICE_CHARGE_NOW, _charge_now, schema=_CHARGE_NOW_SCHEMA
     )
