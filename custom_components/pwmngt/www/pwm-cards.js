@@ -2977,6 +2977,8 @@ const PWM_FLOW_TEXTS = {
     rolePv: "Solar (top)",
     roleGrid: "Grid (middle)",
     roleBattery: "Battery (bottom)",
+    layoutColumn: "Column (solar/grid/battery on the left, others around the house)",
+    layoutCross: "Cross (solar top, grid left, battery bottom, house right)",
     labels: {
       title: "Title",
       background: "Background (#000, theme, transparent)",
@@ -2998,6 +3000,10 @@ const PWM_FLOW_TEXTS = {
       node_size: "Circle size",
       text_size: "Text size (%)",
       name_on_arc: "Name on an arc above the circle",
+      layout: "Layout",
+      icon_size: "Icon size (%)",
+      secondary_above: "Extra lines above the icon",
+      flow_time: "Animation time (%) - higher is slower",
     },
   },
   da: {
@@ -3020,6 +3026,8 @@ const PWM_FLOW_TEXTS = {
     rolePv: "Solceller (øverst)",
     roleGrid: "Net (midten)",
     roleBattery: "Batteri (nederst)",
+    layoutColumn: "Kolonne (sol/net/batteri til venstre, øvrige rundt om huset)",
+    layoutCross: "Kryds (sol øverst, net til venstre, batteri nederst, huset til højre)",
     labels: {
       title: "Titel",
       background: "Baggrund (#000, theme, transparent)",
@@ -3041,6 +3049,10 @@ const PWM_FLOW_TEXTS = {
       node_size: "Cirkelstørrelse",
       text_size: "Tekststørrelse (%)",
       name_on_arc: "Navn på en bue over cirklen",
+      layout: "Layout",
+      icon_size: "Ikonstørrelse (%)",
+      secondary_above: "Ekstra linjer over ikonet",
+      flow_time: "Animationstid (%) - højere er langsommere",
     },
   },
 };
@@ -3264,74 +3276,178 @@ class PwMPowerFlowCard extends HTMLElement {
     const ring = [];
     c.devices.forEach((d, i) => { if (visible[i]) (d.placement === "side" ? side : ring).push(i); });
     const hasSide = side.length > 0;
-    const VW = hasSide ? 140 : 100; // viewBox width (the height is always 100)
-    const HX = hasSide ? 86 : 50; // the house's centre
-    const NS = Math.max(12, Math.min(34, Number(c.node_size) || 26)); // wanted circle size
+    const NS = Math.max(12, Math.min(40, Number(c.node_size) || 26)); // wanted circle size
     const CD = Math.max(16, Math.min(40, Number(c.center_size) || 32)); // house diameter
     const CR = CD / 2;
     const TS = Math.max(50, Math.min(200, Number(c.text_size) || 100)) / 100; // text scale
+    const IS = Math.max(50, Math.min(200, Number(c.icon_size) || 100)) / 100; // icon scale
+    // Issue #114: a factor on the time a dot takes -- higher is slower.
+    this._flowTime = Math.max(25, Math.min(400, Number(c.flow_time) || 100)) / 100;
     // A name on an arc above the circle needs room above the top circles (LH).
     const ARC = !!c.name_on_arc;
     const LH = ARC ? NS * 0.11 * TS + 1.5 : 0;
-    const HY = 50 + LH / 2; // moved down so the top circle's name fits above it
-    const pct = (x) => (x / VW) * 100;
     const centerColor = c.center.color || "#29b6f6";
 
-    // Ring: a full circle -- or a 240° arc to the right when there is a left column.
-    const nr = ring.length;
-    const span = hasSide ? (240 * Math.PI) / 180 : 2 * Math.PI;
-    const ringStep = nr ? span / nr : 0;
-    // The circles must fit vertically (0..100) and not touch the house.
-    let ORBIT = 39;
-    let D = nr ? Math.min(NS, 2 * ORBIT * Math.sin(Math.min(ringStep, Math.PI) / 2) * 0.9) : NS;
-    ORBIT = Math.min(ORBIT, 49 - D / 2 - LH / 2);
-    ORBIT = Math.max(ORBIT, CR + D / 2 + 4);
-    D = Math.min(D, 2 * (49 - ORBIT - LH / 2));
-    const R = D / 2;
-
-    // Left column. Issue #113: with solar, grid and battery recognised
-    // (each side device has its own role) they keep fixed places -- solar on
-    // top, grid in the middle moved a little right, battery at the bottom --
-    // and get lines between each other.
+    // Issue #113: with solar, grid and battery recognised (each side device
+    // has its own role) they keep fixed places and get lines between each other.
     const sideRoles = side.map((i) => roles[i]);
     const fixed = side.length > 0 && sideRoles.every(Boolean) && new Set(sideRoles).size === sideRoles.length;
-    const ns = side.length;
-    const slots = fixed ? PWM_FLOW_ROLES.length : ns;
-    const sideTop = 18 + LH / 2;
-    const sideStep = slots > 1 ? (82 - sideTop) / (slots - 1) : 0;
-    const DS = slots > 1 ? Math.min(NS, sideStep * 0.9 - LH) : NS;
-    const RS = DS / 2;
-    const SX = RS + 1;
-    const GRID_SHIFT = fixed ? DS * 0.45 : 0;
+    // Issue #114: the "cross" layout needs the fixed roles; the other devices
+    // go in its four corners.
+    const cross = c.layout === "cross" && fixed && ring.length <= 4;
     this._roleIndex = {};
-
     const geometry = [];
-    ring.forEach((i, k) => {
-      const angle = hasSide ? -span / 2 + (k + 0.5) * ringStep : -Math.PI / 2 + k * ringStep;
-      const cos = Math.cos(angle);
-      const sin = Math.sin(angle);
-      geometry[i] = {
-        x: HX + ORBIT * cos, y: HY + ORBIT * sin, d: D,
-        p: `M${HX + CR * cos} ${HY + CR * sin} L${HX + (ORBIT - R) * cos} ${HY + (ORBIT - R) * sin}`,
+    const links = {};
+    let VW, HX, HY;
+
+    if (cross) {
+      // Solar on top, grid to the left, battery at the bottom and the house
+      // to the right -- like the classic power flow card.
+      side.forEach((i) => (this._roleIndex[roles[i]] = i));
+      const D = Math.min(NS, (82 - LH) / 2);
+      const R = D / 2;
+      VW = Math.max(130, 5 * R + CR + 22);
+      HY = 50 + LH / 2;
+      HX = VW - CR - 1;
+      const GX = R + 1;
+      const MX = (GX + HX) / 2;
+      const top = { x: MX, y: 1 + LH + R, d: D };
+      const bottom = { x: MX, y: 99 - R, d: D };
+      const left = { x: GX, y: HY, d: D };
+      const places = { pv: top, grid: left, battery: bottom };
+      // A point on the house's left side, dy above (-) or below (+) its centre.
+      const houseSide = (dy) => [HX - Math.sqrt(Math.max(CR * CR - dy * dy, 0)), HY + dy];
+      side.forEach((i) => {
+        const g = places[roles[i]];
+        let p;
+        // Drawn from the house outwards, like the column's lines.
+        if (roles[i] === "grid") {
+          p = `M${HX - CR} ${HY} L${g.x + R} ${g.y}`;
+        } else {
+          const up = roles[i] === "pv" ? -1 : 1;
+          const [ex, ey] = houseSide(up * CR * 0.4);
+          const sx = g.x + R * 0.5, sy = g.y - up * R * 0.87;
+          p = `M${ex} ${ey} Q${sx} ${ey} ${sx} ${sy}`;
+        }
+        geometry[i] = { ...g, p };
+      });
+      // The corners: top right, bottom right, top left, bottom left -- a
+      // little smaller when the house or the grid needs the room.
+      const big = Math.max(CR, R);
+      const RC = Math.max(4, Math.min(R, (HY - big - 4 - 2 * LH) / 2, (96 - HY - big) / 2));
+      const corners = [
+        { x: VW - RC - 1, y: 1 + LH + RC }, { x: VW - RC - 1, y: 99 - RC },
+        { x: RC + 1, y: 1 + LH + RC }, { x: RC + 1, y: 99 - RC },
+      ];
+      ring.forEach((i, k) => {
+        const g = corners[k];
+        const dx = g.x - HX, dy = g.y - HY, len = Math.hypot(dx, dy) || 1;
+        geometry[i] = {
+          x: g.x, y: g.y, d: 2 * RC,
+          p: `M${HX + (dx / len) * CR} ${HY + (dy / len) * CR} L${g.x - (dx / len) * RC} ${g.y - (dy / len) * RC}`,
+        };
+      });
+      // The lines between solar, grid and battery, drawn from the first to the second.
+      const has = (role) => this._roleIndex[role] !== undefined;
+      if (has("pv") && has("grid")) {
+        const sx = top.x - R * 0.5, sy = top.y + R * 0.87;
+        const ex = left.x + R * 0.94, ey = left.y - R * 0.35;
+        links.pv_grid = `M${sx} ${sy} Q${sx} ${ey} ${ex} ${ey}`;
+      }
+      if (has("grid") && has("battery")) {
+        const sx = left.x + R * 0.94, sy = left.y + R * 0.35;
+        const ex = bottom.x - R * 0.5, ey = bottom.y - R * 0.87;
+        links.grid_battery = `M${sx} ${sy} Q${ex} ${sy} ${ex} ${ey}`;
+      }
+      if (has("pv") && has("battery")) {
+        links.pv_battery = `M${top.x} ${top.y + R} L${bottom.x} ${bottom.y - R}`;
+      }
+    } else {
+      VW = hasSide ? 140 : 100; // viewBox width (the height is always 100)
+      HX = hasSide ? 86 : 50; // the house's centre
+      HY = 50 + LH / 2; // moved down so the top circle's name fits above it
+
+      // Ring: a full circle -- or a 240° arc to the right when there is a left column.
+      const nr = ring.length;
+      const span = hasSide ? (240 * Math.PI) / 180 : 2 * Math.PI;
+      const ringStep = nr ? span / nr : 0;
+      // The circles must fit vertically (0..100) and not touch the house.
+      let ORBIT = 39;
+      let D = nr ? Math.min(NS, 2 * ORBIT * Math.sin(Math.min(ringStep, Math.PI) / 2) * 0.9) : NS;
+      ORBIT = Math.min(ORBIT, 49 - D / 2 - LH / 2);
+      ORBIT = Math.max(ORBIT, CR + D / 2 + 4);
+      D = Math.min(D, 2 * (49 - ORBIT - LH / 2));
+      const R = D / 2;
+
+      // Left column: solar on top, grid in the middle moved a little right,
+      // battery at the bottom (#113).
+      const ns = side.length;
+      const slots = fixed ? PWM_FLOW_ROLES.length : ns;
+      let sideTop = 18 + LH / 2;
+      let sideStep = slots > 1 ? (82 - sideTop) / (slots - 1) : 0;
+      let DS = slots > 1 ? Math.min(NS, sideStep * 0.9 - LH) : NS;
+      if (slots > 1 && NS > DS) {
+        // Issue #114: bigger circles than that spacing allows -- use the full
+        // height, with just room for the names between them.
+        DS = Math.min(NS, (98 - slots * LH - 2 * (slots - 1)) / slots);
+        sideTop = 1 + LH + DS / 2;
+        sideStep = DS + LH + 2;
+      }
+      const RS = DS / 2;
+      const SX = RS + 1;
+      const GRID_SHIFT = fixed ? DS * 0.45 : 0;
+
+      ring.forEach((i, k) => {
+        const angle = hasSide ? -span / 2 + (k + 0.5) * ringStep : -Math.PI / 2 + k * ringStep;
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        geometry[i] = {
+          x: HX + ORBIT * cos, y: HY + ORBIT * sin, d: D,
+          p: `M${HX + CR * cos} ${HY + CR * sin} L${HX + (ORBIT - R) * cos} ${HY + (ORBIT - R) * sin}`,
+        };
+      });
+      side.forEach((i, k) => {
+        const slot = fixed ? PWM_FLOW_ROLES.indexOf(roles[i]) : k;
+        const y = fixed || ns > 1 ? sideTop + slot * sideStep : 50;
+        const x = fixed && roles[i] === "grid" ? SX + GRID_SHIFT : SX;
+        if (fixed) this._roleIndex[roles[i]] = i;
+        // Where the line meets the house's left side, spread by height.
+        const ea = Math.PI - ((y - HY) / 50) * 0.75;
+        const ex = HX + CR * Math.cos(ea);
+        const ey = HY + CR * Math.sin(ea);
+        const sx = x + RS;
+        const dx = ex - sx;
+        geometry[i] = {
+          x, y, d: DS,
+          // Drawn from the house outwards, the same direction as the ring's lines.
+          p: `M${ex} ${ey} C${ex - dx * 0.45} ${ey} ${sx + dx * 0.55} ${y} ${sx} ${y}`,
+        };
+      });
+
+      // Issue #113: the lines between solar, grid and battery (drawn from the
+      // first to the second; dots run backwards for the other way).
+      const at = (role) => geometry[this._roleIndex[role]];
+      const edge = (from, to) => {
+        const dx = to.x - from.x, dy = to.y - from.y, len = Math.hypot(dx, dy) || 1;
+        return [from.x + (dx / len) * RS, from.y + (dy / len) * RS];
       };
-    });
-    side.forEach((i, k) => {
-      const slot = fixed ? PWM_FLOW_ROLES.indexOf(roles[i]) : k;
-      const y = fixed || ns > 1 ? sideTop + slot * sideStep : 50;
-      const x = fixed && roles[i] === "grid" ? SX + GRID_SHIFT : SX;
-      if (fixed) this._roleIndex[roles[i]] = i;
-      // Where the line meets the house's left side, spread by height.
-      const ea = Math.PI - ((y - HY) / 50) * 0.75;
-      const ex = HX + CR * Math.cos(ea);
-      const ey = HY + CR * Math.sin(ea);
-      const sx = x + RS;
-      const dx = ex - sx;
-      geometry[i] = {
-        x, y, d: DS,
-        // Drawn from the house outwards, the same direction as the ring's lines.
-        p: `M${ex} ${ey} C${ex - dx * 0.45} ${ey} ${sx + dx * 0.55} ${y} ${sx} ${y}`,
-      };
-    });
+      if (at("pv") && at("grid")) {
+        const [ax, ay] = edge(at("pv"), at("grid")), [bx, by] = edge(at("grid"), at("pv"));
+        links.pv_grid = `M${ax} ${ay} L${bx} ${by}`;
+      }
+      if (at("grid") && at("battery")) {
+        const [ax, ay] = edge(at("grid"), at("battery")), [bx, by] = edge(at("battery"), at("grid"));
+        links.grid_battery = `M${ax} ${ay} L${bx} ${by}`;
+      }
+      if (at("pv") && at("battery")) {
+        // Down the left side, outside the grid circle (moved right for room).
+        const pv = at("pv"), bat = at("battery");
+        const ax = pv.x - RS * 0.8, ay = pv.y + RS * 0.6;
+        const bx = bat.x - RS * 0.8, by = bat.y - RS * 0.6;
+        links.pv_battery = `M${ax} ${ay} C${ax - 2} ${ay + 12} ${bx - 2} ${by - 12} ${bx} ${by}`;
+      }
+    }
+    const pct = (x) => (x / VW) * 100;
 
     // The name follows the circle: a 270° arc from bottom-left over the top to
     // bottom-right, centred at the top, so long names still have room.
@@ -3357,29 +3473,6 @@ class PwMPowerFlowCard extends HTMLElement {
         <ha-icon></ha-icon><div class="val"></div><div class="name"></div><div class="sec"></div></div>`;
     });
 
-    // Issue #113: the lines between solar, grid and battery (drawn from the
-    // first to the second; dots run backwards for the other way).
-    const at = (role) => geometry[this._roleIndex[role]];
-    const edge = (from, to) => {
-      const dx = to.x - from.x, dy = to.y - from.y, len = Math.hypot(dx, dy) || 1;
-      return [from.x + (dx / len) * RS, from.y + (dy / len) * RS];
-    };
-    const links = {};
-    if (at("pv") && at("grid")) {
-      const [ax, ay] = edge(at("pv"), at("grid")), [bx, by] = edge(at("grid"), at("pv"));
-      links.pv_grid = `M${ax} ${ay} L${bx} ${by}`;
-    }
-    if (at("grid") && at("battery")) {
-      const [ax, ay] = edge(at("grid"), at("battery")), [bx, by] = edge(at("battery"), at("grid"));
-      links.grid_battery = `M${ax} ${ay} L${bx} ${by}`;
-    }
-    if (at("pv") && at("battery")) {
-      // Down the left side, outside the grid circle (moved right for room).
-      const pv = at("pv"), bat = at("battery");
-      const ax = pv.x - RS * 0.8, ay = pv.y + RS * 0.6;
-      const bx = bat.x - RS * 0.8, by = bat.y - RS * 0.6;
-      links.pv_battery = `M${ax} ${ay} C${ax - 2} ${ay + 12} ${bx - 2} ${by - 12} ${bx} ${by}`;
-    }
     // Faint in the first end's colour until power runs on it.
     const linkColor = (role) => {
       const i = this._roleIndex[role];
@@ -3391,7 +3484,9 @@ class PwMPowerFlowCard extends HTMLElement {
     });
 
     const stage = this.shadowRoot.querySelector(".stage");
-    stage.style.cssText = `aspect-ratio:${VW}/100;max-width:${VW * 6.4}px;--k:${100 / VW};--ts:${TS}`;
+    stage.style.cssText = `aspect-ratio:${VW}/100;max-width:${VW * 6.4}px;--k:${100 / VW};--ts:${TS};--is:${IS}`;
+    // Issue #114: the extra lines (e.g. the SoC) above the icon instead of below the value.
+    stage.classList.toggle("sec-above", !!c.secondary_above);
     stage.innerHTML = `
       <svg viewBox="0 0 ${VW} 100">${svg}<g class="labels">${labels}</g></svg>
       <div class="node center" style="left:${pct(HX)}%;top:${HY}%;width:${pct(CD)}%;--c:${centerColor}">
@@ -3450,7 +3545,7 @@ class PwMPowerFlowCard extends HTMLElement {
   _animate(line, cache, key, watts, inward) {
     line.classList.add("active");
     line.classList.toggle("in", inward);
-    const duration = pwmFlowDuration(watts);
+    const duration = pwmFlowDuration(watts) * (this._flowTime || 1);
     if (!cache[key] || Math.abs(cache[key] - duration) / cache[key] > 0.12) {
       cache[key] = duration;
       line.style.setProperty("--dur", duration.toFixed(2) + "s");
@@ -3615,33 +3710,44 @@ const PWM_FLOW_CARD_STYLE = `
           color:var(--pwm-flow-fg); -webkit-font-smoothing:antialiased; }
   /* Text scales with the circle's own size. */
   .node { container-type:inline-size; }
-  .node ha-icon { --mdc-icon-size:24cqw; color:var(--pwm-flow-fg); margin-bottom:2cqw; }
+  .node ha-icon { --mdc-icon-size:calc(24cqw * var(--is,1)); color:var(--pwm-flow-fg); margin-bottom:2cqw; }
   /* --ts is the card's text_size option (1 = 100 %). */
   .val { font-weight:600; font-size:calc(16cqw * var(--ts,1)); line-height:1.15; white-space:nowrap; letter-spacing:.02em; }
   .name, .sec { font-size:calc(11cqw * var(--ts,1)); line-height:1.2; white-space:pre-line; }
   .name { font-weight:500; max-width:100%; overflow-wrap:anywhere; }
   .sec { font-weight:500; opacity:.92; }
-  .center ha-icon { --mdc-icon-size:24cqw; }
+  .center ha-icon { --mdc-icon-size:calc(24cqw * var(--is,1)); }
+  .sec-above .sec { order:-1; margin-bottom:1cqw; }
   .center .val { font-size:calc(14cqw * var(--ts,1)); }
   .center .name, .center .sec { font-size:calc(10cqw * var(--ts,1)); }
 `;
 
 pwmDefine("pwm-power-flow-card", PwMPowerFlowCard);
 
-const PWM_FLOW_GENERAL_SCHEMA = [
-  { type: "grid", name: "", schema: [
-    { name: "title", selector: { text: {} } },
-    { name: "background", selector: { text: {} } },
-  ] },
-  { type: "grid", name: "", schema: [
-    { name: "show_date", selector: { boolean: {} } },
-    { name: "min_power", selector: { number: { min: 0, max: 1000, mode: "box", unit_of_measurement: "W" } } },
-    { name: "node_size", selector: { number: { min: 12, max: 34, step: 1, mode: "slider" } } },
-    { name: "center_size", selector: { number: { min: 16, max: 40, step: 1, mode: "slider" } } },
-    { name: "text_size", selector: { number: { min: 50, max: 200, step: 5, mode: "slider" } } },
-    { name: "name_on_arc", selector: { boolean: {} } },
-  ] },
-];
+/** Built per render: the layout dropdown follows the user's language. */
+function pwmFlowGeneralSchema(t) {
+  return [
+    { type: "grid", name: "", schema: [
+      { name: "title", selector: { text: {} } },
+      { name: "background", selector: { text: {} } },
+    ] },
+    { name: "layout", selector: { select: { mode: "dropdown", options: [
+      { value: "column", label: t.layoutColumn },
+      { value: "cross", label: t.layoutCross },
+    ] } } },
+    { type: "grid", name: "", schema: [
+      { name: "show_date", selector: { boolean: {} } },
+      { name: "min_power", selector: { number: { min: 0, max: 1000, mode: "box", unit_of_measurement: "W" } } },
+      { name: "node_size", selector: { number: { min: 12, max: 40, step: 1, mode: "slider" } } },
+      { name: "center_size", selector: { number: { min: 16, max: 40, step: 1, mode: "slider" } } },
+      { name: "text_size", selector: { number: { min: 50, max: 200, step: 5, mode: "slider" } } },
+      { name: "icon_size", selector: { number: { min: 50, max: 200, step: 5, mode: "slider" } } },
+      { name: "flow_time", selector: { number: { min: 25, max: 400, step: 5, mode: "slider" } } },
+      { name: "name_on_arc", selector: { boolean: {} } },
+      { name: "secondary_above", selector: { boolean: {} } },
+    ] },
+  ];
+}
 
 const PWM_FLOW_CENTER_SCHEMA = [
   { name: "entity", selector: { entity: {} } },
@@ -3771,11 +3877,14 @@ class PwMPowerFlowCardEditor extends HTMLElement {
     this.querySelector("#add").textContent = t.add;
     this.querySelector(".pwm-flow-hint").textContent = t.secondaryHint;
 
-    const generalKeys = ["title", "background", "show_date", "min_power", "node_size", "center_size", "text_size", "name_on_arc"];
-    this._form(this.querySelector("#g"), PWM_FLOW_GENERAL_SCHEMA,
-      { title: c.title, background: c.background, show_date: c.show_date, min_power: c.min_power,
+    const generalKeys = ["title", "background", "layout", "show_date", "min_power", "node_size", "center_size",
+      "text_size", "icon_size", "flow_time", "name_on_arc", "secondary_above"];
+    this._form(this.querySelector("#g"), pwmFlowGeneralSchema(t),
+      { title: c.title, background: c.background, layout: c.layout || "column",
+        show_date: c.show_date, min_power: c.min_power,
         node_size: c.node_size || 26, center_size: c.center_size || 32,
-        text_size: c.text_size || 100, name_on_arc: c.name_on_arc },
+        text_size: c.text_size || 100, icon_size: c.icon_size || 100, flow_time: c.flow_time || 100,
+        name_on_arc: c.name_on_arc, secondary_above: c.secondary_above },
       t.labels,
       (v) => {
         generalKeys.forEach((key) => {
