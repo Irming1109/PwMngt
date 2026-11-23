@@ -3300,8 +3300,8 @@ class PwMPowerFlowCard extends HTMLElement {
     // has its own role) they keep fixed places and get lines between each other.
     const sideRoles = side.map((i) => roles[i]);
     const fixed = side.length > 0 && sideRoles.every(Boolean) && new Set(sideRoles).size === sideRoles.length;
-    // Issue #114: the "cross" layout needs the fixed roles; the other devices
-    // go in its four corners.
+    // Issue #114: the "cross" layout needs the fixed roles and room for at
+    // most four other devices.
     const cross = c.layout === "cross" && fixed && ring.length <= 4;
     this._roleIndex = {};
     const geometry = [];
@@ -3309,22 +3309,28 @@ class PwMPowerFlowCard extends HTMLElement {
     let VW, HX, HY;
 
     if (cross) {
-      // Solar on top, grid to the left, battery at the bottom and the house
-      // to the right -- like the classic power flow card.
+      // Like the classic power flow card: grid to the left, solar above and
+      // the battery below the next column, the house in the third with up to
+      // two devices above/below it, and a fourth column with two more.
       side.forEach((i) => (this._roleIndex[roles[i]] = i));
       const D = Math.min(NS, (82 - LH) / 2);
       const R = D / 2;
-      VW = Math.max(130, 5 * R + CR + 22);
       HY = 50 + LH / 2;
-      HX = VW - CR - 1;
+      // The other devices: room for them (and their names) above and below
+      // the house, so a little smaller when the house is big.
+      const RC = Math.max(4, Math.min(R, (HY - CR - 4 - 2 * LH) / 2 + 1, (96 - HY - CR - LH) / 2 + 1));
+      const GAP = 1.45 * Math.max(D, R + CR); // between the columns' centres
       const GX = R + 1;
-      const MX = (GX + HX) / 2;
+      const MX = GX + GAP;
+      HX = MX + GAP;
+      const RX = HX + GAP;
+      VW = (ring.length > 2 ? RX + RC : HX + Math.max(CR, ring.length ? RC : 0)) + 1;
       const top = { x: MX, y: 1 + LH + R, d: D };
       const bottom = { x: MX, y: 99 - R, d: D };
       const left = { x: GX, y: HY, d: D };
       const places = { pv: top, grid: left, battery: bottom };
-      // A point on the house's left side, dy above (-) or below (+) its centre.
-      const houseSide = (dy) => [HX - Math.sqrt(Math.max(CR * CR - dy * dy, 0)), HY + dy];
+      // A point on the house's left (-1) or right (+1) side, dy above (-) or below (+) its centre.
+      const houseSide = (dir, dy) => [HX + dir * Math.sqrt(Math.max(CR * CR - dy * dy, 0)), HY + dy];
       side.forEach((i) => {
         const g = places[roles[i]];
         let p;
@@ -3333,28 +3339,23 @@ class PwMPowerFlowCard extends HTMLElement {
           p = `M${HX - CR} ${HY} L${g.x + R} ${g.y}`;
         } else {
           const up = roles[i] === "pv" ? -1 : 1;
-          const [ex, ey] = houseSide(up * CR * 0.4);
+          const [ex, ey] = houseSide(-1, up * CR * 0.4);
           const sx = g.x + R * 0.5, sy = g.y - up * R * 0.87;
           p = `M${ex} ${ey} Q${sx} ${ey} ${sx} ${sy}`;
         }
         geometry[i] = { ...g, p };
       });
-      // The corners: top right, bottom right, top left, bottom left -- a
-      // little smaller when the house or the grid needs the room.
-      const big = Math.max(CR, R);
-      const RC = Math.max(4, Math.min(R, (HY - big - 4 - 2 * LH) / 2, (96 - HY - big) / 2));
-      const corners = [
-        { x: VW - RC - 1, y: 1 + LH + RC }, { x: VW - RC - 1, y: 99 - RC },
-        { x: RC + 1, y: 1 + LH + RC }, { x: RC + 1, y: 99 - RC },
+      // Above the house, below it, then top right and bottom right.
+      const topY = 1 + LH + RC, bottomY = 99 - RC;
+      const extras = [
+        { x: HX, y: topY, p: `M${HX} ${HY - CR} L${HX} ${topY + RC}` },
+        { x: HX, y: bottomY, p: `M${HX} ${HY + CR} L${HX} ${bottomY - RC}` },
       ];
-      ring.forEach((i, k) => {
-        const g = corners[k];
-        const dx = g.x - HX, dy = g.y - HY, len = Math.hypot(dx, dy) || 1;
-        geometry[i] = {
-          x: g.x, y: g.y, d: 2 * RC,
-          p: `M${HX + (dx / len) * CR} ${HY + (dy / len) * CR} L${g.x - (dx / len) * RC} ${g.y - (dy / len) * RC}`,
-        };
+      [[-1, topY], [1, bottomY]].forEach(([up, y]) => {
+        const [sx, sy] = houseSide(1, up * CR * 0.4);
+        extras.push({ x: RX, y, p: `M${sx} ${sy} Q${RX} ${sy} ${RX} ${y - up * RC}` });
       });
+      ring.forEach((i, k) => (geometry[i] = { ...extras[k], d: 2 * RC }));
       // The lines between solar, grid and battery, drawn from the first to the second.
       const has = (role) => this._roleIndex[role] !== undefined;
       if (has("pv") && has("grid")) {
