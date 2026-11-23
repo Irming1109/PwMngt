@@ -2989,6 +2989,9 @@ const PWM_FLOW_TEXTS = {
     layoutColumn: "Column (solar/grid/battery on the left, others around the house)",
     layoutCross: "Cross (solar top, grid left, battery bottom, house right)",
     secondarySmall: "Small (as today)",
+    directionSign: "Sign (-17 W)",
+    directionArrow: "Arrow (← 17 W)",
+    directionCard: "As the card",
     secondaryValue: "Like the power value",
     labels: {
       title: "Title",
@@ -3019,6 +3022,7 @@ const PWM_FLOW_TEXTS = {
       header_size: "Header size (px) - like the other cards",
       secondary_size: "Extra lines' style",
       scale: "Scale (%)",
+      direction_display: "Direction (sale/charging)",
     },
   },
   da: {
@@ -3045,6 +3049,9 @@ const PWM_FLOW_TEXTS = {
     layoutColumn: "Kolonne (sol/net/batteri til venstre, øvrige rundt om huset)",
     layoutCross: "Kryds (sol øverst, net til venstre, batteri nederst, huset til højre)",
     secondarySmall: "Lille (som i dag)",
+    directionSign: "Fortegn (-17 W)",
+    directionArrow: "Pil (← 17 W)",
+    directionCard: "Som kortet",
     secondaryValue: "Som watt-tallet",
     labels: {
       title: "Titel",
@@ -3075,6 +3082,7 @@ const PWM_FLOW_TEXTS = {
       header_size: "Overskriftens størrelse (px) - som de andre kort",
       secondary_size: "Ekstra linjers stil",
       scale: "Skala (%)",
+      direction_display: "Retning (salg/ladning)",
     },
   },
 };
@@ -3530,6 +3538,17 @@ class PwMPowerFlowCard extends HTMLElement {
         sun.p = `M${ex} ${ey} C${ex - (ex - px) * 0.45} ${ey} ${px + (ex - px) * 0.4} ${py} ${px} ${py}`;
       }
     }
+    // Issue #121: the way to the house at each circle, along its own line --
+    // the line is drawn from the house outwards, so it is the end's tangent
+    // (the last point minus the one before it), rounded to an arrow.
+    this._toHouse = [];
+    geometry.forEach((g, i) => {
+      if (!g) return;
+      const n = g.p.match(/-?\d+(\.\d+)?(e-?\d+)?/g).map(Number);
+      const dx = n[n.length - 4] - n[n.length - 2];
+      const dy = n[n.length - 3] - n[n.length - 1];
+      this._toHouse[i] = Math.abs(dx) >= Math.abs(dy) ? (dx > 0 ? "right" : "left") : (dy > 0 ? "down" : "up");
+    });
     const pct = (x) => (x / VW) * 100;
 
     // The name follows the circle: a 270° arc from bottom-left over the top to
@@ -3553,7 +3572,7 @@ class PwMPowerFlowCard extends HTMLElement {
       svg += `<g class="line" data-i="${i}" style="--c:${color}"><path class="base" d="${g.p}"/><path class="dots" d="${g.p}"/></g>`;
       if (ARC) labels += arcLabel(i, g.x, g.y, g.d, 0.11);
       nodes += `<div class="node dev" data-i="${i}" style="left:${pct(g.x)}%;top:${g.y}%;width:${pct(g.d)}%;--c:${color}">
-        <ha-icon></ha-icon><div class="val"></div><div class="name"></div><div class="sec"></div></div>`;
+        <ha-icon></ha-icon><div class="val"><ha-icon class="dir"></ha-icon><span></span></div><div class="name"></div><div class="sec"></div></div>`;
     });
 
     // Faint in the first end's colour until power runs on it.
@@ -3582,7 +3601,7 @@ class PwMPowerFlowCard extends HTMLElement {
     stage.innerHTML = `
       <svg viewBox="0 0 ${VW} 100">${svg}<g class="labels">${labels}</g></svg>
       <div class="node center" style="left:${pct(HX)}%;top:${HY}%;width:${pct(CD)}%;--c:${centerColor}">
-        <ha-icon></ha-icon><div class="val"></div><div class="name"></div><div class="sec"></div>
+        <ha-icon></ha-icon><div class="val"><ha-icon class="dir"></ha-icon><span></span></div><div class="name"></div><div class="sec"></div>
       </div>
       ${nodes}`;
 
@@ -3590,7 +3609,8 @@ class PwMPowerFlowCard extends HTMLElement {
       el,
       arc: this.shadowRoot.querySelector(`.arc-name[data-arc="${id}"] textPath`),
       icon: el.querySelector("ha-icon"),
-      val: el.querySelector(".val"),
+      val: el.querySelector(".val span"),
+      dir: el.querySelector(".val .dir"),
       name: el.querySelector(".name"),
       sec: el.querySelector(".sec"),
     });
@@ -3644,6 +3664,24 @@ class PwMPowerFlowCard extends HTMLElement {
     }
   }
 
+  /**
+   * Issue #121: with direction_display "arrow" the grid and the battery (and
+   * any other device below zero) show an arrow towards the house when power
+   * flows into it, away from it otherwise -- never for the solar, the device
+   * by the grid or anything without power flowing.
+   */
+  _arrow(d, i, watts, min) {
+    const mode = d.direction_display || this._config.direction_display || "sign";
+    if (mode !== "arrow" || watts === null || watts === 0 || Math.abs(watts) < min) return null;
+    if (i === this._besideIndex || !this._toHouse || !this._toHouse[i]) return null;
+    const role = Object.keys(this._roleIndex || {}).find((r) => this._roleIndex[r] === i);
+    if (role === "pv" || (role !== "grid" && role !== "battery" && watts > 0)) return null;
+    const positiveIn = d.flow ? d.flow === "in" : d.placement === "side";
+    const intoHouse = positiveIn ? watts > 0 : watts < 0;
+    const opposite = { up: "down", down: "up", left: "right", right: "left" };
+    return intoHouse ? this._toHouse[i] : opposite[this._toHouse[i]];
+  }
+
   _moreInfo(entityId) {
     if (!entityId) return;
     const event = new Event("hass-more-info", { bubbles: true, composed: true });
@@ -3651,10 +3689,13 @@ class PwMPowerFlowCard extends HTMLElement {
     this.dispatchEvent(event);
   }
 
-  _fill(node, cfg, watts, language, defaultIcon) {
+  /** `arrow` (#121): "up"/"down"/"left"/"right" shows the power without its sign behind that arrow. */
+  _fill(node, cfg, watts, language, defaultIcon, arrow) {
     const state = this._hass.states[cfg.entity];
     node.icon.setAttribute("icon", cfg.icon || (state && state.attributes.icon) || defaultIcon);
-    node.val.textContent = pwmFlowFormatPower(watts, language);
+    node.val.textContent = pwmFlowFormatPower(arrow && watts !== null ? Math.abs(watts) : watts, language);
+    if (arrow) node.dir.setAttribute("icon", "mdi:arrow-" + arrow);
+    node.dir.style.display = arrow ? "" : "none";
     const name = cfg.hide_name ? "" : cfg.name || (state && state.attributes.friendly_name) || "";
     // With name_on_arc the name sits on the arc above the circle instead of inside it.
     if (node.arc) node.arc.textContent = name;
@@ -3745,7 +3786,7 @@ class PwMPowerFlowCard extends HTMLElement {
     c.devices.forEach((d, i) => {
       if (!this._nodes[i]) return; // hidden
       const watts = powers[i];
-      this._fill(this._nodes[i], d, watts, language, "mdi:flash");
+      this._fill(this._nodes[i], d, watts, language, "mdi:flash", this._arrow(d, i, watts, min));
 
       const line = this._lines[i];
       const active = watts !== null && Math.abs(watts) >= min;
@@ -3828,6 +3869,7 @@ const PWM_FLOW_CARD_STYLE = `
   .node ha-icon { --mdc-icon-size:calc(24cqw * var(--is,1)); color:var(--pwm-flow-fg); margin-bottom:2cqw; }
   /* --ts is the card's text_size option (1 = 100 %). */
   .val { font-weight:600; font-size:calc(16cqw * var(--ts,1)); line-height:1.15; white-space:nowrap; letter-spacing:.02em; }
+  .val .dir { --mdc-icon-size:1em; width:1em; height:1em; margin-right:.12em; vertical-align:-.12em; }
   .name, .sec { font-size:calc(11cqw * var(--ts,1)); line-height:1.2; white-space:pre-line; }
   .name { font-weight:500; max-width:100%; overflow-wrap:anywhere; }
   .sec { font-weight:500; opacity:.92; }
@@ -3870,6 +3912,10 @@ function pwmFlowGeneralSchema(t) {
       { value: "small", label: t.secondarySmall },
       { value: "value", label: t.secondaryValue },
     ] } } },
+    { name: "direction_display", selector: { select: { mode: "dropdown", options: [
+      { value: "sign", label: t.directionSign },
+      { value: "arrow", label: t.directionArrow },
+    ] } } },
   ];
 }
 
@@ -3910,6 +3956,11 @@ function pwmFlowDeviceSchema(t) {
       { name: "hide_name", selector: { boolean: {} } },
       { name: "subtract", selector: { boolean: {} } },
       { name: "grid_counted", selector: { boolean: {} } },
+      { name: "direction_display", selector: { select: { mode: "dropdown", options: [
+        { value: "card", label: t.directionCard },
+        { value: "sign", label: t.directionSign },
+        { value: "arrow", label: t.directionArrow },
+      ] } } },
       { name: "hide_below", selector: { number: { min: 0, max: 100000, mode: "box", unit_of_measurement: "W" } } },
     ] },
     { name: "secondary", selector: { entity: { multiple: true } } },
@@ -4004,14 +4055,15 @@ class PwMPowerFlowCardEditor extends HTMLElement {
     this.querySelector(".pwm-flow-hint").textContent = t.secondaryHint;
 
     const generalKeys = ["title", "background", "layout", "show_date", "min_power", "node_size", "center_size",
-      "text_size", "icon_size", "flow_time", "name_on_arc", "secondary_above", "header_size", "scale", "secondary_size"];
+      "text_size", "icon_size", "flow_time", "name_on_arc", "secondary_above", "header_size", "scale", "secondary_size", "direction_display"];
     this._form(this.querySelector("#g"), pwmFlowGeneralSchema(t),
       { title: c.title, background: c.background, layout: c.layout || "column",
         show_date: c.show_date, min_power: c.min_power,
         node_size: c.node_size || 26, center_size: c.center_size || 32,
         text_size: c.text_size || 100, icon_size: c.icon_size || 100, flow_time: c.flow_time || 100,
         name_on_arc: c.name_on_arc, secondary_above: c.secondary_above,
-        header_size: c.header_size, scale: c.scale || 100, secondary_size: c.secondary_size || "small" },
+        header_size: c.header_size, scale: c.scale || 100, secondary_size: c.secondary_size || "small",
+        direction_display: c.direction_display || "sign" },
       t.labels,
       (v) => {
         generalKeys.forEach((key) => {
@@ -4019,6 +4071,7 @@ class PwMPowerFlowCardEditor extends HTMLElement {
           // Leave the defaults out of the YAML.
           if (key === "scale" && Number(c.scale) >= 100) delete c.scale;
           if (key === "secondary_size" && c.secondary_size === "small") delete c.secondary_size;
+          if (key === "direction_display" && c.direction_display === "sign") delete c.direction_display;
         });
         this._fire();
       });
@@ -4063,6 +4116,7 @@ class PwMPowerFlowCardEditor extends HTMLElement {
         { ...d, placement: d.placement || "ring", flow: d.flow || (d.placement === "side" ? "in" : "out"),
           role: d.role || "auto",
           grid_counted: d.grid_counted !== false,
+          direction_display: d.direction_display || "card",
           secondary: pwmFlowSecondaryList(d.secondary).map((s) => s.entity) },
         t.labels,
         (v) => {
@@ -4073,6 +4127,7 @@ class PwMPowerFlowCardEditor extends HTMLElement {
           if (next.placement === "ring") delete next.placement;
           if (next.role === "auto" || next.placement !== "side") delete next.role;
           if (next.placement !== "grid" || next.grid_counted !== false) delete next.grid_counted;
+          if (next.direction_display === "card") delete next.direction_display;
           if (next.flow === (next.placement === "side" ? "in" : "out")) delete next.flow;
           ["invert", "hide_name", "subtract"].forEach((key) => { if (!next[key]) delete next[key]; });
           if (!(Number(next.hide_below) > 0)) delete next.hide_below;
