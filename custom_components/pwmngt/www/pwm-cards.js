@@ -4258,7 +4258,7 @@ const PWM_PLAN_USABLE_COLOR = "#1baf7a";
 const PWM_PLAN_CARD_STYLE = `
   ha-card { padding: 0 0 12px; }
   .wrap { padding: 0 12px; }
-  svg { width: 100%; display: block; overflow: visible; }
+  svg { width: 100%; display: block; margin: 0 auto; overflow: visible; }
   .grid line { stroke: var(--divider-color); stroke-width: 1; }
   .axis text { fill: var(--secondary-text-color); font-size: 11px; }
   .soc { fill: none; stroke: var(--primary-color); stroke-width: 2; }
@@ -4293,6 +4293,7 @@ const PWM_PLAN_CARD_STYLE = `
 // How often today's history is fetched again (ms).
 const PWM_PLAN_HISTORY_REFRESH = 5 * 60 * 1000;
 const PWM_PLAN_HOURS = 30; // today 00:00 to tomorrow 06:00
+const PWM_PLAN_PLOT_HEIGHT = 280; // SoC 0-100 % at height: 100, in viewBox units (600 wide)
 const PWM_PLAN_HOUR_MS = 3600 * 1000;
 
 /**
@@ -4335,7 +4336,7 @@ class PwMBatteryPlanCard extends HTMLElement {
   }
 
   getCardSize() {
-    return 6;
+    return 8;
   }
 
   _language() {
@@ -4443,13 +4444,17 @@ class PwMBatteryPlanCard extends HTMLElement {
     }
 
     // Geometry: the plot, then the rule strip and the hour labels.
+    // The drawing fills the card's width and keeps its proportions, so it
+    // grows with the card (like pwm-power-flow-card); `height` (%) makes the
+    // plot taller or lower, `scale` (%) a narrower drawing, centred.
     const W = 600;
     const left = 30;
     const right = W - 6;
     const top = 8;
-    const bottom = 160;
+    const heightPct = Math.max(50, Math.min(300, Number(this._config.height) || 100));
+    const bottom = top + Math.round((PWM_PLAN_PLOT_HEIGHT * heightPct) / 100);
     const stripTop = bottom + 6;
-    const stripH = 12;
+    const stripH = 16;
     const H = stripTop + stripH + 18;
     const start = this._midnight().getTime();
     const span = PWM_PLAN_HOURS * PWM_PLAN_HOUR_MS;
@@ -4598,6 +4603,8 @@ class PwMBatteryPlanCard extends HTMLElement {
     const wrap = document.createElement("div");
     wrap.className = "wrap";
     wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${t.title}">${parts.join("")}</svg>`;
+    const scale = Math.max(50, Math.min(100, Number(this._config.scale) || 100));
+    wrap.firstElementChild.style.width = `${scale}%`;
     card.appendChild(wrap);
 
     // The selected hour's rule (default: the current hour), or a rule
