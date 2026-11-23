@@ -4263,7 +4263,22 @@ const PWM_PLAN_USABLE_COLOR = "#1baf7a";
 
 const PWM_PLAN_CARD_STYLE = `
   ha-card { padding: 0 0 12px; }
-  .wrap { padding: 0 12px; }
+  .wrap { padding: 0 12px; position: relative; }
+  .hit { fill: transparent; cursor: pointer; }
+  svg { touch-action: pan-y; }
+  .cursor { pointer-events: none; }
+  .cursor line { stroke: var(--primary-text-color); stroke-opacity: 0.5; stroke-width: 1; }
+  .cursor circle { stroke: var(--card-background-color, #fff); stroke-width: 1.5; }
+  .dot-soc { fill: var(--primary-color); }
+  .dot-min, .dot-planned { fill: var(--error-color, #e53935); }
+  .dot-target { fill: var(--success-color, #43a047); }
+  .values td i { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+  .values .time { font-weight: 500; }
+  .tip hr { border: none; border-top: 1px solid var(--divider-color); margin: 8px 0; }
+  .hit:hover { fill: var(--primary-text-color); fill-opacity: 0.06; }
+  .info.tip { position: absolute; z-index: 1; display: none; width: max-content; max-width: min(320px, 80%); margin: 0;
+    pointer-events: none; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35); border: 1px solid var(--divider-color);
+    background: var(--card-background-color, var(--secondary-background-color)); }
   svg { width: 100%; display: block; margin: 0 auto; overflow: visible; }
   .grid line { stroke: var(--divider-color); stroke-width: 1; }
   .axis text { fill: var(--secondary-text-color); font-size: calc(11px * var(--ts, 1)); }
@@ -4697,6 +4712,19 @@ class PwMBatteryPlanCard extends HTMLElement {
       parts.push(`<text class="now-label" x="${nx + 3}" y="${top + 10}">${t.now}</text>`);
     }
 
+    // The pointer's time: a line with a dot on each curve (the tooltip
+    // below has the values).
+    parts.push(
+      `<g class="cursor" style="display: none"><line x1="0" x2="0" y1="${top}" y2="${bottom}"/>` +
+        ["soc", "min", "planned", "target"].map((name) => `<circle class="dot-${name}" r="4" cx="0" cy="0"/>`).join("") +
+        `</g>`
+    );
+    // On top of everything: one column per hour, plot and strip, to tap or
+    // hover (the tooltip below).
+    plan.forEach((_entry, index) => {
+      parts.push(`<rect class="hit" data-i="${index}" x="${left + index * hourW}" y="${top}" width="${hourW}" height="${stripTop + stripH - top}"/>`);
+    });
+
     const wrap = document.createElement("div");
     wrap.className = "wrap";
     wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${t.title}">${parts.join("")}</svg>`;
@@ -4719,8 +4747,89 @@ class PwMBatteryPlanCard extends HTMLElement {
       this._signature = undefined;
       this._render();
     };
-    wrap.querySelectorAll(".band").forEach((band) => {
-      band.addEventListener("click", () => select(Number(band.dataset.i)));
+    // The pointer over the drawing (mouse, or a finger held on it): the
+    // values of the curves at that time, and -- for a mouse -- what a tap
+    // on that hour would show. Touch has no hover, so a tap still fills the
+    // box.
+    const tip = document.createElement("div");
+    tip.className = "info tip";
+    wrap.appendChild(tip);
+    const svg = wrap.querySelector("svg");
+    const cursor = svg.querySelector(".cursor");
+    const placeTip = (event, touch) => {
+      const box = wrap.getBoundingClientRect();
+      const px = event.clientX - box.left;
+      const py = event.clientY - box.top;
+      // Beside the pointer (left of it near the right edge), above it --
+      // below when there's no room, but never under a finger -- and always
+      // inside the card.
+      const tx = px + 14 + tip.offsetWidth > box.width ? px - 14 - tip.offsetWidth : px + 14;
+      const above = py - tip.offsetHeight - (touch ? 40 : 10);
+      tip.style.left = `${Math.max(0, Math.min(tx, box.width - tip.offsetWidth))}px`;
+      tip.style.top = `${above >= 0 || touch ? Math.max(0, above) : py + 16}px`;
+    };
+    const firstUnknown = unknownIndexes.length ? start + unknownIndexes[0] * PWM_PLAN_HOUR_MS : start + span;
+    const nextHour = start + (currentIndex + 1) * PWM_PLAN_HOUR_MS;
+    // Each curve's value at a time, as drawn: the history up to now, then
+    // the plan (the SoC it assumes, the planned floor), until the first
+    // hour waiting for prices.
+    const valuesAt = (time, index) => {
+      const entry = plan[index] || {};
+      const ahead = time > now;
+      const planSoc = entry.soc !== null && entry.soc !== undefined ? Number(entry.soc) : socNow;
+      return {
+        soc: !ahead ? valueAt(socPoints, time) : entry.rule === "unknown" ? undefined : time < nextHour ? socNow : planSoc,
+        min: ahead ? undefined : valueAt(minPoints, time),
+        planned: ahead && planned.length && time < planEnd ? valueAt(planned, time) : undefined,
+        target: Number.isFinite(target) && time < firstUnknown ? target : undefined,
+      };
+    };
+    const labels = { soc: t.soc, min: t.minSoc, planned: t.planned, target: t.target };
+    const showAt = (event, touch) => {
+      const point = svg.createSVGPoint();
+      point.x = event.clientX;
+      point.y = event.clientY;
+      const sx = Math.max(left, Math.min(right, point.matrixTransform(svg.getScreenCTM().inverse()).x));
+      const time = start + ((sx - left) / (right - left)) * span;
+      const index = Math.min(plan.length - 1, Math.floor((time - start) / PWM_PLAN_HOUR_MS));
+      const values = valuesAt(time, index);
+      cursor.style.display = "";
+      cursor.querySelector("line").setAttribute("x1", sx);
+      cursor.querySelector("line").setAttribute("x2", sx);
+      const rows = [];
+      for (const [name, value] of Object.entries(values)) {
+        const dot = cursor.querySelector(`.dot-${name}`);
+        const shown = Number.isFinite(value);
+        dot.style.display = shown ? "" : "none";
+        if (!shown) continue;
+        dot.setAttribute("cx", sx);
+        dot.setAttribute("cy", y(value));
+        const color = getComputedStyle(dot).fill;
+        rows.push(`<tr><td><i style="background: ${color}"></i>${labels[name]}</td><td>${Math.round(value)} %</td></tr>`);
+      }
+      const clock = new Date(time).toLocaleTimeString(this._language(), { hour: "2-digit", minute: "2-digit" });
+      const readout = `<div class="values"><div class="time">${clock}</div><table>${rows.join("")}</table></div>`;
+      tip.innerHTML = touch ? readout : `${readout}<hr>${this._hourHtml(t, plan, index, start)}`;
+      tip.style.display = "block";
+      placeTip(event, touch);
+    };
+    const hide = () => {
+      tip.style.display = "none";
+      cursor.style.display = "none";
+    };
+    svg.addEventListener("pointermove", (event) => {
+      if (event.pointerType === "mouse" || event.buttons) showAt(event, event.pointerType !== "mouse");
+    });
+    svg.addEventListener("pointerdown", (event) => {
+      if (event.pointerType !== "mouse") showAt(event, true);
+    });
+    ["pointerleave", "pointerup", "pointercancel"].forEach((type) =>
+      svg.addEventListener(type, (event) => {
+        if (type === "pointerleave" || event.pointerType !== "mouse") hide();
+      })
+    );
+    wrap.querySelectorAll(".hit").forEach((hit) => {
+      hit.addEventListener("click", () => select(Number(hit.dataset.i)));
     });
 
     // Legend: the lines and areas, then the rules the plan shows (tap one
