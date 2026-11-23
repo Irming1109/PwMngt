@@ -802,6 +802,8 @@ const PWM_BATTERY_TEXTS = {
     enableAuto: "Enable automatic charging",
     unlockHold: "🔒 Unlock manual control - hold 2 s",
     holdHint: "Hold the button for 2 seconds",
+    // Issue #117: the always-shown buttons are held for 2 s too.
+    holdLabel: (text) => `${text} - hold 2 s`,
     relock: "🔓 Lock",
     relockToAuto: "🔒 Lock and go back to automatic operation",
     // Issue #112: one "Charge now" with power and target SoC.
@@ -913,6 +915,8 @@ const PWM_BATTERY_TEXTS = {
     enableAuto: "Aktiver automatisk ladning",
     unlockHold: "🔒 Lås op for manuel betjening - hold 2 sek.",
     holdHint: "Hold knappen inde i 2 sekunder",
+    // Issue #117: de altid synlige knapper holdes også i 2 sek.
+    holdLabel: (text) => `${text} - hold 2 sek.`,
     relock: "🔓 Lås",
     relockToAuto: "🔒 Lås og gå tilbage til automatisk drift",
     // Issue #112: én "Lad nu" med effekt og target-SoC.
@@ -1602,14 +1606,17 @@ class PwMBatteryCard extends HTMLElement {
     const postponeButton = () =>
       this._hass.callService("button", "press", { entity_id: this._ids.postpone });
     const deferred = status.state === "no_deferred";
+    // Issue #117: they are held for 2 s too, so a stray tap can't stop a
+    // charge -- a short tap shows the hint, as on "Manual control".
+    const held = (text, action) => this._holdButton(t.holdLabel(text), t.holdHint, action, false);
     if (chargingPct !== null || manualPct !== null) {
-      buttons.appendChild(this._button(t.stop, () => this._setCommand("internal")));
+      buttons.appendChild(held(t.stop, () => this._setCommand("internal")));
     }
     if (this._ids.postpone && deferred) {
-      buttons.appendChild(this._button(t.cancelPostpone, postponeButton));
+      buttons.appendChild(held(t.cancelPostpone, postponeButton));
     }
     if (!isAuto) {
-      buttons.appendChild(this._button(t.enableAuto, () => this._setMode("auto")));
+      buttons.appendChild(held(t.enableAuto, () => this._setMode("auto")));
     }
 
     let relock = null;
@@ -2220,10 +2227,10 @@ class PwMBatteryCard extends HTMLElement {
    * PWM_MANUAL_HOLD_MS. Letting go, moving the finger (the browser then
    * scrolls and cancels the pointer) or leaving the button aborts it.
    */
-  _holdButton(text, hint, onHeld) {
+  _holdButton(text, hint, onHeld, wide = true) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = "pwm-hold pwm-wide";
+    button.className = wide ? "pwm-hold pwm-wide" : "pwm-hold";
     const fill = document.createElement("span");
     fill.className = "pwm-hold-fill";
     const label = document.createElement("span");
@@ -2258,6 +2265,7 @@ class PwMBatteryCard extends HTMLElement {
       timer = setTimeout(() => {
         timer = null;
         this._holding = false;
+        button.classList.remove("holding");
         onHeld();
       }, PWM_MANUAL_HOLD_MS);
     };
