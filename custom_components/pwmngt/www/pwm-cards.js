@@ -3171,6 +3171,15 @@ class PwMPowerFlowCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: "open" });
+    // Issue #115: the shadow root's children are created once and never
+    // replaced -- card-mod puts its own <card-mod> element in here, and a
+    // rebuild only redraws the .stage, so outside styling survives it.
+    this.shadowRoot.innerHTML = `
+      <style>${PWM_FLOW_CARD_STYLE}</style>
+      <ha-card>
+        <div class="header"><span class="title"></span><span class="date"></span></div>
+        <div class="stage"></div>
+      </ha-card>`;
   }
 
   static getConfigElement() {
@@ -3226,8 +3235,12 @@ class PwMPowerFlowCard extends HTMLElement {
       center: { ...(config.center || {}) },
       devices: Array.isArray(config.devices) ? config.devices : [],
     };
-    this._build();
-    if (this._hass) this._update();
+    // Issue #115: the left column's roles are looked up in hass.entities, so
+    // building before hass arrives would only mean a second build right after.
+    if (this._hass) {
+      this._build();
+      this._update();
+    }
   }
 
   set hass(hass) {
@@ -3377,18 +3390,14 @@ class PwMPowerFlowCard extends HTMLElement {
       svg = `<g class="line link" data-link="${key}" style="--c:${color}"><path class="base" d="${links[key]}"/><path class="dots" d="${links[key]}"/></g>` + svg;
     });
 
-    this.shadowRoot.innerHTML = `
-      <style>${PWM_FLOW_CARD_STYLE}</style>
-      <ha-card>
-        <div class="header"><span class="title"></span><span class="date"></span></div>
-        <div class="stage" style="aspect-ratio:${VW}/100;max-width:${VW * 6.4}px;--k:${100 / VW};--ts:${TS}">
-          <svg viewBox="0 0 ${VW} 100">${svg}<g class="labels">${labels}</g></svg>
-          <div class="node center" style="left:${pct(HX)}%;top:${HY}%;width:${pct(CD)}%;--c:${centerColor}">
-            <ha-icon></ha-icon><div class="val"></div><div class="name"></div><div class="sec"></div>
-          </div>
-          ${nodes}
-        </div>
-      </ha-card>`;
+    const stage = this.shadowRoot.querySelector(".stage");
+    stage.style.cssText = `aspect-ratio:${VW}/100;max-width:${VW * 6.4}px;--k:${100 / VW};--ts:${TS}`;
+    stage.innerHTML = `
+      <svg viewBox="0 0 ${VW} 100">${svg}<g class="labels">${labels}</g></svg>
+      <div class="node center" style="left:${pct(HX)}%;top:${HY}%;width:${pct(CD)}%;--c:${centerColor}">
+        <ha-icon></ha-icon><div class="val"></div><div class="name"></div><div class="sec"></div>
+      </div>
+      ${nodes}`;
 
     const pick = (el, id) => ({
       el,
@@ -3399,8 +3408,12 @@ class PwMPowerFlowCard extends HTMLElement {
       sec: el.querySelector(".sec"),
     });
     const background = c.background || "#000";
-    this.shadowRoot.querySelector("ha-card").style.setProperty("--pwm-flow-card-bg",
+    const card = this.shadowRoot.querySelector("ha-card");
+    card.style.setProperty("--pwm-flow-card-bg",
       background === "theme" ? "var(--ha-card-background, var(--card-background-color))" : background);
+    // On the theme's own (often light) background the white text would vanish
+    // and the dark circles look heavy -- follow the theme's colours instead.
+    card.classList.toggle("themed", background === "theme" || background === "transparent");
     this._nodes = [];
     this._lines = [];
     this.shadowRoot.querySelectorAll(".node.dev").forEach((el) => (this._nodes[+el.dataset.i] = pick(el, el.dataset.i)));
@@ -3585,6 +3598,11 @@ const PWM_FLOW_CARD_STYLE = `
   .line .dots { stroke-width:1.8; stroke-linecap:round; stroke-dasharray:0 5; opacity:0; }
   .line.active .dots { opacity:1; animation:pwm-flow var(--dur,1.5s) linear infinite; }
   .line.active.in .dots { animation-direction:reverse; }
+  ha-card.themed { --pwm-flow-fg: var(--primary-text-color);
+                   --pwm-flow-node-base: var(--ha-card-background, var(--card-background-color, #fff)); }
+  ha-card.themed .node {
+    background: radial-gradient(circle at 50% 40%, color-mix(in srgb, var(--c) 14%, var(--pwm-flow-node-base)) 0%,
+                color-mix(in srgb, var(--c) 6%, var(--pwm-flow-node-base)) 75%); }
   .arc-name { fill:var(--pwm-flow-fg); font-weight:500; letter-spacing:.03em; }
   @keyframes pwm-flow { from { stroke-dashoffset:0; } to { stroke-dashoffset:-5; } }
   .node { position:absolute; transform:translate(-50%,-50%); aspect-ratio:1/1; border-radius:50%;
