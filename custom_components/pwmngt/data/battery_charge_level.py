@@ -100,6 +100,10 @@ fuse rule for the automatic and the manual charge (fuse_check()):
   It going unavailable during a charge runs the fuse check at once.
 - Every command change it makes carries what the check read and decided
   as battery_command's last_fuse_check attribute (select.py).
+- Issue #116 (Claus 2026-11-23): a level above the running one needs
+  0.5 A more free than it draws (_STEP_UP_MARGIN_AMPS) -- with headroom
+  right at a level's limit, the charge otherwise flipped between it and
+  the level below after every 10-minute wait.
 
 Deliberate difference from Node-RED (issue #22, Claus 2026-11-03): "Skal
 batteri lades" plans its hours as if the battery were empty, so there
@@ -205,6 +209,13 @@ _TARIFF_FUSE_MARGIN = 0.85  # Node-RED: tarif_sikring * 0.85.
 # phase stays under this share of the fuse -- a little over PwMngt's own
 # limit, never up to the fuse itself.
 _LOWEST_LEVEL_FUSE_MARGIN = 0.95
+# DIFF (issue #116, Claus 2026-11-23): a level above the one running now
+# needs this many free amps more than it draws itself. Without it Rene's
+# night charge (headroom 3.2-3.5 A, "Charge 75" needs 3.26 A) went 75 -> 50
+# -> 75 every 10 minutes for an hour: the running charge's own current is
+# a little more than Battery power shows, so the headroom always read
+# ~0.25 A lower on "Charge 75" than on "Charge 50".
+_STEP_UP_MARGIN_AMPS = 0.5
 _BATTERY_MAX_CHARGE_FALLBACK = 3000.0  # W
 _BATTERY_SOC_FALLBACK = 5.0  # %, Node-RED: parseFloat(...) || 5.
 # The "SOC når Target value" trigger-state's own first constraint: the
@@ -351,6 +362,9 @@ class BatteryChargeLevelInputs:
     # Battery target end time in minutes after midnight (issue #35); None
     # = _DEFAULT_TARGET_END_MINUTES.
     target_end_minutes: int | None = None
+    # Issue #116: the charge level (%) running now, 0 when not charging --
+    # a higher one needs _STEP_UP_MARGIN_AMPS on top.
+    current_pct: int = 0
 
 
 def _amps_per_phase(power_w: float) -> float:
@@ -382,13 +396,16 @@ def fuse_check(
     battery_max_charge_full: float,
     battery_charge_power: float,
     levels: tuple[int, ...],
+    current_pct: int = 0,
 ) -> FuseCheck:
     """The highest of levels (%, highest first) that keeps every phase
     under tariff fuse * 0.85; failing that, the lowest of them if it keeps
     every phase under tariff fuse * 0.95 (DIFF, issue #101). Node-RED
     rounded the free amps down to whole amps (math.floor) -- not here: at
     Torsten's 2026-11-17 04:00, 2.3 A free became 2 A, too little for
-    "Charge 25" (2.2 A)."""
+    "Charge 25" (2.2 A). A level above current_pct (the one running now,
+    0 = not charging) needs _STEP_UP_MARGIN_AMPS more (DIFF, issue #116),
+    so staying on a level is easier than going up to it."""
     own_amps = _amps_per_phase(max(battery_charge_power, 0.0))
     unreadable = any(load is None for load in loads)
 
@@ -403,7 +420,8 @@ def fuse_check(
     lowest = headroom(_LOWEST_LEVEL_FUSE_MARGIN)
 
     def amps(pct: int) -> float:
-        return _amps_per_phase(battery_max_charge_full * pct / 100)
+        needed = _amps_per_phase(battery_max_charge_full * pct / 100)
+        return needed + _STEP_UP_MARGIN_AMPS if pct > current_pct else needed
 
     level = next((pct for pct in levels if amps(pct) <= normal), None)
     if level is None and levels and amps(levels[-1]) <= lowest:
@@ -548,6 +566,7 @@ def automatic_fuse_check(inputs: BatteryChargeLevelInputs) -> FuseCheck | None:
         _battery_max_charge_full(inputs.battery_max_charge_raw),
         inputs.battery_charge_power,
         _AUTOMATIC_LEVELS,
+        inputs.current_pct,
     )
 
 
@@ -614,6 +633,8 @@ class ManualChargeLevelInputs:
     battery_max_charge_raw: float | None
     # W the battery charges with right now (see BatteryChargeLevelInputs).
     battery_charge_power: float = 0.0
+    # See BatteryChargeLevelInputs (issue #116).
+    current_pct: int = 0
 
 
 def manual_fuse_check(inputs: ManualChargeLevelInputs) -> FuseCheck | None:
@@ -628,6 +649,7 @@ def manual_fuse_check(inputs: ManualChargeLevelInputs) -> FuseCheck | None:
         _battery_max_charge_full(inputs.battery_max_charge_raw),
         inputs.battery_charge_power,
         tuple(pct for pct in _MANUAL_LEVELS if pct <= requested_pct),
+        inputs.current_pct,
     )
 
 
@@ -644,6 +666,14 @@ def calculate_manual_charge_level(inputs: ManualChargeLevelInputs) -> str | None
     if check.level_pct is None:
         return _COMMAND_INTERNAL
     return f"charge_now_{check.level_pct}"
+
+
+def charge_level_pct(battery_command: str | None) -> int:
+    """The charge level (%) of a charge_now_* command, 0 for anything else
+    (issue #116: the level a step up is measured from)."""
+    if battery_command not in _ACTIVE_CHARGE_COMMANDS:
+        return 0
+    return int(battery_command.rsplit("_", 1)[1])  # "charge_now_75" -> 75
 
 
 def battery_target_reached(
@@ -920,6 +950,7 @@ class PwMngtBatteryChargeLevelController:
             battery_size_kwh=self._read_battery_size(),
             charging_now=currently_charging(self._read_battery_command()),
             target_end_minutes=self._read_target_end_minutes(),
+            current_pct=charge_level_pct(self._read_battery_command()),
         )
         result, night_plan = calculate_battery_charge_level(inputs)
         if result is None:
@@ -991,6 +1022,7 @@ class PwMngtBatteryChargeLevelController:
             fuse_load_l3=self._read_fuse_load(2),
             battery_max_charge_raw=self._read_battery_max_charge(),
             battery_charge_power=self._read_grid_charge_power(),
+            current_pct=charge_level_pct(self._read_battery_command()),
         )
         result = calculate_manual_charge_level(inputs)
         if result is None or result == self._read_battery_command():
