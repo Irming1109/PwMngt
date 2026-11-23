@@ -2976,7 +2976,7 @@ const PWM_FLOW_TEXTS = {
     moveDown: "Move down",
     remove: "Remove",
     secondaryHint:
-      'Extra lines can get a label in front (e.g. "in", "SoC") in YAML: secondary: [{entity: ..., label: in}]',
+      'Extra lines can get a label in front (e.g. "in", "SoC") and a number of decimals in YAML: secondary: [{entity: ..., label: SoC, decimals: 0}]',
     placementRing: "Ring around the house",
     placementSide: "Column on the left (PV/grid/battery)",
     placementGrid: "By the grid, outside the house (e.g. a tenant)",
@@ -2988,6 +2988,8 @@ const PWM_FLOW_TEXTS = {
     roleBattery: "Battery (bottom)",
     layoutColumn: "Column (solar/grid/battery on the left, others around the house)",
     layoutCross: "Cross (solar top, grid left, battery bottom, house right)",
+    secondarySmall: "Small (as today)",
+    secondaryValue: "Like the power value",
     labels: {
       title: "Title",
       background: "Background (#000, theme, transparent)",
@@ -3014,6 +3016,9 @@ const PWM_FLOW_TEXTS = {
       secondary_above: "Extra lines above the icon",
       flow_time: "Animation time (%) - higher is slower",
       grid_counted: "The grid circle also measures this device",
+      header_size: "Header size (px) - like the other cards",
+      secondary_size: "Extra lines' style",
+      scale: "Scale (%)",
     },
   },
   da: {
@@ -3027,7 +3032,7 @@ const PWM_FLOW_TEXTS = {
     moveDown: "Flyt ned",
     remove: "Fjern",
     secondaryHint:
-      'Ekstra linjer kan få en tekst foran (fx "in", "SoC") via YAML: secondary: [{entity: ..., label: in}]',
+      'Ekstra linjer kan få en tekst foran (fx "in", "SoC") og et antal decimaler via YAML: secondary: [{entity: ..., label: SoC, decimals: 0}]',
     placementRing: "Ring om huset",
     placementSide: "Kolonne til venstre (PV/net/batteri)",
     placementGrid: "Ved nettet, uden om huset (fx lejemål)",
@@ -3039,6 +3044,8 @@ const PWM_FLOW_TEXTS = {
     roleBattery: "Batteri (nederst)",
     layoutColumn: "Kolonne (sol/net/batteri til venstre, øvrige rundt om huset)",
     layoutCross: "Kryds (sol øverst, net til venstre, batteri nederst, huset til højre)",
+    secondarySmall: "Lille (som i dag)",
+    secondaryValue: "Som watt-tallet",
     labels: {
       title: "Titel",
       background: "Baggrund (#000, theme, transparent)",
@@ -3065,6 +3072,9 @@ const PWM_FLOW_TEXTS = {
       secondary_above: "Ekstra linjer over ikonet",
       flow_time: "Animationstid (%) - højere er langsommere",
       grid_counted: "Net-cirklen måler også denne enhed",
+      header_size: "Overskriftens størrelse (px) - som de andre kort",
+      secondary_size: "Ekstra linjers stil",
+      scale: "Skala (%)",
     },
   },
 };
@@ -3100,9 +3110,19 @@ function pwmFlowFormatPower(watts, language) {
   return (Math.round(watts) || 0).toLocaleString(language) + " W";
 }
 
-function pwmFlowFormatState(hass, entityId) {
+function pwmFlowFormatState(hass, entityId, decimals) {
   const state = hass.states[entityId];
   if (!state) return "—";
+  // Issue #118: a fixed number of decimals (e.g. SoC "97 %") -- only for a
+  // numeric state; anything else (unavailable, text) is shown as HA does.
+  const digits = decimals === undefined || decimals === null || decimals === "" ? NaN : Number(decimals);
+  const value = Number(state.state);
+  if (Number.isInteger(digits) && digits >= 0 && state.state !== "" && Number.isFinite(value)) {
+    const language = (hass.locale && hass.locale.language) || hass.language || "en";
+    const unit = state.attributes.unit_of_measurement;
+    const text = value.toLocaleString(language, { minimumFractionDigits: digits, maximumFractionDigits: digits });
+    return text + (unit ? " " + unit : "");
+  }
   if (typeof hass.formatEntityState === "function") return hass.formatEntityState(state);
   const unit = state.attributes.unit_of_measurement;
   return state.state + (unit ? " " + unit : "");
@@ -3118,7 +3138,7 @@ function pwmFlowSecondaryList(secondary) {
 
 function pwmFlowSecondaryText(hass, secondary) {
   return pwmFlowSecondaryList(secondary)
-    .map((s) => (s.label ? s.label + " " : "") + pwmFlowFormatState(hass, s.entity))
+    .map((s) => (s.label ? s.label + " " : "") + pwmFlowFormatState(hass, s.entity, s.decimals))
     .join("\n");
 }
 
@@ -3139,12 +3159,13 @@ function pwmFlowStableJson(object) {
     ? Object.keys(value).sort().reduce((r, k) => { r[k] = value[k]; return r; }, {}) : value));
 }
 
-/** The entity picker only returns ids -- keep labels set in YAML. */
+/** The entity picker only returns ids -- keep labels and decimals set in YAML. */
 function pwmFlowMergeSecondary(ids, old) {
   const previous = pwmFlowSecondaryList(old);
   return (ids || []).map((id) => {
     const found = previous.find((x) => x.entity === id);
-    return found && found.label ? { entity: id, label: found.label } : id;
+    if (!found || (!found.label && found.decimals === undefined)) return id;
+    return { ...found, entity: id };
   });
 }
 
@@ -3327,8 +3348,8 @@ class PwMPowerFlowCard extends HTMLElement {
 
     if (cross) {
       // Like the classic power flow card: grid to the left, solar above and
-      // the battery below the next column, the house in the third with up to
-      // two devices above/below it, and a fourth column with two more.
+      // the battery below the next column, the house in the third, two
+      // devices in the corners to its right and two more above/below it.
       side.forEach((i) => (this._roleIndex[roles[i]] = i));
       const D = Math.min(NS, (82 - LH) / 2);
       const R = D / 2;
@@ -3341,7 +3362,7 @@ class PwMPowerFlowCard extends HTMLElement {
       const MX = GX + GAP;
       HX = MX + GAP;
       const RX = HX + GAP;
-      VW = (ring.length > 2 ? RX + RC : HX + Math.max(CR, ring.length ? RC : 0)) + 1;
+      VW = (ring.length ? RX + R : HX + CR) + 1;
       const top = { x: MX, y: 1 + LH + R, d: D };
       const bottom = { x: MX, y: 99 - R, d: D };
       const left = { x: GX, y: HY, d: D };
@@ -3362,17 +3383,19 @@ class PwMPowerFlowCard extends HTMLElement {
         }
         geometry[i] = { ...g, p };
       });
-      // Above the house, below it, then top right and bottom right.
-      const topY = 1 + LH + RC, bottomY = 99 - RC;
-      const extras = [
-        { x: HX, y: topY, p: `M${HX} ${HY - CR} L${HX} ${topY + RC}` },
-        { x: HX, y: bottomY, p: `M${HX} ${HY + CR} L${HX} ${bottomY - RC}` },
-      ];
-      [[-1, topY], [1, bottomY]].forEach(([up, y]) => {
-        const [sx, sy] = houseSide(1, up * CR * 0.4);
-        extras.push({ x: RX, y, p: `M${sx} ${sy} Q${RX} ${sy} ${RX} ${y - up * RC}` });
+      // Top right and bottom right first, as big as the others with a line
+      // long enough for the dots (#114), then right above and below the house.
+      const extras = [1 + LH + R, 99 - R].map((y) => {
+        const dx = RX - HX, dy = y - HY, len = Math.hypot(dx, dy) || 1;
+        const ux = dx / len, uy = dy / len;
+        return { x: RX, y, d: D, p: `M${HX + ux * CR} ${HY + uy * CR} L${RX - ux * R} ${y - uy * R}` };
       });
-      ring.forEach((i, k) => (geometry[i] = { ...extras[k], d: 2 * RC }));
+      const topY = 1 + LH + RC, bottomY = 99 - RC;
+      extras.push(
+        { x: HX, y: topY, d: 2 * RC, p: `M${HX} ${HY - CR} L${HX} ${topY + RC}` },
+        { x: HX, y: bottomY, d: 2 * RC, p: `M${HX} ${HY + CR} L${HX} ${bottomY - RC}` },
+      );
+      ring.forEach((i, k) => (geometry[i] = extras[k]));
       // The lines between solar, grid and battery, drawn from the first to the second.
       const has = (role) => this._roleIndex[role] !== undefined;
       if (has("pv") && has("grid")) {
@@ -3544,9 +3567,18 @@ class PwMPowerFlowCard extends HTMLElement {
     });
 
     const stage = this.shadowRoot.querySelector(".stage");
-    stage.style.cssText = `aspect-ratio:${VW}/100;max-width:${VW * 6.4}px;--k:${100 / VW};--ts:${TS};--is:${IS}`;
+    // Issue #120: a smaller drawing, centred -- the text follows its width.
+    const SC = Math.max(50, Math.min(100, Number(c.scale) || 100));
+    stage.style.cssText = `width:${SC}%;aspect-ratio:${VW}/100;max-width:${VW * 6.4}px;--k:${100 / VW};--ts:${TS};--is:${IS}`;
     // Issue #114: the extra lines (e.g. the SoC) above the icon instead of below the value.
     stage.classList.toggle("sec-above", !!c.secondary_above);
+    // Issue #120: the extra lines in the same size and weight as the power value.
+    stage.classList.toggle("sec-value", c.secondary_size === "value");
+    // Issue #120: the header like the other cards' (normal weight) when a size is set.
+    const header = this.shadowRoot.querySelector(".header");
+    const headerSize = Number(c.header_size);
+    header.style.fontSize = headerSize > 0 ? headerSize + "px" : "";
+    header.style.fontWeight = headerSize > 0 ? "400" : "";
     stage.innerHTML = `
       <svg viewBox="0 0 ${VW} 100">${svg}<g class="labels">${labels}</g></svg>
       <div class="node center" style="left:${pct(HX)}%;top:${HY}%;width:${pct(CD)}%;--c:${centerColor}">
@@ -3801,6 +3833,9 @@ const PWM_FLOW_CARD_STYLE = `
   .sec { font-weight:500; opacity:.92; }
   .center ha-icon { --mdc-icon-size:calc(24cqw * var(--is,1)); }
   .sec-above .sec { order:-1; margin-bottom:1cqw; }
+  .sec-value .sec { font-weight:600; opacity:1; font-size:calc(16cqw * var(--ts,1)); line-height:1.15;
+                    letter-spacing:.02em; white-space:pre; }
+  .sec-value .center .sec { font-size:calc(14cqw * var(--ts,1)); }
   .center .val { font-size:calc(14cqw * var(--ts,1)); }
   .center .name, .center .sec { font-size:calc(10cqw * var(--ts,1)); }
 `;
@@ -3828,7 +3863,13 @@ function pwmFlowGeneralSchema(t) {
       { name: "flow_time", selector: { number: { min: 25, max: 400, step: 5, mode: "slider" } } },
       { name: "name_on_arc", selector: { boolean: {} } },
       { name: "secondary_above", selector: { boolean: {} } },
+      { name: "header_size", selector: { number: { min: 10, max: 40, mode: "box", unit_of_measurement: "px" } } },
+      { name: "scale", selector: { number: { min: 50, max: 100, step: 1, mode: "slider" } } },
     ] },
+    { name: "secondary_size", selector: { select: { mode: "dropdown", options: [
+      { value: "small", label: t.secondarySmall },
+      { value: "value", label: t.secondaryValue },
+    ] } } },
   ];
 }
 
@@ -3963,17 +4004,21 @@ class PwMPowerFlowCardEditor extends HTMLElement {
     this.querySelector(".pwm-flow-hint").textContent = t.secondaryHint;
 
     const generalKeys = ["title", "background", "layout", "show_date", "min_power", "node_size", "center_size",
-      "text_size", "icon_size", "flow_time", "name_on_arc", "secondary_above"];
+      "text_size", "icon_size", "flow_time", "name_on_arc", "secondary_above", "header_size", "scale", "secondary_size"];
     this._form(this.querySelector("#g"), pwmFlowGeneralSchema(t),
       { title: c.title, background: c.background, layout: c.layout || "column",
         show_date: c.show_date, min_power: c.min_power,
         node_size: c.node_size || 26, center_size: c.center_size || 32,
         text_size: c.text_size || 100, icon_size: c.icon_size || 100, flow_time: c.flow_time || 100,
-        name_on_arc: c.name_on_arc, secondary_above: c.secondary_above },
+        name_on_arc: c.name_on_arc, secondary_above: c.secondary_above,
+        header_size: c.header_size, scale: c.scale || 100, secondary_size: c.secondary_size || "small" },
       t.labels,
       (v) => {
         generalKeys.forEach((key) => {
           if (v[key] === undefined || v[key] === "") delete c[key]; else c[key] = v[key];
+          // Leave the defaults out of the YAML.
+          if (key === "scale" && Number(c.scale) >= 100) delete c.scale;
+          if (key === "secondary_size" && c.secondary_size === "small") delete c.secondary_size;
         });
         this._fire();
       });

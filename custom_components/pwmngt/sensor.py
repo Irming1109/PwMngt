@@ -424,6 +424,8 @@ PwM_PV_MIRROR_SENSORS: list[tuple[SensorEntityDescription, str]] = [
             device_class=SensorDeviceClass.BATTERY,
             state_class=SensorStateClass.MEASUREMENT,
             native_unit_of_measurement="%",
+            # Issue #118: "97 %", not "97.0 %", everywhere in HA.
+            suggested_display_precision=0,
         ),
         ENTITY_KEY_BATTERY_SOC,
     ),
