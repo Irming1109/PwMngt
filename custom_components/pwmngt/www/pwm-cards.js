@@ -2979,6 +2979,7 @@ const PWM_FLOW_TEXTS = {
       'Extra lines can get a label in front (e.g. "in", "SoC") in YAML: secondary: [{entity: ..., label: in}]',
     placementRing: "Ring around the house",
     placementSide: "Column on the left (PV/grid/battery)",
+    placementGrid: "By the grid, outside the house (e.g. a tenant)",
     flowOut: "Out of the house when positive (consumption, battery charging)",
     flowIn: "Into the house when positive (solar, grid import, battery discharging)",
     roleAuto: "Automatic (PwMngt's own sensors)",
@@ -3012,6 +3013,7 @@ const PWM_FLOW_TEXTS = {
       icon_size: "Icon size (%)",
       secondary_above: "Extra lines above the icon",
       flow_time: "Animation time (%) - higher is slower",
+      grid_counted: "The grid circle also measures this device",
     },
   },
   da: {
@@ -3028,6 +3030,7 @@ const PWM_FLOW_TEXTS = {
       'Ekstra linjer kan få en tekst foran (fx "in", "SoC") via YAML: secondary: [{entity: ..., label: in}]',
     placementRing: "Ring om huset",
     placementSide: "Kolonne til venstre (PV/net/batteri)",
+    placementGrid: "Ved nettet, uden om huset (fx lejemål)",
     flowOut: "Ud fra huset ved positiv værdi (forbrug, batteri der lader)",
     flowIn: "Ind i huset ved positiv værdi (sol, net-import, batteri der aflader)",
     roleAuto: "Automatisk (PwMngt's egne sensorer)",
@@ -3061,6 +3064,7 @@ const PWM_FLOW_TEXTS = {
       icon_size: "Ikonstørrelse (%)",
       secondary_above: "Ekstra linjer over ikonet",
       flow_time: "Animationstid (%) - højere er langsommere",
+      grid_counted: "Net-cirklen måler også denne enhed",
     },
   },
 };
@@ -3282,7 +3286,13 @@ class PwMPowerFlowCard extends HTMLElement {
     this._visibleKey = this._layoutKey(visible, roles);
     const side = [];
     const ring = [];
-    c.devices.forEach((d, i) => { if (visible[i]) (d.placement === "side" ? side : ring).push(i); });
+    const beside = [];
+    c.devices.forEach((d, i) => {
+      if (!visible[i]) return;
+      if (d.placement === "side") side.push(i);
+      else if (d.placement === "grid") beside.push(i);
+      else ring.push(i);
+    });
     const hasSide = side.length > 0;
     const NS = Math.max(12, Math.min(40, Number(c.node_size) || 26)); // wanted circle size
     const CD = Math.max(16, Math.min(40, Number(c.center_size) || 32)); // house diameter
@@ -3300,6 +3310,13 @@ class PwMPowerFlowCard extends HTMLElement {
     // has its own role) they keep fixed places and get lines between each other.
     const sideRoles = side.map((i) => roles[i]);
     const fixed = side.length > 0 && sideRoles.every(Boolean) && new Set(sideRoles).size === sideRoles.length;
+    // Issue #119: one device by the grid, outside the house (e.g. a tenant),
+    // sits to the right of the solar and hangs off the grid circle -- without
+    // their fixed places (or for a second one) it joins the ring instead.
+    const besideIndex = fixed && sideRoles.includes("grid") && sideRoles.includes("pv") ? beside[0] : undefined;
+    beside.forEach((i) => { if (i !== besideIndex) ring.push(i); });
+    ring.sort((a, b) => a - b);
+    this._besideIndex = besideIndex;
     // Issue #114: the "cross" layout needs the fixed roles and room for at
     // most four other devices.
     const cross = c.layout === "cross" && fixed && ring.length <= 4;
@@ -3454,6 +3471,40 @@ class PwMPowerFlowCard extends HTMLElement {
         const ax = pv.x - RS * 0.8, ay = pv.y + RS * 0.6;
         const bx = bat.x - RS * 0.8, by = bat.y - RS * 0.6;
         links.pv_battery = `M${ax} ${ay} C${ax - 2} ${ay + 12} ${bx - 2} ${by - 12} ${bx} ${by}`;
+      }
+    }
+    // Issue #119: the device by the grid sits to the right of the solar, with
+    // a line from the grid circle.
+    if (besideIndex !== undefined) {
+      const sun = geometry[this._roleIndex.pv];
+      const g = geometry[this._roleIndex.grid];
+      const r = g.d / 2;
+      if (cross) {
+        // Top left, above the grid and beside the solar -- smaller if needed
+        // to leave room for the grid's name.
+        const rt = Math.max(4, Math.min(r, (g.y - r - 2 * LH - 3) / 2));
+        const y = 1 + LH + rt;
+        geometry[besideIndex] = {
+          x: g.x, y, d: 2 * rt,
+          p: `M${g.x + r * 0.71} ${g.y - r * 0.71} L${g.x + rt * 0.71} ${y + rt * 0.71}`,
+        };
+      } else {
+        // A little smaller and higher than the solar, so the solar's line to
+        // the house can pass below it (and above the grid's name).
+        const rs = sun.d / 2;
+        const rt = rs * 0.75;
+        const x = sun.x + rs + 2.5 + rt;
+        const y = sun.y - rs + rt;
+        const dx = x - g.x, dy = y - g.y, len = Math.hypot(dx, dy) || 1;
+        geometry[besideIndex] = {
+          x, y, d: 2 * rt,
+          p: `M${g.x + (dx / len) * r} ${g.y + (dy / len) * r} L${x - (dx / len) * rt} ${y - (dy / len) * rt}`,
+        };
+        // The solar's line to the house leaves 30° below its right side.
+        const ea = Math.PI - ((sun.y - HY) / 50) * 0.75;
+        const ex = HX + CR * Math.cos(ea), ey = HY + CR * Math.sin(ea);
+        const px = sun.x + rs * 0.87, py = sun.y + rs * 0.5;
+        sun.p = `M${ex} ${ey} C${ex - (ex - px) * 0.45} ${ey} ${px + (ex - px) * 0.4} ${py} ${px} ${py}`;
       }
     }
     const pct = (x) => (x / VW) * 100;
@@ -3612,9 +3663,26 @@ class PwMPowerFlowCard extends HTMLElement {
       if (i === undefined || powers[i] === null) return 0;
       return c.devices[i].flow === "out" ? -powers[i] : powers[i];
     };
+    // Issue #119: the device by the grid (consumption > 0). When the grid
+    // circle's meter counts it too, only the rest of the grid is the house's.
+    const bi = this._besideIndex;
+    const byGrid = bi !== undefined && powers[bi] !== null
+      ? Math.max(0, c.devices[bi].flow === "in" ? -powers[bi] : powers[bi])
+      : 0;
+    const gridCounted = bi !== undefined && c.devices[bi].grid_counted !== false;
     const split = this._roleIndex && Object.keys(this._roleIndex).length
-      ? pwmFlowSplit(inward(role("pv")), inward(role("grid")), inward(role("battery")))
+      ? pwmFlowSplit(inward(role("pv")), inward(role("grid")) - (gridCounted ? byGrid : 0), inward(role("battery")))
       : null;
+    // What the house sells covers it first (solar, then battery); the rest comes from the grid.
+    let byGridSource = "grid";
+    if (split && bi !== undefined) {
+      const fromPv = Math.min(split.pvToGrid, byGrid);
+      const fromBattery = Math.min(split.batteryToGrid, byGrid - fromPv);
+      const fromGrid = byGrid - fromPv - fromBattery;
+      const most = Math.max(fromPv, fromBattery, fromGrid);
+      byGridSource = most === fromPv ? "pv" : most === fromBattery ? "battery" : "grid";
+    }
+    const color = (i) => (i === undefined ? "#fff" : c.devices[i].color || PWM_FLOW_COLORS[i % PWM_FLOW_COLORS.length]);
     const houseShare = {};
     if (split) {
       if (role("pv") !== undefined) houseShare[role("pv")] = split.pvToHouse;
@@ -3653,20 +3721,26 @@ class PwMPowerFlowCard extends HTMLElement {
       // Issue #113: solar/grid/battery's line to the house only carries the
       // house's share -- the rest runs on the lines between them.
       const share = houseShare[i];
-      const amount = share !== undefined ? share : watts;
+      const amount = i === bi ? byGrid : share !== undefined ? share : watts;
+      // Issue #119: the grid's line to the device by the grid takes the colour
+      // of where most of its power comes from.
+      if (i === bi) {
+        const from = role(byGridSource);
+        line.style.setProperty("--c", amount && from !== undefined ? color(from) : color(i));
+      }
       if (amount === null || !(Math.abs(amount) >= min) || amount === 0) {
         line.classList.remove("active");
         return;
       }
       let towardsHouse = d.flow ? d.flow === "in" : d.placement === "side";
       if (share !== undefined) towardsHouse = true;
+      else if (i === bi) towardsHouse = false; // drawn from the grid out to the device
       else if (watts < 0) towardsHouse = !towardsHouse;
       this._animate(line, this._durations, i, amount, towardsHouse);
     });
 
     // Issue #113: the lines between solar, grid and battery, in the colour
     // of where the power comes from.
-    const color = (i) => (i === undefined ? "#fff" : c.devices[i].color || PWM_FLOW_COLORS[i % PWM_FLOW_COLORS.length]);
     const flows = {
       pv_grid: split ? [split.pvToGrid, 0] : [0, 0],
       grid_battery: split ? [split.gridToBattery, split.batteryToGrid] : [0, 0],
@@ -3779,6 +3853,7 @@ function pwmFlowDeviceSchema(t) {
       { name: "placement", selector: { select: { mode: "dropdown", options: [
         { value: "ring", label: t.placementRing },
         { value: "side", label: t.placementSide },
+        { value: "grid", label: t.placementGrid },
       ] } } },
       { name: "flow", selector: { select: { mode: "dropdown", options: [
         { value: "out", label: t.flowOut },
@@ -3793,6 +3868,7 @@ function pwmFlowDeviceSchema(t) {
       { name: "invert", selector: { boolean: {} } },
       { name: "hide_name", selector: { boolean: {} } },
       { name: "subtract", selector: { boolean: {} } },
+      { name: "grid_counted", selector: { boolean: {} } },
       { name: "hide_below", selector: { number: { min: 0, max: 100000, mode: "box", unit_of_measurement: "W" } } },
     ] },
     { name: "secondary", selector: { entity: { multiple: true } } },
@@ -3941,6 +4017,7 @@ class PwMPowerFlowCardEditor extends HTMLElement {
       this._form(box, deviceSchema,
         { ...d, placement: d.placement || "ring", flow: d.flow || (d.placement === "side" ? "in" : "out"),
           role: d.role || "auto",
+          grid_counted: d.grid_counted !== false,
           secondary: pwmFlowSecondaryList(d.secondary).map((s) => s.entity) },
         t.labels,
         (v) => {
@@ -3950,6 +4027,7 @@ class PwMPowerFlowCardEditor extends HTMLElement {
           // Leave defaults out of the YAML.
           if (next.placement === "ring") delete next.placement;
           if (next.role === "auto" || next.placement !== "side") delete next.role;
+          if (next.placement !== "grid" || next.grid_counted !== false) delete next.grid_counted;
           if (next.flow === (next.placement === "side" ? "in" : "out")) delete next.flow;
           ["invert", "hide_name", "subtract"].forEach((key) => { if (!next[key]) delete next[key]; });
           if (!(Number(next.hide_below) > 0)) delete next.hide_below;
