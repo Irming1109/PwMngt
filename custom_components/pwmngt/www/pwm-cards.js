@@ -4490,13 +4490,30 @@ class PwMBatteryPlanCard extends HTMLElement {
     }
     // Issue #123: tomorrow on its own once its plan is known (tomorrow's
     // prices, ~13:00) -- and back to today after midnight.
-    const today = this._midnight().getTime();
-    const tomorrowPlan = fullPlan.slice(24, 24 + PWM_PLAN_DAY_HOURS);
-    const hasTomorrow =
-      tomorrowPlan.length === PWM_PLAN_DAY_HOURS && tomorrowPlan.some((entry) => entry.rule !== "unknown");
+    const midnight = this._midnight();
+    const today = midnight.getTime();
+    // The plan's hours by their own start (local date and hour), not their
+    // place in the list: Battery data only runs between 00:00 and 06:00 when
+    // something changes, so just after midnight the plan may still be
+    // yesterday's. An hour the plan doesn't have is "no rule" when it's
+    // over, else "waiting for prices".
+    const hourKey = (date) => `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}-${date.getHours()}`;
+    const byHour = new Map(fullPlan.map((entry) => [hourKey(new Date(entry.start)), entry]));
+    const planFrom = (firstHour, count) =>
+      Array.from({ length: count }, (_, i) => {
+        const hour = firstHour + i;
+        const time = new Date(midnight.getFullYear(), midnight.getMonth(), midnight.getDate() + Math.floor(hour / 24), hour % 24);
+        const entry = byHour.get(hourKey(time));
+        if (entry) return entry;
+        return time.getTime() + PWM_PLAN_HOUR_MS <= Date.now()
+          ? { rule: null, floor: null, planned: false }
+          : { rule: "unknown", floor: null, planned: true };
+      });
+    const tomorrowPlan = planFrom(24, PWM_PLAN_DAY_HOURS);
+    const hasTomorrow = tomorrowPlan.some((entry) => entry.rule !== "unknown");
     const showTomorrow = this._day === "tomorrow" && this._dayChosen === today && hasTomorrow;
     const hours = showTomorrow ? PWM_PLAN_DAY_HOURS : PWM_PLAN_HOURS;
-    const plan = showTomorrow ? tomorrowPlan : fullPlan.slice(0, PWM_PLAN_HOURS);
+    const plan = showTomorrow ? tomorrowPlan : planFrom(0, PWM_PLAN_HOURS);
     if (hasTomorrow) {
       const days = document.createElement("div");
       days.className = "days";
