@@ -4191,6 +4191,7 @@ const PWM_PLAN_TEXTS = {
     },
     missing: "PwMngt's battery entities were not found – is Solar PV Plant set up?",
     noPlan: "Battery data has no plan yet – it comes with the next run.",
+    editor: { title: "Title", height: "Height (%)", scale: "Scale (%)" },
   },
   da: {
     title: "Batteriplan",
@@ -4233,6 +4234,7 @@ const PWM_PLAN_TEXTS = {
     },
     missing: "PwMngt's batteri-entities blev ikke fundet – er Solar PV Plant sat op?",
     noPlan: "Battery data har ingen plan endnu – den kommer ved næste kørsel.",
+    editor: { title: "Titel", height: "Højde (%)", scale: "Skala (%)" },
   },
 };
 
@@ -4337,6 +4339,25 @@ class PwMBatteryPlanCard extends HTMLElement {
 
   getCardSize() {
     return 8;
+  }
+
+  /**
+   * The visual editor: HA builds it from this schema (ha-form), so the
+   * card needs no editor element of its own. HA passes no hass to
+   * computeLabel, so the language is read from the page's own.
+   */
+  static getConfigForm() {
+    const hass = (document.querySelector("home-assistant") || {}).hass || {};
+    const language = String((hass.locale && hass.locale.language) || hass.language || "en").split("-")[0];
+    const labels = (PWM_PLAN_TEXTS[language] || PWM_PLAN_TEXTS.en).editor;
+    return {
+      schema: [
+        { name: "title", selector: { text: {} } },
+        { name: "height", selector: { number: { min: 50, max: 300, step: 5, mode: "slider" } } },
+        { name: "scale", selector: { number: { min: 50, max: 100, step: 1, mode: "slider" } } },
+      ],
+      computeLabel: (schema) => labels[schema.name] || schema.name,
+    };
   }
 
   _language() {
