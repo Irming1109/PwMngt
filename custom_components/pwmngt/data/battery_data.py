@@ -1066,15 +1066,58 @@ def kostal_lock(ledger: "BatteryLedger") -> float | None:
     return max(locks) if locks else None
 
 
+# Issue #122: which rule decided min_soc -- shown on the battery plan card
+# (data/battery_plan.py, www/pwm-cards.js), never used for control.
+RULE_FREE = "free"
+RULE_HOLD = "hold"
+RULE_CHARGE_CURVE = "charge_curve"
+RULE_TARGET = "target"
+RULE_TARGET_PROTECTION = "target_protection"
+RULE_NIGHT_PROTECTION = "night_protection"
+RULE_DAY_PLAN = "day_plan"
+RULE_PV_RELEASE = "pv_release"
+RULE_SALE = "sale"
+RULE_GRID_CHARGE = "grid_charge"
+RULE_CAR = "car"
+RULE_BLOCKED = "blocked"
+
+
+@dataclass
+class MinSocRule:
+    """Issue #122: the rule that decided a run's min_soc and, for the night
+    price protection, the numbers behind it."""
+
+    rule: str
+    # RULE_NIGHT_PROTECTION only: the hour's price (kr/kWh, with the
+    # surcharge), the percentage points held, and the cheapest and dearest
+    # of the held grid cells' purchase prices.
+    price: float | None = None
+    held_points: int | None = None
+    cell_price_min: float | None = None
+    cell_price_max: float | None = None
+
+    def as_dict(self) -> dict[str, Any]:
+        result: dict[str, Any] = {"rule": self.rule}
+        if self.price is not None:
+            result.update(
+                price=round(self.price, 3),
+                held_points=self.held_points,
+                cell_price_min=round(self.cell_price_min or 0.0, 3),
+                cell_price_max=round(self.cell_price_max or 0.0, 3),
+                margin=_NIGHT_PRICE_MARGIN,
+            )
+        return result
+
+
 def calculate_battery_data(
     inputs: BatteryInputs, previous: BatteryLedger
-) -> tuple[int, BatteryLedger, str, bool]:
+) -> tuple[int, BatteryLedger, str, bool, MinSocRule]:
     """One run of Node-RED's "Min_SOC beregning".
 
-    Returns (min_soc, the new ledger, forced_charge "on"/"off", and whether
+    Returns (min_soc, the new ledger, forced_charge "on"/"off", whether
     the SoC is behind today's charge curve -- issue #33: a car charging
-    then leaves the PV surplus to the battery). Pure -- testable on its
-    own.
+    then leaves the PV surplus to the battery -- and issue #122: the rule
+    that decided min_soc). Pure -- testable on its own.
     """
     # DIFF: Node-RED's fixed 5 everywhere below.
     empty_soc = inputs.battery_min_soc
@@ -1263,6 +1306,8 @@ def calculate_battery_data(
     grid_charge_planned_today = inputs.charge_status == _CHARGE_STATUS_YES_TODAY
 
     min_soc: float = empty_soc
+    # Issue #122: set alongside min_soc, display only.
+    rule = MinSocRule(RULE_FREE)
     behind_charge_curve = False
     if not vinter:
         # February - October.
@@ -1275,9 +1320,11 @@ def calculate_battery_data(
         # Reached target: hold it (08-16).
         if soc >= target and 8 <= hour <= 16:
             min_soc = target
+            rule = MinSocRule(RULE_TARGET)
         # Not at target yet, but ahead of the curve: hold current SoC (09-16).
         if soc < target and soc >= wanted and 9 <= hour <= 16:
             min_soc = soc
+            rule = MinSocRule(RULE_CHARGE_CURVE)
         # Behind the curve, no grid charge planned today, charging not
         # blocked: hold at the curve (09-16).
         if (
@@ -1285,6 +1332,7 @@ def calculate_battery_data(
             and not grid_charge_planned_today and not charging_blocked
         ):
             min_soc = wanted
+            rule = MinSocRule(RULE_CHARGE_CURVE)
         # Behind the curve, grid charge planned today, not blocked: hold
         # current SoC (09-16).
         if (
@@ -1292,32 +1340,40 @@ def calculate_battery_data(
             and grid_charge_planned_today and not charging_blocked
         ):
             min_soc = soc
+            rule = MinSocRule(RULE_CHARGE_CURVE)
         # Charging blocked: hold current SoC.
         if charging_blocked:
             min_soc = soc
+            rule = MinSocRule(RULE_BLOCKED)
         # 17-20: allow discharge.
         if 17 <= hour <= 20:
             min_soc = empty_soc
+            rule = MinSocRule(RULE_FREE)
         # A charger charging manually must not drain the house battery.
         if manual_charger_active and min_soc <= soc:
             min_soc = soc
+            rule = MinSocRule(RULE_CAR)
         min_soc = min(min_soc, _MIN_SOC_CEILING)
         min_soc = max(min_soc, empty_soc)
     else:
         # November, December, January.
         min_soc = soc
+        rule = MinSocRule(RULE_HOLD)
         if hour >= 17:
             min_soc = empty_soc
+            rule = MinSocRule(RULE_FREE)
         # The night (00-06) is always released, regardless of target --
         # grid-bought power is protected by the price-protection block
         # below instead.
         if hour <= 6:
             min_soc = empty_soc
+            rule = MinSocRule(RULE_FREE)
         min_soc = min(min_soc, _MIN_SOC_CEILING)
         min_soc = max(min_soc, empty_soc)
         min_soc = min(min_soc, target)
         if manual_charger_active and min_soc <= soc:
             min_soc = soc
+            rule = MinSocRule(RULE_CAR)
 
     # ---- Protect grid-bought energy until the target end time -----------
     # Holds the battery at the level it has after a night charge (see
@@ -1332,6 +1388,8 @@ def calculate_battery_data(
         target,
     )
     if target_floor is not None:
+        if target_floor > min_soc:
+            rule = MinSocRule(RULE_TARGET_PROTECTION)
         min_soc = max(min_soc, target_floor)
 
     # ---- Night price protection (21:00-05:59) ----------------------------
@@ -1342,6 +1400,14 @@ def calculate_battery_data(
         protected_cells = [v for v in cells if v != 0 and v > price_floor]
         if protected_cells:
             protected_floor = min(empty_soc + len(protected_cells), soc)
+            if protected_floor > min_soc:
+                rule = MinSocRule(
+                    RULE_NIGHT_PROTECTION,
+                    price=price,
+                    held_points=_js_round(protected_floor - empty_soc),
+                    cell_price_min=min(protected_cells),
+                    cell_price_max=max(protected_cells),
+                )
             min_soc = max(min_soc, protected_floor)
 
     # In winter, min_soc may never be raised above the current SoC --
@@ -1382,6 +1448,7 @@ def calculate_battery_data(
         and not charging_blocked
     ):
         min_soc = max(empty_soc, min(day_plan_reserve, soc))
+        rule = MinSocRule(RULE_DAY_PLAN)
         target_floor_date, target_floor = None, None
         released = True
         plan_lock = min_soc
@@ -1421,6 +1488,7 @@ def calculate_battery_data(
         and not charging_blocked
     ):
         min_soc = max(empty_soc, min(float(pv_release["floor"]), soc))
+        rule = MinSocRule(RULE_PV_RELEASE)
         target_floor_date, target_floor = None, None
         released = True
         plan_lock = min_soc
@@ -1433,6 +1501,7 @@ def calculate_battery_data(
     if hour in sale_hours and not manual_charger_active and not charging:
         floor = max(empty_soc, sale_floors[sale_hours.index(hour)])
         min_soc = max(empty_soc, min(floor, soc))
+        rule = MinSocRule(RULE_SALE)
         target_floor_date, target_floor = None, None
         released = True
         selling = soc > floor and sale_done_hour != hour
@@ -1450,6 +1519,10 @@ def calculate_battery_data(
         or (not vinter and min_soc > soc)
     ) else "off"
     min_soc_rounded = _js_round(min_soc)
+    # Issue #122: a grid charge isn't a min_soc rule, but it is what the
+    # battery does in that hour -- unless a car holds it.
+    if charging and rule.rule != RULE_CAR:
+        rule = MinSocRule(RULE_GRID_CHARGE)
 
     # ---- Charge lock (issue #45, see kostal_min_soc_step()) ---------------
     # Taken when a charge_now_* command stops while the protection after
@@ -1554,7 +1627,7 @@ def calculate_battery_data(
         pv_release_date=pv_release_date,
         pv_release=pv_release,
     )
-    return min_soc_rounded, ledger, forced_charge, behind_charge_curve
+    return min_soc_rounded, ledger, forced_charge, behind_charge_curve, rule
 
 
 # ---------------------------------------------------------------------------
@@ -1586,6 +1659,10 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
 
     _attr_has_entity_name = True
     _attr_should_poll = False
+    # Issue #122: the hour-by-hour plan is rebuilt on every run and only
+    # read live by the battery plan card -- recording it would grow the
+    # database with every run.
+    _unrecorded_attributes = frozenset({"min_soc_plan"})
 
     def __init__(self, description: SensorEntityDescription, entry: ConfigEntry) -> None:
         self.entity_description = description
@@ -1620,6 +1697,10 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         self._sale_meter: Any = None
         # Issue #71: Strømligning's "tomorrow" sensor, found on first use.
         self._tomorrow_prices_entity_id: str | None = None
+        # Issue #122: the rule of each of today's hours so far (date,
+        # {hour: entry}), for the battery plan card -- not restored, so the
+        # hours before a restart show no rule.
+        self._past_rules: tuple[str, dict[int, dict[str, Any]]] = ("", {})
 
         if not self._soc_entity_id:
             LOGGER.warning(
@@ -1943,7 +2024,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         )
 
         was_selling = self._ledger.selling
-        min_soc, ledger, forced_charge, behind_charge_curve = calculate_battery_data(
+        min_soc, ledger, forced_charge, behind_charge_curve, rule = calculate_battery_data(
             inputs, self._ledger
         )
         if pv_properties.is_battery_mode_manual(self.hass, self._entry):
@@ -2017,6 +2098,9 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
                     "reserve", "extra_kwh", "with_tomorrow", "night_unknown",
                 )
             },
+            # Issue #122: the rules hour by hour, today 00:00 to tomorrow
+            # 06:00 (data/battery_plan.py) -- for the battery plan card.
+            "min_soc_plan": self._min_soc_plan(inputs, ledger, min_soc, rule, pv_release_inputs),
         }
         self._attr_available = True
         self.async_write_ha_state()
@@ -2030,6 +2114,63 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         self._apply_sale_command(
             inputs.battery_command, was_selling, ledger.selling, inputs.battery_soc, min_soc
         )
+
+    def _min_soc_plan(
+        self,
+        inputs: BatteryInputs,
+        ledger: BatteryLedger,
+        min_soc: float,
+        rule: MinSocRule,
+        pv_release_inputs: PvReleaseInputs | None,
+    ) -> list[dict[str, Any]] | None:
+        """Issue #122: see data/battery_plan.py. Only shown, never used for
+        control -- so a failure here is logged and leaves the plan out
+        rather than stopping the run."""
+        try:
+            # Imported here: battery_plan imports this module.
+            from .battery_plan import day_charge_plans, plan_battery_day, recorded_hour
+
+            now = inputs.now
+            today = now.date().isoformat()
+            entity_id = pv_properties.battery_charge_status_entity_id(self.hass, self._entry)
+            state = self.hass.states.get(entity_id) if entity_id else None
+            today_plan, tomorrow_plan = day_charge_plans(
+                state.state if state is not None else None,
+                dict(state.attributes) if state is not None else {},
+                today,
+                inputs.battery_soc,
+            )
+            if pv_release_inputs is not None:
+                prices_today = pv_release_inputs.prices_today
+                prices_tomorrow = pv_release_inputs.prices_tomorrow
+            else:
+                # No battery size: #71's inputs are missing, the prices not.
+                if self._tomorrow_prices_entity_id is None:
+                    self._tomorrow_prices_entity_id = auto_detect_tomorrow_prices_entity_id(self.hass)
+                prices_today = hub_properties.electricity_prices_today(self.hass, self._entry, today)
+                prices_tomorrow = hub_properties.electricity_prices_tomorrow(
+                    self.hass, self._entry, self._tomorrow_prices_entity_id
+                )
+            date, past = self._past_rules
+            if date != today:
+                past = {}
+            plan = plan_battery_day(
+                inputs,
+                ledger,
+                min_soc,
+                rule,
+                today_plan,
+                tomorrow_plan,
+                prices_today,
+                prices_tomorrow,
+                past,
+            )
+            # Remember this hour's rule for the rest of the day.
+            self._past_rules = (today, {**past, now.hour: recorded_hour(plan[now.hour])})
+            return plan
+        except Exception:  # noqa: BLE001 -- display only, see docstring
+            LOGGER.exception("PwMngt: the battery plan could not be worked out")
+            return None
 
     def _apply_sale_command(
         self, command: str, was_selling: bool, selling: bool, soc: float, min_soc: float

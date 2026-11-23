@@ -4148,6 +4148,569 @@ class PwMPowerFlowCardEditor extends HTMLElement {
 }
 pwmDefine("pwm-power-flow-card-editor", PwMPowerFlowCardEditor);
 
+/** Battery plan card texts (issue #122) -- same language pick as PWM_BATTERY_TEXTS. */
+const PWM_PLAN_TEXTS = {
+  en: {
+    title: "Battery plan",
+    soc: "SoC",
+    minSoc: "Min SoC",
+    planned: "Planned min SoC",
+    target: "Target",
+    usable: "May be used",
+    held: "Kept (the rule's colour)",
+    now: "now",
+    waiting: ["Waiting for", "prices"],
+    floor: (pct) => `Min SoC ${pct} %`,
+    earlier: "Earlier today",
+    priceAt: (hour) => `Price at ${hour}:00`,
+    cellPrice: "Kept grid energy bought at",
+    saving: "Saving by using it now",
+    belowMargin: (margin) => `under the limit of ${margin}`,
+    usedFrom: "Used when the hour's price is above",
+    allFrom: (price) => `all of it above ${price}`,
+    heldText: (points, price) =>
+      `${points} % of the battery is grid energy bought at ${price}, and using it now saves too little, so it is kept for a dearer hour.`,
+    kr: (value) => `${value} kr.`,
+    planNote:
+      "After now it is the plan, with the SoC as it is now: a car, a blocked charge and the SoC itself change it.",
+    rules: {
+      free: ["Free – the battery may be used", "The battery may be used all the way down to its minimum SoC."],
+      hold: ["Held at its SoC (winter)", "In winter (Nov–Jan) the battery is held at its SoC 07–16, so the sun's energy is kept for the evening."],
+      charge_curve: ["Follows the charge curve to the target", "09–16 the battery is held at least on the charge curve, so it reaches the target by the target end time."],
+      target: ["Target reached – held", "The battery has reached its target and is held there until 17:00."],
+      target_protection: ["The night charge is kept", "Energy from the night's grid charge isn't used before the target end time, so it lasts into the dear hours."],
+      night_protection: ["Kept – too cheap to use now", "Grid energy in the battery is only used when the hour's price is at least 0.30 kr. above what it cost. Otherwise it is kept for a dearer hour."],
+      day_plan: ["Day plan – down to the evening reserve", "The battery may discharge in dear daytime hours down to the evening reserve, since the sun fills it up again before the evening."],
+      pv_release: ["PV energy used in a dear hour", "Solar energy above the evening reserve is used in today's dearest hours instead of after 21:00."],
+      sale: ["Selling from the battery", "The battery sells to the grid in a dear hour, down to the hour's floor."],
+      grid_charge: ["Grid charge", "The battery charges from the grid in a cheap hour, up to tonight's charge level."],
+      car: ["Car charging – battery held", "A car is charging, so the battery is held and doesn't cover the car."],
+      blocked: ["Charging blocked", "Charging is blocked, and the battery is held at its SoC."],
+      unknown: ["Waiting for tomorrow's prices", "Tomorrow's prices come around noon. Only then is the night planned."],
+      none: ["No rule recorded", "PwMngt hasn't run in this hour since Home Assistant started."],
+    },
+    missing: "PwMngt's battery entities were not found – is Solar PV Plant set up?",
+    noPlan: "Battery data has no plan yet – it comes with the next run.",
+  },
+  da: {
+    title: "Batteriplan",
+    soc: "SoC",
+    minSoc: "Min-SoC",
+    planned: "Planlagt min-SoC",
+    target: "Target",
+    usable: "Må bruges",
+    held: "Gemmes (regelens farve)",
+    now: "nu",
+    waiting: ["Afventer", "priser"],
+    floor: (pct) => `Min-SoC ${pct} %`,
+    earlier: "Tidligere i dag",
+    priceAt: (hour) => `Timepris kl. ${hour}`,
+    cellPrice: "Gemt netstrøm købt til",
+    saving: "Besparelse ved at bruge den nu",
+    belowMargin: (margin) => `under grænsen på ${margin}`,
+    usedFrom: "Bruges, når timeprisen er over",
+    allFrom: (price) => `det hele over ${price}`,
+    heldText: (points, price) =>
+      `${points} % af batteriet er netstrøm, der blev købt til ${price}, og det sparer for lidt at bruge den nu, så den gemmes til en dyrere time.`,
+    kr: (value) => `${value} kr.`,
+    planNote:
+      "Efter nu er det planen med SoC, som den er nu: en bil, blokeret ladning og selve SoC kan ændre den.",
+    rules: {
+      free: ["Fri – batteriet må bruges", "Batteriet må bruges helt ned til sin minimum-SoC."],
+      hold: ["Holdes på sin SoC (vinter)", "Om vinteren (nov.–jan.) holdes batteriet på sin SoC kl. 07–16, så solens strøm gemmes til aftenen."],
+      charge_curve: ["Følger ladekurven mod target", "Kl. 09–16 holdes batteriet mindst på ladekurven, så det når target ved target-sluttid."],
+      target: ["Target nået – holdes", "Batteriet har nået target og holdes der til kl. 17."],
+      target_protection: ["Natladningen holdes", "Strøm fra nattens netladning bruges ikke før target-sluttid, så den rækker til de dyre timer."],
+      night_protection: ["Gemmes – for billig til at bruge nu", "Netstrøm i batteriet bruges kun, når timeprisen er mindst 0,30 kr. højere, end strømmen kostede. Ellers gemmes den til en dyrere time."],
+      day_plan: ["Dagplan – ned til aftenreserven", "Batteriet må aflade i dyre dagtimer ned til aftenreserven, fordi solen fylder det op igen før aftenen."],
+      pv_release: ["PV-strøm bruges i en dyr time", "Solstrøm over aftenreserven bruges i dagens dyreste timer i stedet for efter kl. 21."],
+      sale: ["Salg fra batteriet", "Batteriet sælger til nettet i en dyr time ned til timens gulv."],
+      grid_charge: ["Netladning", "Batteriet lades fra nettet i en billig time op til nattens ladeprocent."],
+      car: ["Bil lader – batteriet holdes", "En bil lader, så batteriet holdes og ikke dækker bilen."],
+      blocked: ["Ladning blokeret", "Ladning er blokeret, og batteriet holdes på sin SoC."],
+      unknown: ["Afventer morgendagens priser", "Morgendagens priser kommer ved middagstid. Først da planlægges natten."],
+      none: ["Ingen regel registreret", "PwMngt har ikke kørt i den time, siden Home Assistant startede."],
+    },
+    missing: "PwMngt's batteri-entities blev ikke fundet – er Solar PV Plant sat op?",
+    noPlan: "Battery data har ingen plan endnu – den kommer ved næste kørsel.",
+  },
+};
+
+// One colour per rule (battery_data.py's RULE_* keys); "unknown" is drawn
+// hatched grey.
+const PWM_PLAN_RULE_COLORS = {
+  grid_charge: "#1e88e5",
+  target_protection: "#2e7d32",
+  night_protection: "#5c6bc0",
+  day_plan: "#26a69a",
+  pv_release: "#f9a825",
+  sale: "#ab47bc",
+  charge_curve: "#ffb300",
+  target: "#66bb6a",
+  hold: "#8d6e63",
+  free: "#9e9e9e",
+  car: "#ef6c00",
+  blocked: "#e53935",
+};
+const PWM_PLAN_UNKNOWN_COLOR = "#9e9e9e";
+const PWM_PLAN_USABLE_COLOR = "#1baf7a";
+
+const PWM_PLAN_CARD_STYLE = `
+  ha-card { padding: 0 0 12px; }
+  .wrap { padding: 0 12px; }
+  svg { width: 100%; display: block; overflow: visible; }
+  .grid line { stroke: var(--divider-color); stroke-width: 1; }
+  .axis text { fill: var(--secondary-text-color); font-size: 11px; }
+  .soc { fill: none; stroke: var(--primary-color); stroke-width: 2; }
+  .min { fill: none; stroke: var(--error-color, #e53935); stroke-width: 2; }
+  .min.planned { stroke-dasharray: 5 4; }
+  .target { stroke: var(--success-color, #43a047); stroke-width: 1.5; stroke-dasharray: 2 4; }
+  .now { stroke: var(--primary-text-color); stroke-width: 1; stroke-dasharray: 3 3; }
+  .now-label { fill: var(--primary-text-color); font-size: 11px; }
+  .midnight { stroke: var(--secondary-text-color); stroke-opacity: 0.4; }
+  .waiting { fill: var(--secondary-text-color); font-size: 11px; }
+  .band { cursor: pointer; }
+  .band.selected { stroke: var(--primary-text-color); stroke-width: 1.5; }
+  .info { margin-top: 6px; padding: 10px 12px; border-radius: 8px; font-size: 13px;
+    background: var(--secondary-background-color); color: var(--primary-text-color); }
+  .info .head { font-weight: 500; }
+  .info .head i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
+  .info .desc { color: var(--secondary-text-color); margin-top: 4px; }
+  .info table { margin-top: 6px; font-size: 12px; border-collapse: collapse; }
+  .info td { padding: 2px 12px 2px 0; }
+  .info td:first-child { color: var(--secondary-text-color); }
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 12px;
+    color: var(--secondary-text-color); }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend span.rule { cursor: pointer; }
+  .legend i { display: inline-block; width: 12px; height: 10px; border-radius: 2px; }
+  .legend i.line { height: 0; width: 14px; border-top: 2px solid; border-radius: 0; }
+  .legend i.dash { height: 0; width: 14px; border-top: 2px dashed; border-radius: 0; }
+  .note { margin-top: 6px; font-size: 11px; color: var(--secondary-text-color); }
+  .pwm-warning { color: var(--error-color); font-size: 13px; padding: 0 16px; }
+`;
+
+// How often today's history is fetched again (ms).
+const PWM_PLAN_HISTORY_REFRESH = 5 * 60 * 1000;
+const PWM_PLAN_HOURS = 30; // today 00:00 to tomorrow 06:00
+const PWM_PLAN_HOUR_MS = 3600 * 1000;
+
+/**
+ * Battery plan (issue #122): battery_data's minimum-SoC rules hour by
+ * hour, from midnight to 06:00 tomorrow -- the SoC and min SoC so far
+ * (Recorder history), the planned min SoC from now (battery_data's
+ * min_soc_plan, data/battery_plan.py), the target, the part of the battery
+ * that may be used (green) and the part a rule keeps (hatched in the
+ * rule's colour), and a strip with the rule of each hour. Tapping an hour
+ * -- or a rule in the legend -- explains the rule. Finds its entities on
+ * the PwM PV device, like the other PwM cards.
+ */
+class PwMBatteryPlanCard extends HTMLElement {
+  setConfig(config) {
+    this._config = config || {};
+    this._signature = undefined;
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
+    this._resolveEntityIds();
+    this._maybeFetchHistory();
+    const signature = this._stateSignature();
+    if (signature === this._signature) return;
+    this._signature = signature;
+    this._render();
+  }
+
+  connectedCallback() {
+    clearInterval(this._timer);
+    this._timer = setInterval(() => {
+      this._historyFetched = 0;
+      if (this._hass) this._maybeFetchHistory();
+    }, PWM_PLAN_HISTORY_REFRESH);
+  }
+
+  disconnectedCallback() {
+    clearInterval(this._timer);
+  }
+
+  getCardSize() {
+    return 6;
+  }
+
+  _language() {
+    return String((this._hass.locale && this._hass.locale.language) || this._hass.language || "en");
+  }
+
+  _texts() {
+    return PWM_PLAN_TEXTS[this._language().split("-")[0]] || PWM_PLAN_TEXTS.en;
+  }
+
+  _resolveEntityIds() {
+    if (this._resolvedEntities === this._hass.entities && this._resolvedDevices === this._hass.devices) return;
+    this._resolvedEntities = this._hass.entities;
+    this._resolvedDevices = this._hass.devices;
+    this._ids = {
+      data: pwmFindEntityId(this._hass, "pv", "sensor", "battery_data"),
+      soc: pwmFindEntityId(this._hass, "pv", "sensor", "battery_soc"),
+      target: pwmFindEntityId(this._hass, "pv", "sensor", "battery_nightly_target"),
+      empty: pwmFindEntityId(this._hass, "pv", "select", "battery_min_soc"),
+    };
+    this._historyFetched = 0;
+    this._signature = undefined;
+  }
+
+  _state(name) {
+    const entityId = this._ids[name];
+    return entityId ? this._hass.states[entityId] : undefined;
+  }
+
+  _stateSignature() {
+    const data = this._state("data");
+    return [
+      data ? `${data.state}|${JSON.stringify(data.attributes.min_soc_plan)}` : "-",
+      ...["soc", "target", "empty"].map((name) => (this._state(name) ? this._state(name).state : "-")),
+      this._historyVersion || 0,
+      this._selected,
+      this._language(),
+      Math.floor(Date.now() / 60000),
+    ].join("#");
+  }
+
+  /** Today's SoC and min SoC from the Recorder, at most every 5 min. */
+  _maybeFetchHistory() {
+    if (!this._ids.soc || !this._ids.data || this._fetching) return;
+    if (this._historyFetched && Date.now() - this._historyFetched < PWM_PLAN_HISTORY_REFRESH) return;
+    this._fetching = true;
+    this._hass
+      .callWS({
+        type: "history/history_during_period",
+        start_time: this._midnight().toISOString(),
+        entity_ids: [this._ids.soc, this._ids.data],
+        minimal_response: true,
+        no_attributes: true,
+        significant_changes_only: false,
+      })
+      .then((result) => {
+        const points = (entityId) =>
+          (result[entityId] || [])
+            .map((item) => ({ t: Number(item.lu) * 1000, v: Number(item.s) }))
+            .filter((p) => Number.isFinite(p.v));
+        this._history = { soc: points(this._ids.soc), min: points(this._ids.data) };
+        this._historyVersion = (this._historyVersion || 0) + 1;
+        this._signature = undefined;
+        this._render();
+      })
+      .catch(() => {
+        // No history (e.g. Recorder off): the card shows the plan alone.
+      })
+      .finally(() => {
+        this._historyFetched = Date.now();
+        this._fetching = false;
+      });
+  }
+
+  _midnight() {
+    const midnight = new Date();
+    midnight.setHours(0, 0, 0, 0);
+    return midnight;
+  }
+
+  _kr(value) {
+    const text = Number(value).toLocaleString(this._language(), { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return this._texts().kr(text);
+  }
+
+  _render() {
+    const t = this._texts();
+    const root = this.shadowRoot;
+    root.innerHTML = "";
+    const style = document.createElement("style");
+    style.textContent = PWM_PLAN_CARD_STYLE;
+    const card = document.createElement("ha-card");
+    card.header = this._config.title || t.title;
+    root.append(style, card);
+
+    const data = this._state("data");
+    if (!data || !this._state("soc")) {
+      card.insertAdjacentHTML("beforeend", `<div class="pwm-warning">${t.missing}</div>`);
+      return;
+    }
+    const plan = Array.isArray(data.attributes.min_soc_plan) ? data.attributes.min_soc_plan : null;
+    if (!plan || !plan.length) {
+      card.insertAdjacentHTML("beforeend", `<div class="pwm-warning">${t.noPlan}</div>`);
+      return;
+    }
+
+    // Geometry: the plot, then the rule strip and the hour labels.
+    const W = 600;
+    const left = 30;
+    const right = W - 6;
+    const top = 8;
+    const bottom = 160;
+    const stripTop = bottom + 6;
+    const stripH = 12;
+    const H = stripTop + stripH + 18;
+    const start = this._midnight().getTime();
+    const span = PWM_PLAN_HOURS * PWM_PLAN_HOUR_MS;
+    const x = (time) => left + ((time - start) / span) * (right - left);
+    const y = (pct) => bottom - (Math.max(0, Math.min(100, pct)) / 100) * (bottom - top);
+    const now = Date.now();
+    const hourW = (right - left) / PWM_PLAN_HOURS;
+    const emptyState = this._state("empty");
+    const empty = emptyState && Number.isFinite(Number(emptyState.state)) ? Number(emptyState.state) : PWM_RING_DEFAULT_EMPTY_SOC;
+    const socNow = Number(this._state("soc").state);
+    const minNow = Number(data.state);
+
+    // History up to now, the current values carried to now.
+    const history = this._history || { soc: [], min: [] };
+    const withNow = (points, value) =>
+      Number.isFinite(value) ? [...points.filter((p) => p.t <= now), { t: now, v: value }] : points;
+    const socPoints = withNow(history.soc, socNow);
+    const minPoints = withNow(history.min, minNow);
+    // The value a step series has at a time (the last point before it).
+    const valueAt = (points, time) => {
+      let value;
+      for (const p of points) {
+        if (p.t > time) break;
+        value = p.v;
+      }
+      return value;
+    };
+
+    const parts = [];
+    parts.push(
+      `<defs>${[...Object.entries(PWM_PLAN_RULE_COLORS), ["unknown", PWM_PLAN_UNKNOWN_COLOR]]
+        .map(
+          ([rule, color]) =>
+            `<pattern id="pwm-plan-${rule}" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="${color}" stroke-width="2.5" opacity="0.55"/></pattern>`
+        )
+        .join("")}</defs>`
+    );
+    const grid = [0, 25, 50, 75, 100]
+      .map((pct) => `<line x1="${left}" x2="${right}" y1="${y(pct)}" y2="${y(pct)}"/>`)
+      .join("");
+    parts.push(`<g class="grid">${grid}</g>`);
+
+    // Per hour: the kept part (hatched, the rule's colour), the usable part
+    // above it (green), and the strip. Past hours use the history; ahead of
+    // now the SoC is the SoC now.
+    const used = new Set();
+    plan.forEach((entry, index) => {
+      const hourStart = start + index * PWM_PLAN_HOUR_MS;
+      const bx = left + index * hourW;
+      const rule = entry.rule || "none";
+      const unknown = rule === "unknown";
+      const color = unknown ? PWM_PLAN_UNKNOWN_COLOR : PWM_PLAN_RULE_COLORS[rule];
+      if (color) used.add(rule);
+      if (unknown) {
+        parts.push(`<rect x="${bx}" y="${top}" width="${hourW}" height="${bottom - top}" fill="url(#pwm-plan-unknown)"/>`);
+      } else if (color) {
+        const past = hourStart + PWM_PLAN_HOUR_MS <= now;
+        const mid = Math.min(hourStart + PWM_PLAN_HOUR_MS / 2, now);
+        const soc = past || hourStart <= now ? valueAt(socPoints, mid) : socNow;
+        const floor = entry.floor !== null && entry.floor !== undefined ? Number(entry.floor) : valueAt(minPoints, mid);
+        if (Number.isFinite(soc) && Number.isFinite(floor)) {
+          const kept = Math.min(floor, soc);
+          if (kept > empty) {
+            parts.push(`<rect x="${bx}" y="${y(kept)}" width="${hourW}" height="${y(empty) - y(kept)}" fill="url(#pwm-plan-${rule})"/>`);
+          }
+          if (soc > floor) {
+            parts.push(
+              `<rect x="${bx}" y="${y(soc)}" width="${hourW}" height="${y(floor) - y(soc)}" fill="${PWM_PLAN_USABLE_COLOR}" opacity="${past ? 0.12 : 0.22}"/>`
+            );
+          }
+        }
+      }
+      const selected = this._selected === index ? " selected" : "";
+      const fill = color || "var(--divider-color)";
+      parts.push(
+        `<rect class="band${selected}" data-i="${index}" x="${bx + 0.5}" y="${stripTop}" width="${hourW - 1}" height="${stripH}" rx="2" fill="${unknown ? "url(#pwm-plan-unknown)" : fill}" opacity="${entry.planned ? 0.85 : 0.5}"/>`
+      );
+    });
+    // "Waiting for prices" over the unknown hours.
+    const unknownIndexes = plan.map((entry, index) => (entry.rule === "unknown" ? index : -1)).filter((i) => i >= 0);
+    if (unknownIndexes.length) {
+      const cx = left + ((unknownIndexes[0] + unknownIndexes[unknownIndexes.length - 1] + 1) / 2) * hourW;
+      parts.push(
+        `<text class="waiting" x="${cx}" y="${y(55)}" text-anchor="middle">${t.waiting[0]}</text>` +
+          `<text class="waiting" x="${cx}" y="${y(55) + 14}" text-anchor="middle">${t.waiting[1]}</text>`
+      );
+    }
+
+    const yLabels = [0, 50, 100]
+      .map((pct) => `<text x="${left - 4}" y="${y(pct) + 4}" text-anchor="end">${pct}</text>`)
+      .join("");
+    const xLabels = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30]
+      .map((h) => `<text x="${left + h * hourW}" y="${H - 2}" text-anchor="middle">${String(h % 24).padStart(2, "0")}</text>`)
+      .join("");
+    parts.push(`<g class="axis">${yLabels}${xLabels}</g>`);
+    parts.push(`<line class="midnight" x1="${left + 24 * hourW}" x2="${left + 24 * hourW}" y1="${top}" y2="${bottom}"/>`);
+
+    // Target, up to where the plan is known.
+    const targetState = this._state("target");
+    const target = targetState ? Number(targetState.state) : NaN;
+    if (Number.isFinite(target)) {
+      const end = unknownIndexes.length ? left + unknownIndexes[0] * hourW : right;
+      parts.push(`<line class="target" x1="${left}" x2="${end}" y1="${y(target)}" y2="${y(target)}"/>`);
+    }
+
+    // History: SoC as a line, min SoC as steps.
+    if (socPoints.length > 1) {
+      parts.push(
+        `<path class="soc" d="${socPoints.map((p, i) => `${i ? "L" : "M"}${x(Math.max(p.t, start)).toFixed(1)},${y(p.v).toFixed(1)}`).join("")}"/>`
+      );
+    }
+    const stepPath = (points) =>
+      points
+        .map((p, i) => {
+          const px = x(Math.max(p.t, start)).toFixed(1);
+          return i ? `H${px}V${y(p.v).toFixed(1)}` : `M${px},${y(p.v).toFixed(1)}`;
+        })
+        .join("");
+    if (minPoints.length > 1) parts.push(`<path class="min" d="${stepPath(minPoints)}"/>`);
+
+    // The plan from now: the planned floor per hour, dashed, up to the
+    // first unknown hour.
+    const planned = [];
+    if (Number.isFinite(minNow)) planned.push({ t: now, v: minNow });
+    let planEnd = start + span;
+    for (let index = 0; index < plan.length; index++) {
+      const entry = plan[index];
+      const hourStart = start + index * PWM_PLAN_HOUR_MS;
+      if (entry.rule === "unknown") {
+        planEnd = Math.max(hourStart, now);
+        break;
+      }
+      if (hourStart + PWM_PLAN_HOUR_MS <= now || entry.floor === null || entry.floor === undefined) continue;
+      planned.push({ t: Math.max(hourStart, now), v: Number(entry.floor) });
+    }
+    if (planned.length) {
+      planned.push({ t: planEnd, v: planned[planned.length - 1].v });
+      parts.push(`<path class="min planned" d="${stepPath(planned)}"/>`);
+    }
+
+    // Now.
+    const nx = x(now);
+    parts.push(`<line class="now" x1="${nx}" x2="${nx}" y1="${top}" y2="${stripTop + stripH}"/>`);
+    parts.push(`<text class="now-label" x="${nx + 3}" y="${top + 10}">${t.now}</text>`);
+
+    const wrap = document.createElement("div");
+    wrap.className = "wrap";
+    wrap.innerHTML = `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${t.title}">${parts.join("")}</svg>`;
+    card.appendChild(wrap);
+
+    // The selected hour's rule (default: the current hour), or a rule
+    // tapped in the legend.
+    const currentIndex = Math.floor((now - start) / PWM_PLAN_HOUR_MS);
+    const info = document.createElement("div");
+    info.className = "info";
+    info.innerHTML =
+      typeof this._selected === "string"
+        ? this._ruleHtml(t, this._selected)
+        : this._hourHtml(t, plan, this._selected !== undefined ? this._selected : currentIndex);
+    wrap.appendChild(info);
+    const select = (value) => {
+      this._selected = this._selected === value ? undefined : value;
+      this._signature = undefined;
+      this._render();
+    };
+    wrap.querySelectorAll(".band").forEach((band) => {
+      band.addEventListener("click", () => select(Number(band.dataset.i)));
+    });
+
+    // Legend: the lines and areas, then the rules the plan shows (tap one
+    // for what it means).
+    const legend = document.createElement("div");
+    legend.className = "legend";
+    const ruleLegend = [...Object.keys(PWM_PLAN_RULE_COLORS), "unknown"]
+      .filter((rule) => used.has(rule))
+      .map((rule) => {
+        const swatch =
+          rule === "unknown"
+            ? `background: repeating-linear-gradient(45deg, ${PWM_PLAN_UNKNOWN_COLOR} 0 2px, transparent 2px 5px)`
+            : `background: ${PWM_PLAN_RULE_COLORS[rule]}`;
+        return `<span class="rule" data-rule="${rule}"><i style="${swatch}"></i>${t.rules[rule][0]}</span>`;
+      });
+    legend.innerHTML = [
+      `<span><i class="line" style="border-color: var(--primary-color)"></i>${t.soc}</span>`,
+      `<span><i class="line" style="border-color: var(--error-color, #e53935)"></i>${t.minSoc}</span>`,
+      `<span><i class="dash" style="border-color: var(--error-color, #e53935)"></i>${t.planned}</span>`,
+      `<span><i class="dash" style="border-color: var(--success-color, #43a047)"></i>${t.target}</span>`,
+      `<span><i style="background: ${PWM_PLAN_USABLE_COLOR}; opacity: 0.35"></i>${t.usable}</span>`,
+      `<span><i style="background: repeating-linear-gradient(45deg, var(--secondary-text-color) 0 2px, transparent 2px 5px)"></i>${t.held}</span>`,
+      ...ruleLegend,
+    ].join("");
+    wrap.appendChild(legend);
+    legend.querySelectorAll(".rule").forEach((item) => {
+      item.addEventListener("click", () => select(item.dataset.rule));
+    });
+    const note = document.createElement("div");
+    note.className = "note";
+    note.textContent = t.planNote;
+    wrap.appendChild(note);
+  }
+
+  _ruleHead(rule, label) {
+    const color = rule === "unknown" ? PWM_PLAN_UNKNOWN_COLOR : PWM_PLAN_RULE_COLORS[rule] || "var(--divider-color)";
+    return `<div class="head"><i style="background: ${color}"></i>${label}</div>`;
+  }
+
+  /** A rule tapped in the legend: its name and what it means. */
+  _ruleHtml(t, rule) {
+    const [name, desc] = t.rules[rule] || t.rules.none;
+    return `${this._ruleHead(rule, name)}<div class="desc">${desc}</div>`;
+  }
+
+  /** "15–17 · Day plan ..." for the run of equal hours around index, what
+   * the rule means, and -- for the night price protection -- the sums. */
+  _hourHtml(t, plan, index) {
+    const entry = plan[index];
+    if (!entry) return "";
+    const rule = entry.rule || "none";
+    const same = (other) =>
+      other && (other.rule || "none") === rule && other.floor === entry.floor && other.planned === entry.planned &&
+      other.price === undefined && entry.price === undefined;
+    let from = index;
+    let to = index;
+    while (same(plan[from - 1])) from--;
+    while (same(plan[to + 1])) to++;
+    const clock = (i) => String(i % 24).padStart(2, "0");
+    const [name, desc] = t.rules[rule] || [rule, ""];
+    const lines = [this._ruleHead(rule, `${clock(from)}–${clock(to + 1)} · ${name}`)];
+    if (rule === "night_protection" && entry.price !== undefined) {
+      lines.push(`<div class="desc">${t.heldText(entry.held_points, this._kr(entry.cell_price_min))} ${t.floor(entry.floor ?? "–")}</div>`);
+      const saving = entry.price - entry.cell_price_min;
+      const usedFrom =
+        entry.cell_price_max > entry.cell_price_min
+          ? `${this._kr(entry.cell_price_min + entry.margin)} (${t.allFrom(this._kr(entry.cell_price_max + entry.margin))})`
+          : this._kr(entry.cell_price_min + entry.margin);
+      lines.push(
+        `<table>` +
+          `<tr><td>${t.priceAt(clock(index))}</td><td>${this._kr(entry.price)}</td></tr>` +
+          `<tr><td>${t.cellPrice}</td><td>${
+            entry.cell_price_max > entry.cell_price_min
+              ? `${this._kr(entry.cell_price_min)} – ${this._kr(entry.cell_price_max)}`
+              : this._kr(entry.cell_price_min)
+          }</td></tr>` +
+          `<tr><td>${t.saving}</td><td>${this._kr(Math.max(saving, 0))} – ${t.belowMargin(this._kr(entry.margin))}</td></tr>` +
+          `<tr><td>${t.usedFrom}</td><td>${usedFrom}</td></tr>` +
+          `</table>`
+      );
+    } else {
+      lines.push(`<div class="desc">${desc}</div>`);
+      if (entry.floor !== null && entry.floor !== undefined) {
+        lines.push(`<div class="desc">${t.floor(entry.floor)}</div>`);
+      } else if (!entry.planned && index < Math.floor((Date.now() - this._midnight().getTime()) / PWM_PLAN_HOUR_MS)) {
+        lines.push(`<div class="desc">${t.earlier}</div>`);
+      }
+    }
+    return lines.join("");
+  }
+}
+
+pwmDefine("pwm-battery-plan-card", PwMBatteryPlanCard);
+
 // Register with Home Assistant's card picker so all three card types show
 // up there with a name/description, instead of only being addable by
 // typing their `type:` manually in YAML.
@@ -4187,6 +4750,11 @@ const PWM_CUSTOM_CARDS = [
     type: "pwm-phase-load-card",
     name: "PwM Phase load",
     description: "The main fuse's three phase loads as a ring, with PwMngt's limit and free current.",
+  },
+  {
+    type: "pwm-battery-plan-card",
+    name: "PwM Battery plan",
+    description: "The battery's min SoC rules hour by hour, today and tonight: SoC, min SoC, the plan, the target and what may be used.",
   },
   {
     type: "pwm-power-flow-card",
