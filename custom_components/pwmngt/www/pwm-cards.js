@@ -4191,7 +4191,7 @@ const PWM_PLAN_TEXTS = {
     },
     missing: "PwMngt's battery entities were not found – is Solar PV Plant set up?",
     noPlan: "Battery data has no plan yet – it comes with the next run.",
-    editor: { title: "Title", height: "Height (%)", scale: "Scale (%)" },
+    editor: { title: "Title", header_size: "Header size (px) - like the other cards", height: "Height (%)", scale: "Scale (%)", text_size: "Text size (%)" },
   },
   da: {
     title: "Batteriplan",
@@ -4234,7 +4234,7 @@ const PWM_PLAN_TEXTS = {
     },
     missing: "PwMngt's batteri-entities blev ikke fundet – er Solar PV Plant sat op?",
     noPlan: "Battery data har ingen plan endnu – den kommer ved næste kørsel.",
-    editor: { title: "Titel", height: "Højde (%)", scale: "Skala (%)" },
+    editor: { title: "Titel", header_size: "Overskriftens størrelse (px) - som de andre kort", height: "Højde (%)", scale: "Skala (%)", text_size: "Tekststørrelse (%)" },
   },
 };
 
@@ -4262,34 +4262,34 @@ const PWM_PLAN_CARD_STYLE = `
   .wrap { padding: 0 12px; }
   svg { width: 100%; display: block; margin: 0 auto; overflow: visible; }
   .grid line { stroke: var(--divider-color); stroke-width: 1; }
-  .axis text { fill: var(--secondary-text-color); font-size: 11px; }
+  .axis text { fill: var(--secondary-text-color); font-size: calc(11px * var(--ts, 1)); }
   .soc { fill: none; stroke: var(--primary-color); stroke-width: 2; }
   .min { fill: none; stroke: var(--error-color, #e53935); stroke-width: 2; }
   .min.planned { stroke-dasharray: 5 4; }
   .target { stroke: var(--success-color, #43a047); stroke-width: 1.5; stroke-dasharray: 2 4; }
   .now { stroke: var(--primary-text-color); stroke-width: 1; stroke-dasharray: 3 3; }
-  .now-label { fill: var(--primary-text-color); font-size: 11px; }
+  .now-label { fill: var(--primary-text-color); font-size: calc(11px * var(--ts, 1)); }
   .midnight { stroke: var(--secondary-text-color); stroke-opacity: 0.4; }
-  .waiting { fill: var(--secondary-text-color); font-size: 11px; }
+  .waiting { fill: var(--secondary-text-color); font-size: calc(11px * var(--ts, 1)); }
   .band { cursor: pointer; }
   .band.selected { stroke: var(--primary-text-color); stroke-width: 1.5; }
-  .info { margin-top: 6px; padding: 10px 12px; border-radius: 8px; font-size: 13px;
+  .info { margin-top: 6px; padding: 10px 12px; border-radius: 8px; font-size: calc(13px * var(--ts, 1));
     background: var(--secondary-background-color); color: var(--primary-text-color); }
   .info .head { font-weight: 500; }
   .info .head i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; }
   .info .desc { color: var(--secondary-text-color); margin-top: 4px; }
-  .info table { margin-top: 6px; font-size: 12px; border-collapse: collapse; }
+  .info table { margin-top: 6px; font-size: calc(12px * var(--ts, 1)); border-collapse: collapse; }
   .info td { padding: 2px 12px 2px 0; }
   .info td:first-child { color: var(--secondary-text-color); }
-  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: 12px;
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: calc(12px * var(--ts, 1));
     color: var(--secondary-text-color); }
   .legend span { display: inline-flex; align-items: center; gap: 5px; }
   .legend span.rule { cursor: pointer; }
   .legend i { display: inline-block; width: 12px; height: 10px; border-radius: 2px; }
   .legend i.line { height: 0; width: 14px; border-top: 2px solid; border-radius: 0; }
   .legend i.dash { height: 0; width: 14px; border-top: 2px dashed; border-radius: 0; }
-  .note { margin-top: 6px; font-size: 11px; color: var(--secondary-text-color); }
-  .pwm-warning { color: var(--error-color); font-size: 13px; padding: 0 16px; }
+  .note { margin-top: 6px; font-size: calc(11px * var(--ts, 1)); color: var(--secondary-text-color); }
+  .pwm-warning { color: var(--error-color); font-size: calc(13px * var(--ts, 1)); padding: 0 16px; }
 `;
 
 // How often today's history is fetched again (ms).
@@ -4309,6 +4309,15 @@ const PWM_PLAN_HOUR_MS = 3600 * 1000;
  * the PwM PV device, like the other PwM cards.
  */
 class PwMBatteryPlanCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" });
+    // Like pwm-power-flow-card (issue #115): the shadow root's children are
+    // created once and never replaced -- card-mod puts its own <card-mod>
+    // element in here, and a rebuild only redraws .content.
+    this.shadowRoot.innerHTML = `<style>${PWM_PLAN_CARD_STYLE}</style><ha-card><div class="content"></div></ha-card>`;
+  }
+
   setConfig(config) {
     this._config = config || {};
     this._signature = undefined;
@@ -4316,7 +4325,6 @@ class PwMBatteryPlanCard extends HTMLElement {
 
   set hass(hass) {
     this._hass = hass;
-    if (!this.shadowRoot) this.attachShadow({ mode: "open" });
     this._resolveEntityIds();
     this._maybeFetchHistory();
     const signature = this._stateSignature();
@@ -4352,9 +4360,13 @@ class PwMBatteryPlanCard extends HTMLElement {
     const labels = (PWM_PLAN_TEXTS[language] || PWM_PLAN_TEXTS.en).editor;
     return {
       schema: [
-        { name: "title", selector: { text: {} } },
-        { name: "height", selector: { number: { min: 50, max: 300, step: 5, mode: "slider" } } },
-        { name: "scale", selector: { number: { min: 50, max: 100, step: 1, mode: "slider" } } },
+        { type: "grid", name: "", schema: [
+          { name: "title", selector: { text: {} } },
+          { name: "header_size", selector: { number: { min: 10, max: 40, mode: "box", unit_of_measurement: "px" } } },
+          { name: "height", selector: { number: { min: 50, max: 300, step: 5, mode: "slider" } } },
+          { name: "scale", selector: { number: { min: 50, max: 100, step: 1, mode: "slider" } } },
+          { name: "text_size", selector: { number: { min: 50, max: 200, step: 5, mode: "slider" } } },
+        ] },
       ],
       computeLabel: (schema) => labels[schema.name] || schema.name,
     };
@@ -4445,13 +4457,15 @@ class PwMBatteryPlanCard extends HTMLElement {
 
   _render() {
     const t = this._texts();
-    const root = this.shadowRoot;
-    root.innerHTML = "";
-    const style = document.createElement("style");
-    style.textContent = PWM_PLAN_CARD_STYLE;
-    const card = document.createElement("ha-card");
-    card.header = this._config.title || t.title;
-    root.append(style, card);
+    const haCard = this.shadowRoot.querySelector("ha-card");
+    haCard.header = this._config.title || t.title;
+    // The header and text sizes as in pwm-power-flow-card (issue #120).
+    const headerSize = Number(this._config.header_size);
+    haCard.style.setProperty("--ha-card-header-font-size", headerSize > 0 ? `${headerSize}px` : "");
+    const textSize = Math.max(50, Math.min(200, Number(this._config.text_size) || 100));
+    haCard.style.setProperty("--ts", String(textSize / 100));
+    const card = this.shadowRoot.querySelector(".content");
+    card.innerHTML = "";
 
     const data = this._state("data");
     if (!data || !this._state("soc")) {
