@@ -1,6 +1,7 @@
 """Battery plan (issue #122): battery_data's minimum-SoC rules laid out hour
-by hour, from local midnight today to 06:00 tomorrow -- for the battery
-plan card (www/pwm-cards.js, pwm-battery-plan-card).
+by hour, from local midnight today to midnight tomorrow -- for the
+battery plan card (www/pwm-cards.js, pwm-battery-plan-card), which shows
+today 00:00 to tomorrow 06:00, or tomorrow on its own (issue #123).
 
 Not a Node-RED port: Node-RED (and data/battery_data.py, its port) only
 works out the minimum SoC for *now*. The hours ahead are worked out by
@@ -16,7 +17,9 @@ the future:
 - no car charges, nothing is blocked, the battery command is "internal"
   (a planned charge hour: charge_now_100);
 - today's day plan, sale and PV release are the ones battery_data keeps
-  in its ledger; tomorrow's sale comes from Battery charge status.
+  in its ledger; tomorrow's day plan (issue #123) and sale come from
+  Battery charge status, and tomorrow has no PV release (#71 plans it at
+  06:00 that morning, from that day's solar forecast).
 
 The hours after midnight are only worked out once tomorrow's real prices
 are known (~13:00) -- before that they are "unknown", since the night
@@ -27,7 +30,8 @@ It is a plan, not a promise: a car, a blocked charge, the Kostal steps
 battery_data calls it after its own run, on copies, inside a try/except.
 
 Each hour: {"start": ISO time, "rule": a RULE_* key (or "unknown"),
-"floor": min SoC % or None, "planned": bool} -- plus price,
+"floor": min SoC % or None, "planned": bool} -- plus, for a planned
+hour, "soc": the SoC it assumes (issue #123); and price,
 held_points, cell_price_min, cell_price_max and margin for the night
 price protection (MinSocRule.as_dict()). Past hours carry what was
 recorded for them during the day and no floor: the card draws the
@@ -45,11 +49,12 @@ from .battery_data import (
     BatteryLedger,
     MinSocRule,
     calculate_battery_data,
+    charge_day_plan,
 )
 
 RULE_UNKNOWN = "unknown"
 
-_PLAN_HOURS = 24 + 6  # today 00:00 to tomorrow 06:00
+_PLAN_HOURS = 2 * 24  # today 00:00 to tomorrow 24:00
 # The minute a planned hour is worked out for (battery_data rounds to the
 # quarter; mid-hour keeps the charge curve between its hourly points).
 _PLANNED_MINUTE = 30
@@ -71,6 +76,9 @@ class DayChargePlan:
     # used for tomorrow (today's are in battery_data's ledger).
     sale_hours: list[int] = field(default_factory=list)
     sale_floors: list[float] = field(default_factory=list)
+    # Issue #123: that day's day plan (charge_day_plan()) -- only used for
+    # tomorrow (today's is in battery_data's ledger); None = no plan.
+    day_plan: tuple[list[int], float] | None = None
 
 
 def day_charge_plans(
@@ -87,6 +95,7 @@ def day_charge_plans(
         today_plan.charge_hours, today_plan.charge_target = flagged, target
     elif status == _STATUS_YES_TOMORROW:
         tomorrow_plan.charge_hours, tomorrow_plan.charge_target = flagged, target
+        tomorrow_plan.day_plan = charge_day_plan(attributes)
         hours = _ints(attributes.get("sale_hours"))
         floors = attributes.get("sale_floors")
         if isinstance(floors, list) and len(floors) == len(hours):
@@ -158,16 +167,19 @@ def plan_battery_day(
             car_charging_lock=False,
             grid_feeds_battery=False,
             # Today: the day plan and sale in the ledger. Tomorrow: its own
-            # sale (the ledger's are today's and drop at midnight).
-            day_plan_hours=None,
-            day_plan_reserve=None,
+            # (the ledger's are today's and drop at midnight).
+            day_plan_hours=None if is_today or plan.day_plan is None else plan.day_plan[0],
+            day_plan_reserve=None if is_today or plan.day_plan is None else plan.day_plan[1],
+            day_plan_from_charge=not is_today and plan.day_plan is not None,
             sale_hours=None if is_today else plan.sale_hours,
             sale_floors=None if is_today else plan.sale_floors,
             sale_target=None if is_today or not plan.sale_hours else plan.charge_target,
             pv_release=None,
         )
         min_soc, ledger, _forced, _behind, rule = calculate_battery_data(hour_inputs, ledger)
-        entries.append({**rule.as_dict(), "start": start.isoformat(), "floor": min_soc, "planned": True})
+        entries.append(
+            {**rule.as_dict(), "start": start.isoformat(), "floor": min_soc, "planned": True, "soc": round(soc)}
+        )
         if ledger.selling:
             # The sale runs the battery down to the hour's floor.
             soc = min(soc, float(min_soc))

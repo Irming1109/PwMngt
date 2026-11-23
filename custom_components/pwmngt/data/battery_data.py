@@ -776,6 +776,30 @@ def _target_floor(
     return today, max(kept, new_floor)
 
 
+def charge_day_plan(attributes: dict[str, Any]) -> tuple[list[int], float] | None:
+    """Issue #59: (day hours, floor) of the night charge's day plan, from
+    Battery charge status's attributes -- for the day the status is for
+    (BatteryInputs.day_plan_hours/day_plan_reserve). None = no plan."""
+    hours = attributes.get("day_hours")
+    if hours == []:
+        # Issue #96: the night charge decided "no daytime hours" -- that is
+        # a plan too, and it wins over the one worked out from today (Rene
+        # 2026-11-17: charged to 38 % for the evening, then a fallback plan
+        # "8-9 down to 43 %").
+        return [], float(attributes.get("charge_target") or 0.0)
+    # Issue #70: the floor less the PV refill; a plan from before it has
+    # only the evening reserve.
+    reserve = attributes.get("day_floor_soc")
+    if reserve is None:
+        reserve = attributes.get("evening_reserve_soc")
+    if isinstance(hours, list) and reserve is not None:
+        try:
+            return [int(hour) for hour in hours], float(reserve)
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
 def fallback_day_plan(
     prices_today: dict[int, float],
     grid_cell_prices: list[float],
@@ -2264,31 +2288,10 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         entity_id = pv_properties.battery_charge_status_entity_id(self.hass, self._entry)
         state = self.hass.states.get(entity_id) if entity_id else None
         if state is not None and state.state == _CHARGE_STATUS_YES_TODAY:
-            hours = state.attributes.get("day_hours")
-            if hours == []:
-                # Issue #96: the night charge decided "no daytime hours" --
-                # that is a plan too, and it wins over the one worked out
-                # from today (Rene 2026-11-17: charged to 38 % for the
-                # evening, then a fallback plan "8-9 down to 43 %").
-                return {
-                    "day_plan_hours": [],
-                    "day_plan_reserve": float(state.attributes.get("charge_target") or 0.0),
-                    "day_plan_from_charge": True,
-                }
-            # Issue #70: the floor less the PV refill; a plan from before
-            # it has only the evening reserve.
-            reserve = state.attributes.get("day_floor_soc")
-            if reserve is None:
-                reserve = state.attributes.get("evening_reserve_soc")
-            if isinstance(hours, list) and reserve is not None:
-                try:
-                    return {
-                        "day_plan_hours": [int(hour) for hour in hours],
-                        "day_plan_reserve": float(reserve),
-                        "day_plan_from_charge": True,
-                    }
-                except (TypeError, ValueError):
-                    pass
+            plan = charge_day_plan(state.attributes)
+            if plan is not None:
+                hours, reserve = plan
+                return {"day_plan_hours": hours, "day_plan_reserve": reserve, "day_plan_from_charge": True}
         return self._fallback_day_plan(soc)
 
     def _fallback_day_plan(self, soc: float | None) -> dict[str, Any]:

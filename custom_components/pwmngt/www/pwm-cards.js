@@ -4159,6 +4159,8 @@ const PWM_PLAN_TEXTS = {
     usable: "May be used",
     held: "Kept (the rule's colour)",
     now: "now",
+    today: "Today",
+    tomorrow: "Tomorrow",
     waiting: ["Waiting for", "prices"],
     floor: (pct) => `Min SoC ${pct} %`,
     earlier: "Earlier today",
@@ -4202,6 +4204,8 @@ const PWM_PLAN_TEXTS = {
     usable: "Må bruges",
     held: "Gemmes (regelens farve)",
     now: "nu",
+    today: "I dag",
+    tomorrow: "I morgen",
     waiting: ["Afventer", "priser"],
     floor: (pct) => `Min-SoC ${pct} %`,
     earlier: "Tidligere i dag",
@@ -4281,6 +4285,11 @@ const PWM_PLAN_CARD_STYLE = `
   .info table { margin-top: 6px; font-size: calc(12px * var(--ts, 1)); border-collapse: collapse; }
   .info td { padding: 2px 12px 2px 0; }
   .info td:first-child { color: var(--secondary-text-color); }
+  .days { display: flex; gap: 6px; padding: 0 12px 8px; }
+  .days button { font: inherit; font-size: calc(13px * var(--ts, 1)); padding: 3px 12px; border-radius: 999px;
+    border: 1px solid var(--divider-color); background: none; color: var(--primary-text-color); cursor: pointer; }
+  .days button.active { background: var(--primary-color); border-color: var(--primary-color);
+    color: var(--text-primary-color, #fff); }
   .legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 8px; font-size: calc(12px * var(--ts, 1));
     color: var(--secondary-text-color); }
   .legend span { display: inline-flex; align-items: center; gap: 5px; }
@@ -4294,7 +4303,8 @@ const PWM_PLAN_CARD_STYLE = `
 
 // How often today's history is fetched again (ms).
 const PWM_PLAN_HISTORY_REFRESH = 5 * 60 * 1000;
-const PWM_PLAN_HOURS = 30; // today 00:00 to tomorrow 06:00
+const PWM_PLAN_HOURS = 30; // "today": today 00:00 to tomorrow 06:00
+const PWM_PLAN_DAY_HOURS = 24; // "tomorrow" (issue #123): tomorrow 00:00 to 24:00
 const PWM_PLAN_PLOT_HEIGHT = 280; // SoC 0-100 % at height: 100, in viewBox units (600 wide)
 const PWM_PLAN_HOUR_MS = 3600 * 1000;
 
@@ -4406,6 +4416,7 @@ class PwMBatteryPlanCard extends HTMLElement {
       ...["soc", "target", "empty"].map((name) => (this._state(name) ? this._state(name).state : "-")),
       this._historyVersion || 0,
       this._selected,
+      this._day,
       this._language(),
       Math.floor(Date.now() / 60000),
     ].join("#");
@@ -4472,10 +4483,36 @@ class PwMBatteryPlanCard extends HTMLElement {
       card.insertAdjacentHTML("beforeend", `<div class="pwm-warning">${t.missing}</div>`);
       return;
     }
-    const plan = Array.isArray(data.attributes.min_soc_plan) ? data.attributes.min_soc_plan : null;
-    if (!plan || !plan.length) {
+    const fullPlan = Array.isArray(data.attributes.min_soc_plan) ? data.attributes.min_soc_plan : null;
+    if (!fullPlan || !fullPlan.length) {
       card.insertAdjacentHTML("beforeend", `<div class="pwm-warning">${t.noPlan}</div>`);
       return;
+    }
+    // Issue #123: tomorrow on its own once its plan is known (tomorrow's
+    // prices, ~13:00) -- and back to today after midnight.
+    const today = this._midnight().getTime();
+    const tomorrowPlan = fullPlan.slice(24, 24 + PWM_PLAN_DAY_HOURS);
+    const hasTomorrow =
+      tomorrowPlan.length === PWM_PLAN_DAY_HOURS && tomorrowPlan.some((entry) => entry.rule !== "unknown");
+    const showTomorrow = this._day === "tomorrow" && this._dayChosen === today && hasTomorrow;
+    const hours = showTomorrow ? PWM_PLAN_DAY_HOURS : PWM_PLAN_HOURS;
+    const plan = showTomorrow ? tomorrowPlan : fullPlan.slice(0, PWM_PLAN_HOURS);
+    if (hasTomorrow) {
+      const days = document.createElement("div");
+      days.className = "days";
+      days.innerHTML = [["today", t.today], ["tomorrow", t.tomorrow]]
+        .map(([day, label]) => `<button data-day="${day}" class="${(day === "tomorrow") === showTomorrow ? "active" : ""}">${label}</button>`)
+        .join("");
+      days.querySelectorAll("button").forEach((button) => {
+        button.addEventListener("click", () => {
+          this._day = button.dataset.day;
+          this._dayChosen = today;
+          this._selected = undefined;
+          this._signature = undefined;
+          this._render();
+        });
+      });
+      card.appendChild(days);
     }
 
     // Geometry: the plot, then the rule strip and the hour labels.
@@ -4491,12 +4528,12 @@ class PwMBatteryPlanCard extends HTMLElement {
     const stripTop = bottom + 6;
     const stripH = 16;
     const H = stripTop + stripH + 18;
-    const start = this._midnight().getTime();
-    const span = PWM_PLAN_HOURS * PWM_PLAN_HOUR_MS;
+    const start = today + (showTomorrow ? 24 : 0) * PWM_PLAN_HOUR_MS;
+    const span = hours * PWM_PLAN_HOUR_MS;
     const x = (time) => left + ((time - start) / span) * (right - left);
     const y = (pct) => bottom - (Math.max(0, Math.min(100, pct)) / 100) * (bottom - top);
     const now = Date.now();
-    const hourW = (right - left) / PWM_PLAN_HOURS;
+    const hourW = (right - left) / hours;
     const emptyState = this._state("empty");
     const empty = emptyState && Number.isFinite(Number(emptyState.state)) ? Number(emptyState.state) : PWM_RING_DEFAULT_EMPTY_SOC;
     const socNow = Number(this._state("soc").state);
@@ -4504,8 +4541,9 @@ class PwMBatteryPlanCard extends HTMLElement {
 
     // History up to now, the current values carried to now.
     const history = this._history || { soc: [], min: [] };
+    // Tomorrow has no history.
     const withNow = (points, value) =>
-      Number.isFinite(value) ? [...points.filter((p) => p.t <= now), { t: now, v: value }] : points;
+      showTomorrow ? [] : Number.isFinite(value) ? [...points.filter((p) => p.t <= now), { t: now, v: value }] : points;
     const socPoints = withNow(history.soc, socNow);
     const minPoints = withNow(history.min, minNow);
     // The value a step series has at a time (the last point before it).
@@ -4548,7 +4586,10 @@ class PwMBatteryPlanCard extends HTMLElement {
       } else if (color) {
         const past = hourStart + PWM_PLAN_HOUR_MS <= now;
         const mid = Math.min(hourStart + PWM_PLAN_HOUR_MS / 2, now);
-        const soc = past || hourStart <= now ? valueAt(socPoints, mid) : socNow;
+        // Ahead of now: the SoC the plan assumes for the hour (older plans
+        // have none -- then the SoC now).
+        const planSoc = entry.soc !== null && entry.soc !== undefined ? Number(entry.soc) : socNow;
+        const soc = past || hourStart <= now ? valueAt(socPoints, mid) : planSoc;
         const floor = entry.floor !== null && entry.floor !== undefined ? Number(entry.floor) : valueAt(minPoints, mid);
         if (Number.isFinite(soc) && Number.isFinite(floor)) {
           const kept = Math.min(floor, soc);
@@ -4581,11 +4622,13 @@ class PwMBatteryPlanCard extends HTMLElement {
     const yLabels = [0, 50, 100]
       .map((pct) => `<text x="${left - 4}" y="${y(pct) + 4}" text-anchor="end">${pct}</text>`)
       .join("");
-    const xLabels = [0, 3, 6, 9, 12, 15, 18, 21, 24, 27, 30]
+    const xLabels = Array.from({ length: hours / 3 + 1 }, (_, i) => i * 3)
       .map((h) => `<text x="${left + h * hourW}" y="${H - 2}" text-anchor="middle">${String(h % 24).padStart(2, "0")}</text>`)
       .join("");
     parts.push(`<g class="axis">${yLabels}${xLabels}</g>`);
-    parts.push(`<line class="midnight" x1="${left + 24 * hourW}" x2="${left + 24 * hourW}" y1="${top}" y2="${bottom}"/>`);
+    if (!showTomorrow) {
+      parts.push(`<line class="midnight" x1="${left + 24 * hourW}" x2="${left + 24 * hourW}" y1="${top}" y2="${bottom}"/>`);
+    }
 
     // Target, up to where the plan is known.
     const targetState = this._state("target");
@@ -4613,7 +4656,7 @@ class PwMBatteryPlanCard extends HTMLElement {
     // The plan from now: the planned floor per hour, dashed, up to the
     // first unknown hour.
     const planned = [];
-    if (Number.isFinite(minNow)) planned.push({ t: now, v: minNow });
+    if (Number.isFinite(minNow) && !showTomorrow) planned.push({ t: now, v: minNow });
     let planEnd = start + span;
     for (let index = 0; index < plan.length; index++) {
       const entry = plan[index];
@@ -4631,9 +4674,11 @@ class PwMBatteryPlanCard extends HTMLElement {
     }
 
     // Now.
-    const nx = x(now);
-    parts.push(`<line class="now" x1="${nx}" x2="${nx}" y1="${top}" y2="${stripTop + stripH}"/>`);
-    parts.push(`<text class="now-label" x="${nx + 3}" y="${top + 10}">${t.now}</text>`);
+    if (!showTomorrow) {
+      const nx = x(now);
+      parts.push(`<line class="now" x1="${nx}" x2="${nx}" y1="${top}" y2="${stripTop + stripH}"/>`);
+      parts.push(`<text class="now-label" x="${nx + 3}" y="${top + 10}">${t.now}</text>`);
+    }
 
     const wrap = document.createElement("div");
     wrap.className = "wrap";
@@ -4644,13 +4689,13 @@ class PwMBatteryPlanCard extends HTMLElement {
 
     // The selected hour's rule (default: the current hour), or a rule
     // tapped in the legend.
-    const currentIndex = Math.floor((now - start) / PWM_PLAN_HOUR_MS);
+    const currentIndex = Math.max(0, Math.floor((now - start) / PWM_PLAN_HOUR_MS));
     const info = document.createElement("div");
     info.className = "info";
     info.innerHTML =
       typeof this._selected === "string"
         ? this._ruleHtml(t, this._selected)
-        : this._hourHtml(t, plan, this._selected !== undefined ? this._selected : currentIndex);
+        : this._hourHtml(t, plan, this._selected !== undefined ? this._selected : currentIndex, start);
     wrap.appendChild(info);
     const select = (value) => {
       this._selected = this._selected === value ? undefined : value;
@@ -4706,7 +4751,7 @@ class PwMBatteryPlanCard extends HTMLElement {
 
   /** "15–17 · Day plan ..." for the run of equal hours around index, what
    * the rule means, and -- for the night price protection -- the sums. */
-  _hourHtml(t, plan, index) {
+  _hourHtml(t, plan, index, start) {
     const entry = plan[index];
     if (!entry) return "";
     const rule = entry.rule || "none";
@@ -4743,7 +4788,7 @@ class PwMBatteryPlanCard extends HTMLElement {
       lines.push(`<div class="desc">${desc}</div>`);
       if (entry.floor !== null && entry.floor !== undefined) {
         lines.push(`<div class="desc">${t.floor(entry.floor)}</div>`);
-      } else if (!entry.planned && index < Math.floor((Date.now() - this._midnight().getTime()) / PWM_PLAN_HOUR_MS)) {
+      } else if (!entry.planned && start + (index + 1) * PWM_PLAN_HOUR_MS <= Date.now()) {
         lines.push(`<div class="desc">${t.earlier}</div>`);
       }
     }
