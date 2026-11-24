@@ -175,13 +175,13 @@
             },
             "data_description": {
               "kostal_min_soc": "Kostal'ens number \"Battery min SoC\". PwMngt skriver Battery datas min SoC hertil, når \"Inverter control\" på PwM PV er slået til.",
-              "kostal_usage_mode": "Kostal'ens select \"Battery Charging / Usage mode\". \"Bloker ladning\" sætter den til Battery:TimeControl:Enable, alt andet til None.",
+              "kostal_usage_mode": "Kostal'ens select \"Battery Charging / Usage mode\". \"Bloker ladning\" sætter den til Battery:TimeControl:Enable, alt andet til None. PwMngt overtager batteristyringen, så Smart batteristyring slås fra. Tidsstyringen slår kun inverterens egen ugeplan til, så før feltet bruges, skal den plan i inverterens webflade (Menu -> Battery -> Battery usage -> Time-controlled battery usage) stå på \"Battery charge blocked, battery discharge permitted in the event of demand from house\" i alle tidsrum på alle ugens dage. En anden tilstand i et tidsrum (fx ladning fra nettet) ville ellers gælde, mens PwMngt blokerer ladningen. Lad feltet stå tomt, hvis planen ikke er sat sådan op.",
               "kostal_relay_1": "Relæet på inverterens digitale indgang 1. Ladning og afladning sætter relæerne i kombinationer (lad 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, aflad: 3 / 2-3 / 4 / 2) -- inverterens tabel for de digitale indgange skal passe. Alle fire skal udfyldes, ellers bruges relæerne ikke.",
               "kostal_relay_2": "Relæet på inverterens digitale indgang 2. Ladning og afladning sætter relæerne i kombinationer (lad 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, aflad: 3 / 2-3 / 4 / 2) -- inverterens tabel for de digitale indgange skal passe. Alle fire skal udfyldes, ellers bruges relæerne ikke.",
               "kostal_relay_3": "Relæet på inverterens digitale indgang 3. Ladning og afladning sætter relæerne i kombinationer (lad 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, aflad: 3 / 2-3 / 4 / 2) -- inverterens tabel for de digitale indgange skal passe. Alle fire skal udfyldes, ellers bruges relæerne ikke.",
               "kostal_relay_4": "Relæet på inverterens digitale indgang 4. Ladning og afladning sætter relæerne i kombinationer (lad 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, aflad: 3 / 2-3 / 4 / 2) -- inverterens tabel for de digitale indgange skal passe. Alle fire skal udfyldes, ellers bruges relæerne ikke."
             },
-            "description": "Bruges kun, når switchen **Inverter control** på PwM PV er slået til. Den er slået fra som standard, så PwMngt skriver intet til inverteren, før du slår den til."
+            "description": "Bruges kun, når switchen **Inverter control** på PwM PV er slået til. Den er slået fra som standard, så PwMngt skriver intet til inverteren, før du slår den til. Til **Batteriets lade-/brugstilstand**: sæt først inverterens ugeplan for tidsstyring til \"Battery charge blocked\" i alle tidsrum på alle dage."
           }
         },
         "data": {

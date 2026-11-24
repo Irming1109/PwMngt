@@ -11,7 +11,12 @@ node "Gem værdi" in tab "Ha data - opsætning" (Claus's export
   table that maps each combination of the inputs to a battery power, so
   the combinations below must match that table.
 - block_charging sets the inverter's "Battery Charging / Usage mode" to
-  Battery:TimeControl:Enable; everything else sets it back to None.
+  Battery:TimeControl:Enable; everything else sets it back to None. Time
+  control only switches on the inverter's own weekly schedule, which must
+  be "Battery charge blocked, battery discharge permitted in the event
+  of demand from house" in every slot (the wizard says so) -- as on
+  Claus's Lundekrog Kostal. Smart battery control is deliberately not
+  kept: PwMngt takes over the battery control (Claus, 2026-11-24).
 - min_soc goes to the inverter's "Battery min SoC" number (already in
   steps of 10 on a Kostal -- data/battery_data.py, issue #36).
 - hold_min_soc (Growatt only) and anything unknown count as internal:

@@ -175,13 +175,13 @@
             },
             "data_description": {
               "kostal_min_soc": "The Kostal's \"Battery min SoC\" number. PwMngt writes Battery data's min SoC to it while \"Inverter control\" on PwM PV is on.",
-              "kostal_usage_mode": "The Kostal's \"Battery Charging / Usage mode\" select. \"Block charging\" sets it to Battery:TimeControl:Enable, everything else to None.",
+              "kostal_usage_mode": "The Kostal's \"Battery Charging / Usage mode\" select. \"Block charging\" sets it to Battery:TimeControl:Enable, everything else to None -- PwMngt takes over the battery control, so Smart battery control is turned off. Time control only switches on the inverter's own weekly schedule, so before using this field set that schedule in the inverter's web interface (Menu -> Battery -> Battery usage -> Time-controlled battery usage) to \"Battery charge blocked, battery discharge permitted in the event of demand from house\" for every time slot on every day of the week. Any other mode in a slot (e.g. charging from the grid) would then apply while PwMngt blocks charging. Leave the field empty if the schedule isn't set up like that.",
               "kostal_relay_1": "The relay on the inverter's digital input 1. Charge and discharge set the relays in combinations (charge 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, discharge: 3 / 2-3 / 4 / 2) -- the inverter's table for the digital inputs must match. All four must be filled in, or the relays aren't used.",
               "kostal_relay_2": "The relay on the inverter's digital input 2. Charge and discharge set the relays in combinations (charge 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, discharge: 3 / 2-3 / 4 / 2) -- the inverter's table for the digital inputs must match. All four must be filled in, or the relays aren't used.",
               "kostal_relay_3": "The relay on the inverter's digital input 3. Charge and discharge set the relays in combinations (charge 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, discharge: 3 / 2-3 / 4 / 2) -- the inverter's table for the digital inputs must match. All four must be filled in, or the relays aren't used.",
               "kostal_relay_4": "The relay on the inverter's digital input 4. Charge and discharge set the relays in combinations (charge 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, discharge: 3 / 2-3 / 4 / 2) -- the inverter's table for the digital inputs must match. All four must be filled in, or the relays aren't used."
             },
-            "description": "Only used while the switch **Inverter control** on PwM PV is on -- it is off by default, so PwMngt writes nothing to the inverter until you turn it on."
+            "description": "Only used while the switch **Inverter control** on PwM PV is on -- it is off by default, so PwMngt writes nothing to the inverter until you turn it on. For **Battery charging usage mode**: first set the inverter's weekly time-control schedule to \"Battery charge blocked\" for every time slot on every day."
           }
         },
         "data": {
