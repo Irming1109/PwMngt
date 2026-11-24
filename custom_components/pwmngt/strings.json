@@ -35,7 +35,7 @@
       },
       "solar_pv_plant": {
         "title": "Solar PV Plant",
-        "description": "Pick the entity in your own Home Assistant that PwMngt should mirror for each value below.{auto_filled_note}{derived_fields_note}",
+        "description": "Pick the entity in your own Home Assistant that PwMngt should mirror for each value below.{kostal_schedule_note}{auto_filled_note}{derived_fields_note}",
         "derived_fields_note": "⚙️ **Growatt Modbus: leave these fields empty -- PwMngt calculates them itself:**",
         "sections": {
           "battery": {
@@ -258,7 +258,8 @@
           "seed_purchase_price_real_without_pv": "Same idea as above, for the \"purchase price without PV (real)\" running total.",
           "seed_battery_grid_charge_sum": "Same idea as above, for the \"battery charged from grid\" running total. \"Battery charging savings\" is then derived automatically from this and the field below, instead of needing its own seed.",
           "seed_battery_grid_discharge_sum": "Same idea as above, for the \"battery discharged from grid\" running total."
-        }
+        },
+        "kostal_schedule_note": "**Kostal: set the inverter's weekly schedule first.** \"Block charging\" only switches on the inverter's own time-control schedule. In the inverter's web interface (Menu -> Battery -> Battery usage -> Time-controlled battery usage), every time slot on every day of the week must be \"Battery charge blocked, battery discharge permitted in the event of demand from house\". Otherwise PwMngt can't block charging -- and a slot with charging from the grid would charge the battery while PwMngt sells."
       },
       "ev_charging": {
         "title": "EV Charging",

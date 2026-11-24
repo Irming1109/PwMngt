@@ -35,7 +35,7 @@
       },
       "solar_pv_plant": {
         "title": "Solar PV Plant",
-        "description": "Vælg den entity i din egen Home Assistant, som PwMngt skal spejle for hver værdi nedenfor.{auto_filled_note}{derived_fields_note}",
+        "description": "Vælg den entity i din egen Home Assistant, som PwMngt skal spejle for hver værdi nedenfor.{kostal_schedule_note}{auto_filled_note}{derived_fields_note}",
         "derived_fields_note": "⚙️ **Growatt Modbus: lad disse felter stå tomme -- PwMngt beregner dem selv:**",
         "sections": {
           "battery": {
@@ -258,7 +258,8 @@
           "seed_purchase_price_real_without_pv": "Samme idé som ovenfor, for den løbende sum \"indkøbspris uden PV (reel)\".",
           "seed_battery_grid_charge_sum": "Samme idé som ovenfor, for den løbende sum \"batteri ladet fra nettet\". \"Besparelse batteriladning\" udledes så automatisk af dette og feltet nedenfor og behøver ikke sin egen startværdi.",
           "seed_battery_grid_discharge_sum": "Samme idé som ovenfor, for den løbende sum \"batteri afladet fra nettet\"."
-        }
+        },
+        "kostal_schedule_note": "**Kostal: sæt inverterens ugeplan først.** \"Bloker ladning\" slår kun inverterens egen ugeplan for tidsstyring til. I inverterens webflade (Menu -> Battery -> Battery usage -> Time-controlled battery usage) skal alle tidsrum på alle ugens dage stå på \"Battery charge blocked, battery discharge permitted in the event of demand from house\". Ellers kan PwMngt ikke blokere ladningen – og et tidsrum med ladning fra nettet ville lade batteriet, mens PwMngt sælger."
       },
       "ev_charging": {
         "title": "EV-ladning",

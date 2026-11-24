@@ -518,6 +518,29 @@ async def _derived_fields_note(hass, derivable_keys: set[str]) -> str:
     return "\n\n" + heading + "\n" + "".join(f"\n- {label}" for label in labels)
 
 
+async def _kostal_schedule_note(hass, inverter_type: str) -> str:
+    """The {kostal_schedule_note} for the Solar PV Plant page (Kostal
+    only): a warning box at the top of the page that the inverter's weekly
+    time-control schedule must block charging in every slot -- otherwise
+    "Block charging" doesn't block anything, or charges from the grid
+    (issue #125). Said in the Kostal group too, but a field's help text
+    was easy to miss in Rene's test (2026-11-24); a field's help text
+    can't be coloured, the page's description can (<ha-alert>). The text
+    comes from strings.json (options.step.solar_pv_plant.
+    kostal_schedule_note); "" for any other inverter."""
+    if inverter_type != INVERTER_TYPE_KOSTAL:
+        return ""
+    translations = await async_get_translations(
+        hass, hass.config.language, "options", [DOMAIN]
+    )
+    text = translations.get(f"component.{DOMAIN}.options.step.solar_pv_plant.kostal_schedule_note")
+    if not text:
+        return ""
+    # Blank lines around the text, so the Markdown inside (bold) is still
+    # parsed -- a line that starts with an HTML tag is otherwise kept as is.
+    return f'\n\n<ha-alert alert-type="warning">\n\n{text}\n\n</ha-alert>'
+
+
 def _installed_charger_type_options(hass, options: list[str], current_value: str) -> list[str]:
     """Narrow a charger "type" select's static options (description.options
     in select.py's PwM_CONFIG_SELECTS) down to what the EV Charging wizard
@@ -1098,6 +1121,7 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             description_placeholders={
                 "auto_filled_note": _auto_filled_note(auto_filled_labels),
                 "derived_fields_note": await _derived_fields_note(self.hass, derivable_keys),
+                "kostal_schedule_note": await _kostal_schedule_note(self.hass, inverter_type),
             },
         )
 

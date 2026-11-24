@@ -7,7 +7,6 @@
 
 from homeassistant.components.switch import SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 
 from .base import use_description_key_as_translation_key
@@ -19,7 +18,8 @@ INVERTER_CONTROL_DESCRIPTION = SwitchEntityDescription(
     key="inverter_control",
     name="Inverter control",
     icon="mdi:solar-power-variant-outline",
-    entity_category=EntityCategory.CONFIG,
+    # No entity category: it is a control, not a setting, so it shows
+    # under "Controls" on PwM PV (Rene's test, 2026-11-24).
 )
 
 
