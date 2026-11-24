@@ -422,6 +422,31 @@
       "pv_production_today": {
         "name": "PV production today"
       }
+    },
+    "switch": {
+      "inverter_control": {
+        "state_attributes": {
+          "status": {
+            "name": "Status",
+            "state": {
+              "off": "Off",
+              "active": "Active",
+              "no_writer": "Not supported for this inverter yet",
+              "not_configured": "Inverter fields missing in the wizard",
+              "write_failed": "Last write to the inverter failed"
+            }
+          },
+          "last_command": {
+            "name": "Last command"
+          },
+          "last_min_soc": {
+            "name": "Last min SoC"
+          },
+          "last_min_soc_write": {
+            "name": "Last min SoC write"
+          }
+        }
+      }
     }
   },
   "services": {

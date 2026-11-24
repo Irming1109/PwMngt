@@ -9,7 +9,7 @@ CONF_DEFAULT_NAME = "Power Management"
 
 DOMAIN = "pwmngt"
 
-PLATFORMS = ["sensor", "number", "select", "button", "text"]
+PLATFORMS = ["sensor", "number", "select", "button", "text", "switch"]
 
 # ---------------------------------------------------------------------------
 # External integrations PwMngt depends on but can't declare as a formal

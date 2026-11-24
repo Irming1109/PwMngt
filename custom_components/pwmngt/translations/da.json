@@ -352,6 +352,31 @@
           }
         }
       }
+    },
+    "switch": {
+      "inverter_control": {
+        "state_attributes": {
+          "status": {
+            "name": "Status",
+            "state": {
+              "off": "Slået fra",
+              "active": "Aktiv",
+              "no_writer": "Ikke understøttet for denne inverter endnu",
+              "not_configured": "Inverterens felter mangler i guiden",
+              "write_failed": "Sidste skrivning til inverteren fejlede"
+            }
+          },
+          "last_command": {
+            "name": "Sidste kommando"
+          },
+          "last_min_soc": {
+            "name": "Sidste min SoC"
+          },
+          "last_min_soc_write": {
+            "name": "Sidste skrivning af min SoC"
+          }
+        }
+      }
     }
   },
   "issues": {

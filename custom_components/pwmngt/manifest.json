@@ -1,10 +1,10 @@
 {
   "domain": "pwmngt",
   "name": "Power Management",
-  "version": "0.5.35",
+  "version": "0.5.36",
   "documentation": "https://github.com/Irming1109/PwMngt",
   "dependencies": [],
-  "after_dependencies": [ "recorder" ],
+  "after_dependencies": [ "logbook", "recorder" ],
   "codeowners": [ "@Irming1109" ],
   "requirements": [ "requests" ],
   "iot_class": "local_polling",
