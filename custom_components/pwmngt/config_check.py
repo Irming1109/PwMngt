@@ -24,6 +24,12 @@ _CHECK_INTERVAL, the first time 10 minutes after setup:
   none of the three picked, the grid charge ignores the main fuse and
   always charges at "Charge 75" (data/battery_charge_level.py) -- a
   Repair that can be ignored by those without a phase-current meter.
+- Inverter control (issue #125): the inverter's fields for PwMngt's own
+  control are filled in (the brand's writer is configured), but the
+  switch "Inverter control" on PwM PV is off -- PwMngt then writes
+  nothing to the inverter. Can be ignored by those who fill in the
+  fields before they want PwMngt to take over; turning the switch on
+  clears it at once (inverter/control.py).
 
 Each Repair clears itself once the cause is gone. No Node-RED
 counterpart -- new in PwMngt (Claus, 2026-11-16).
@@ -61,7 +67,8 @@ from .const import (
     ENTITY_KEY_SEED_PURCHASE_PRICE_REAL,
     ENTITY_KEY_SEED_PURCHASE_PRICE_REAL_WITHOUT_PV,
 )
-from .properties import charger_properties
+from .inverter.control import ISSUE_INVERTER_CONTROL_OFF, inverter_writer
+from .properties import charger_properties, pv_properties
 
 LOGGER = logging.getLogger(__name__)
 
@@ -223,6 +230,24 @@ class _ConfigCheck:
                 ir.async_delete_issue(self.hass, DOMAIN, issue_id)
         self._check_stromligning(registry)
         self._check_fuse_phases()
+        self._check_inverter_control()
+
+    def _check_inverter_control(self) -> None:
+        """Issue #125: the inverter's fields filled in, but the switch off."""
+        entity_id = pv_properties.inverter_control_entity_id(self.hass, self._entry)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        writer = inverter_writer(self.hass, self._entry)
+        if state is not None and state.state == "off" and writer is not None and writer.is_configured():
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                ISSUE_INVERTER_CONTROL_OFF,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=ISSUE_INVERTER_CONTROL_OFF,
+            )
+        else:
+            ir.async_delete_issue(self.hass, DOMAIN, ISSUE_INVERTER_CONTROL_OFF)
 
     def _check_fuse_phases(self) -> None:
         """Issue #101: a battery without any phase sensor picked."""

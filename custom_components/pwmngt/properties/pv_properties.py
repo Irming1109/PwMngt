@@ -109,6 +109,11 @@ def inverter_type(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
     return state.state if state is not None else None
 
 
+def inverter_control_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+    """Entity id of switch.<pv>_inverter_control (switch.py, issue #124)."""
+    return _pv_entity_id(hass, entry, "switch", "inverter_control")
+
+
 def battery_command_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
     """Entity id of select.<pv>_battery_command (see PwM_PV_CONFIG_SELECTS
     in select.py)."""

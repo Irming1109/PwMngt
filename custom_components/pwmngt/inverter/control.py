@@ -39,6 +39,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STARTED, STATE_ON
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import event
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 
@@ -69,12 +70,22 @@ STATUS_NO_WRITER = "no_writer"
 STATUS_NOT_CONFIGURED = "not_configured"
 STATUS_WRITE_FAILED = "write_failed"
 
+# Issue #125: Repair (config_check.py) while the inverter's fields are
+# filled in but the switch is off.
+ISSUE_INVERTER_CONTROL_OFF = "inverter_control_off"
+
 ATTR_STATUS = "status"
 ATTR_LAST_COMMAND = "last_command"
 ATTR_LAST_MIN_SOC = "last_min_soc"
 ATTR_LAST_MIN_SOC_WRITE = "last_min_soc_write"
 
 _INVALID_STATES = frozenset({"unknown", "unavailable", ""})
+
+
+def inverter_writer(hass: HomeAssistant, entry: ConfigEntry) -> InverterWriter | None:
+    """The writer for the wizard's inverter type, or None when it has none."""
+    writer_class = INVERTER_WRITERS.get(pv_properties.inverter_type(hass, entry) or "")
+    return writer_class(hass, entry) if writer_class is not None else None
 
 
 def should_write_min_soc(
@@ -183,6 +194,8 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
             return
         LOGGER.info("%s turned on", self.entity_id)
         self._attr_is_on = True
+        # The Repair saying it is off goes at once, not at the next check.
+        ir.async_delete_issue(self.hass, DOMAIN, ISSUE_INVERTER_CONTROL_OFF)
         self._last_command = None
         self._last_min_soc = None
         await self._async_sync(startup=True)
@@ -221,11 +234,10 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
     def _writer(self) -> InverterWriter | None:
         """The writer for the wizard's inverter type, or None (and the
         status saying why) when there is none or it isn't set up."""
-        writer_class = INVERTER_WRITERS.get(pv_properties.inverter_type(self.hass, self._entry) or "")
-        if writer_class is None:
+        writer = inverter_writer(self.hass, self._entry)
+        if writer is None:
             self._status = STATUS_NO_WRITER
             return None
-        writer = writer_class(self.hass, self._entry)
         if not writer.is_configured():
             self._status = STATUS_NOT_CONFIGURED
             return None

@@ -180,7 +180,8 @@
               "kostal_relay_2": "Relæet på inverterens digitale indgang 2. Ladning og afladning sætter relæerne i kombinationer (lad 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, aflad: 3 / 2-3 / 4 / 2) -- inverterens tabel for de digitale indgange skal passe. Alle fire skal udfyldes, ellers bruges relæerne ikke.",
               "kostal_relay_3": "Relæet på inverterens digitale indgang 3. Ladning og afladning sætter relæerne i kombinationer (lad 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, aflad: 3 / 2-3 / 4 / 2) -- inverterens tabel for de digitale indgange skal passe. Alle fire skal udfyldes, ellers bruges relæerne ikke.",
               "kostal_relay_4": "Relæet på inverterens digitale indgang 4. Ladning og afladning sætter relæerne i kombinationer (lad 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, aflad: 3 / 2-3 / 4 / 2) -- inverterens tabel for de digitale indgange skal passe. Alle fire skal udfyldes, ellers bruges relæerne ikke."
-            }
+            },
+            "description": "Bruges kun, når switchen **Inverter control** på PwM PV er slået til. Den er slået fra som standard, så PwMngt skriver intet til inverteren, før du slår den til."
           }
         },
         "data": {
@@ -444,6 +445,10 @@
     "consumption_counts_battery": {
       "title": "PwMngt: forbrugssensoren ser ud til at tælle batteriets ladning med",
       "description": "PwMngt's felt **Total property consumption** peger på `{entity_id}`. På nætter, hvor batteriet lades fra nettet, stiger sensoren med omtrent den ladede mængde -- den ser ud til at tælle batteriets ladning med som forbrug (fx en måler, der er køb + PV - salg).\n\nSå ligner en nat med netladning en nat med højt forbrug: nattens target stiger, næste nat lades der mere, og så videre.\n\nVælg en sensor med husets eget forbrug i PwMngt's indstillinger (Indstillinger -> Enheder og tjenester -> PwMngt -> Konfigurér -> Solar PV Plant). Advarslen forsvinder af sig selv, når mønstret ikke længere ses (tjekkes hver nat kl. 00:15)."
+    },
+    "inverter_control_off": {
+      "title": "PwMngt: Inverter control er slået fra",
+      "description": "Inverterens felter til PwMngt's egen styring er udfyldt, men switchen **Inverter control** på enheden PwM PV er slået fra. PwMngt skriver så intet til inverteren: hverken min SoC, relæer eller usage mode.\n\nSådan retter du det: Indstillinger -> Enheder og tjenester -> PwMngt -> PwM PV -> slå **Inverter control** til. Skal PwMngt ikke styre inverteren endnu? Så kan du ignorere advarslen."
     }
   },
   "services": {

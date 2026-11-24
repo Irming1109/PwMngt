@@ -180,7 +180,8 @@
               "kostal_relay_2": "The relay on the inverter's digital input 2. Charge and discharge set the relays in combinations (charge 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, discharge: 3 / 2-3 / 4 / 2) -- the inverter's table for the digital inputs must match. All four must be filled in, or the relays aren't used.",
               "kostal_relay_3": "The relay on the inverter's digital input 3. Charge and discharge set the relays in combinations (charge 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, discharge: 3 / 2-3 / 4 / 2) -- the inverter's table for the digital inputs must match. All four must be filled in, or the relays aren't used.",
               "kostal_relay_4": "The relay on the inverter's digital input 4. Charge and discharge set the relays in combinations (charge 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, discharge: 3 / 2-3 / 4 / 2) -- the inverter's table for the digital inputs must match. All four must be filled in, or the relays aren't used."
-            }
+            },
+            "description": "Only used while the switch **Inverter control** on PwM PV is on -- it is off by default, so PwMngt writes nothing to the inverter until you turn it on."
           }
         },
         "data": {
@@ -332,6 +333,10 @@
     "consumption_counts_battery": {
       "title": "PwMngt: the consumption sensor seems to count the battery's charging",
       "description": "PwMngt's field **Total property consumption** points at `{entity_id}`. On nights the battery charges from the grid, that sensor rises by about the charged energy -- it looks like it counts the battery's charging as consumption (for example a meter that is purchase + PV - sale).\n\nThen a night with a grid charge looks like a night with high consumption: the nightly target rises, the next night charges more, and so on.\n\nPick a sensor with the house's own consumption in PwMngt's options (Settings -> Devices & services -> PwMngt -> Configure -> Solar PV Plant). This warning clears itself once the pattern is gone (checked every night at 00:15)."
+    },
+    "inverter_control_off": {
+      "title": "PwMngt: Inverter control is off",
+      "description": "The inverter's fields for PwMngt's own control are filled in, but the switch **Inverter control** on the device PwM PV is off. PwMngt then writes nothing to the inverter: no min SoC, no relays, no usage mode.\n\nTo fix: Settings -> Devices & services -> PwMngt -> PwM PV -> turn on **Inverter control**. Not ready for PwMngt to control the inverter yet? Then you can ignore this warning."
     }
   },
   "entity": {
