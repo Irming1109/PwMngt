@@ -79,6 +79,11 @@ Deliberate differences from Node-RED (agreed with Claus, issue #12):
 - The minimum time between switches (10 min) also applies when the hold
   starts, not only when it releases. Node-RED could start and stop every
   quarter of an hour when the limit hovers around 10 % (20 % in winter).
+- DIFF (Claus, 2026-11-24): the winter limit outside 06-17 is the
+  battery's minimum SoC (select "Battery minimum SoC, calculation only",
+  pv_properties.battery_min_soc()) + 10 points instead of a fixed 20 %.
+  Node-RED's 20 is 10 above Claus's Growatt cutoff of 10 %; a battery set
+  to stop at 20 % would otherwise never hold in winter.
 - battery_command itself says whether the hold is active, instead of a
   remembered flag: the hold can't get stuck when another command (or the
   user) takes over -- the translator releases as soon as battery_command
@@ -100,7 +105,7 @@ Deliberate differences from Node-RED (agreed with Claus, issue #12):
 - Winter (November-January) is read in Home Assistant's own time zone
   rather than a fixed Europe/Copenhagen.
 - DIFF (issue #60, Claus 2026-11-09): the winter rule (hold only from a
-  limit of 20 %) only applies while the battery holds no grid-bought
+  limit of minimum SoC + 10) only applies while the battery holds no grid-bought
   energy (battery_data's soc_grid). It is there so the battery doesn't
   go into a hard hold nearly every winter day over a little PV -- but
   the night charge now only charges what the evening (#50) and the
@@ -113,7 +118,7 @@ Deliberate differences from Node-RED (agreed with Claus, issue #12):
   that reserve in daytime, which on a big battery is often below 20 % --
   the fixed rule let go of exactly the energy saved for the evening. A
   little PV that doesn't reach the reserve still doesn't start a hard
-  hold. Outside 06-17, or while the reserve is unknown, the fixed 20 %.
+  hold. Outside 06-17, or while the reserve is unknown, minimum SoC + 10.
 
 New logic with no Node-RED counterpart (Claus, issue #14):
 - The wait at the limit is 3 minutes, but 6 with 3 or more big PV shifts
@@ -180,6 +185,7 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     CONF_ENTITY_MAP,
+    DEFAULT_BATTERY_MIN_SOC,
     ENTITY_KEY_BATTERY_POWER,
     ENTITY_KEY_BATTERY_SOC,
     GROWATT_MODBUS_HOUSE_CONSUMPTION,
@@ -203,7 +209,11 @@ _POWER_COMMANDS = frozenset({COMMAND_HOLD, COMMAND_BLOCK_CHARGING})
 
 # Node-RED's settings, same names translated.
 _FLOOR_LIMIT = 10  # BUND: Growatt's lowest cutoff -- a limit at or below means no hold.
-_WINTER_MIN_LIMIT = 20  # VINTER_MIN: Nov-Jan, hold only from a limit of 20 % (not grid energy, #60).
+# VINTER_MIN (20 = Claus's cutoff 10 + 10): Nov-Jan, hold only from a limit
+# this many points above the battery's minimum SoC (not grid energy, #60).
+_WINTER_MARGIN_POINTS = 10
+# Used until the caller passes the real limit (winter_min_limit()).
+_DEFAULT_WINTER_LIMIT = DEFAULT_BATTERY_MIN_SOC + _WINTER_MARGIN_POINTS
 _WINTER_MONTHS = (11, 12, 1)
 # Issue #73: the hours the winter limit follows the evening reserve.
 _WINTER_RESERVE_HOURS = range(6, 17)
@@ -326,13 +336,23 @@ def battery_hold_supported(hass: HomeAssistant) -> bool:
     return find_entity_by_name(hass, GROWATT_MODBUS_PLATFORM, GROWATT_MODBUS_HOUSE_CONSUMPTION) is not None
 
 
-def winter_min_limit(hour: int, evening_reserve: float | None) -> float:
+def winter_min_limit(hour: int, evening_reserve: float | None, battery_min_soc: float) -> float:
     """Issue #73: the lowest limit the hold keeps in winter (without grid
-    energy) -- battery_data's evening reserve 06-17, else the fixed
-    VINTER_MIN."""
+    energy) -- battery_data's evening reserve 06-17, else the battery's
+    minimum SoC + 10 points (VINTER_MIN, relative so it follows the
+    battery's own cutoff)."""
     if hour in _WINTER_RESERVE_HOURS and evening_reserve is not None:
         return evening_reserve
-    return float(_WINTER_MIN_LIMIT)
+    return float(battery_min_soc + _WINTER_MARGIN_POINTS)
+
+
+def read_winter_min_limit(hass: HomeAssistant, entry: ConfigEntry) -> float:
+    """winter_min_limit() for the current hour, read from Home Assistant."""
+    return winter_min_limit(
+        dt_util.now().hour,
+        read_evening_reserve(hass, entry),
+        pv_properties.battery_min_soc(hass, entry),
+    )
 
 
 def read_evening_reserve(hass: HomeAssistant, entry: ConfigEntry) -> float | None:
@@ -351,7 +371,7 @@ def hold_engages(
     soc: float,
     winter: bool,
     grid_energy: bool,
-    winter_limit: float = _WINTER_MIN_LIMIT,
+    winter_limit: float = _DEFAULT_WINTER_LIMIT,
 ) -> bool:
     """Whether the hold has a limit to keep (the same rules as
     calculate_battery_hold()) and SoC is at or below it."""
@@ -386,7 +406,7 @@ def stop_command(
         grid_energy = False
     now = dt_util.now()
     winter = now.month in _WINTER_MONTHS
-    winter_limit = winter_min_limit(now.hour, read_evening_reserve(hass, entry))
+    winter_limit = read_winter_min_limit(hass, entry)
     return (
         COMMAND_HOLD
         if hold_engages(limit, soc, winter, grid_energy, winter_limit)
@@ -450,7 +470,7 @@ class BatteryHoldInputs:
     # grid-bought energy, which the winter rule doesn't release.
     grid_energy: bool = False
     # Issue #73: the lowest limit kept in winter (winter_min_limit()).
-    winter_limit: float = _WINTER_MIN_LIMIT
+    winter_limit: float = _DEFAULT_WINTER_LIMIT
     pv_big_shifts: int = 0  # solar_data's pv_big_shifts_last_60min.
     # Issue #33: a car is charging, and with how much (W; None = unknown,
     # the charger has no power sensor).
@@ -1006,9 +1026,7 @@ class PwMngtBatteryHoldSensor(RestoreEntity, SensorEntity):
             now=dt_util.utcnow().timestamp(),
             winter=dt_util.now().month in _WINTER_MONTHS,
             grid_energy=self._read_grid_energy(),
-            winter_limit=winter_min_limit(
-                dt_util.now().hour, read_evening_reserve(self.hass, self._entry)
-            ),
+            winter_limit=read_winter_min_limit(self.hass, self._entry),
             pv_big_shifts=self._read_pv_big_shifts(),
             step_w=self._read_step_w(),
             **self._read_car_charging(),
