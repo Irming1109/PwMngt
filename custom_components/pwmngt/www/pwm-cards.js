@@ -4319,6 +4319,7 @@ const PWM_PLAN_CARD_STYLE = `
 // How often today's history is fetched again (ms).
 const PWM_PLAN_HISTORY_REFRESH = 5 * 60 * 1000;
 const PWM_PLAN_HOURS = 30; // "today": today 00:00 to tomorrow 06:00
+const PWM_PLAN_TARGET_END_HOUR = 17; // the target rules end at 17:00 (battery_data.py)
 const PWM_PLAN_DAY_HOURS = 24; // "tomorrow" (issue #123): tomorrow 00:00 to 24:00
 const PWM_PLAN_PLOT_HEIGHT = 280; // SoC 0-100 % at height: 100, in viewBox units (600 wide)
 const PWM_PLAN_HOUR_MS = 3600 * 1000;
@@ -4662,12 +4663,14 @@ class PwMBatteryPlanCard extends HTMLElement {
       parts.push(`<line class="midnight" x1="${left + 24 * hourW}" x2="${left + 24 * hourW}" y1="${top}" y2="${bottom}"/>`);
     }
 
-    // Target, up to where the plan is known.
+    // Target: only today until 17:00 -- the rules that use it (charge
+    // curve, target reached, the night charge kept) end there, and
+    // tomorrow's target isn't worked out yet.
     const targetState = this._state("target");
-    const target = targetState ? Number(targetState.state) : NaN;
+    const target = targetState && !showTomorrow ? Number(targetState.state) : NaN;
+    const targetEnd = today + PWM_PLAN_TARGET_END_HOUR * PWM_PLAN_HOUR_MS;
     if (Number.isFinite(target)) {
-      const end = unknownIndexes.length ? left + unknownIndexes[0] * hourW : right;
-      parts.push(`<line class="target" x1="${left}" x2="${end}" y1="${y(target)}" y2="${y(target)}"/>`);
+      parts.push(`<line class="target" x1="${left}" x2="${x(targetEnd)}" y1="${y(target)}" y2="${y(target)}"/>`);
     }
 
     // History: SoC as a line, min SoC as steps.
@@ -4768,11 +4771,10 @@ class PwMBatteryPlanCard extends HTMLElement {
       tip.style.left = `${Math.max(0, Math.min(tx, box.width - tip.offsetWidth))}px`;
       tip.style.top = `${above >= 0 || touch ? Math.max(0, above) : py + 16}px`;
     };
-    const firstUnknown = unknownIndexes.length ? start + unknownIndexes[0] * PWM_PLAN_HOUR_MS : start + span;
     const nextHour = start + (currentIndex + 1) * PWM_PLAN_HOUR_MS;
     // Each curve's value at a time, as drawn: the history up to now, then
-    // the plan (the SoC it assumes, the planned floor), until the first
-    // hour waiting for prices.
+    // the plan (the SoC it assumes, the planned floor) until the first
+    // hour waiting for prices; the target as drawn.
     const valuesAt = (time, index) => {
       const entry = plan[index] || {};
       const ahead = time > now;
@@ -4781,7 +4783,7 @@ class PwMBatteryPlanCard extends HTMLElement {
         soc: !ahead ? valueAt(socPoints, time) : entry.rule === "unknown" ? undefined : time < nextHour ? socNow : planSoc,
         min: ahead ? undefined : valueAt(minPoints, time),
         planned: ahead && planned.length && time < planEnd ? valueAt(planned, time) : undefined,
-        target: Number.isFinite(target) && time < firstUnknown ? target : undefined,
+        target: Number.isFinite(target) && time < targetEnd ? target : undefined,
       };
     };
     const labels = { soc: t.soc, min: t.minSoc, planned: t.planned, target: t.target };
@@ -4849,7 +4851,9 @@ class PwMBatteryPlanCard extends HTMLElement {
       `<span><i class="line" style="border-color: var(--primary-color)"></i>${t.soc}</span>`,
       `<span><i class="line" style="border-color: var(--error-color, #e53935)"></i>${t.minSoc}</span>`,
       `<span><i class="dash" style="border-color: var(--error-color, #e53935)"></i>${t.planned}</span>`,
-      `<span><i class="dash" style="border-color: var(--success-color, #43a047)"></i>${t.target}</span>`,
+      ...(Number.isFinite(target)
+        ? [`<span><i class="dash" style="border-color: var(--success-color, #43a047)"></i>${t.target}</span>`]
+        : []),
       `<span><i style="background: ${PWM_PLAN_USABLE_COLOR}; opacity: 0.35"></i>${t.usable}</span>`,
       `<span><i style="background: repeating-linear-gradient(45deg, var(--secondary-text-color) 0 2px, transparent 2px 5px)"></i>${t.held}</span>`,
       ...ruleLegend,
