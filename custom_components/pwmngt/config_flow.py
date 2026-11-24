@@ -43,6 +43,13 @@ from .const import (
     ENTITY_KEY_MAIN_FUSE_LOAD_L2,
     ENTITY_KEY_MAIN_FUSE_LOAD_L3,
     ENTITY_KEY_SELL_FORCE_OVERRIDE,
+    ENTITY_KEY_KOSTAL_MIN_SOC,
+    ENTITY_KEY_KOSTAL_USAGE_MODE,
+    ENTITY_KEY_KOSTAL_RELAY_1,
+    ENTITY_KEY_KOSTAL_RELAY_2,
+    ENTITY_KEY_KOSTAL_RELAY_3,
+    ENTITY_KEY_KOSTAL_RELAY_4,
+    INVERTER_TYPE_KOSTAL,
     ENTITY_KEY_ELECTRICITY_TAX_FULL_RATE,
     ENTITY_KEY_HOUSEHOLD_CONSUMPTION_HOURLY,
     ENTITY_KEY_GRID_IMPORT_HOURLY,
@@ -109,6 +116,14 @@ _SOLAR_PV_PLANT_FIELDS = [
     # loop below special-cases this one key to use _boolean_entity_picker
     # instead. See const.py's own docstring for what this field is for.
     (ENTITY_KEY_SELL_FORCE_OVERRIDE, "", False),
+    # Issue #125: Kostal control -- optional, no unit; picked by domain
+    # (_DOMAIN_PICKER_FIELDS), only shown for a Kostal (_GROUP_SHOWN_FOR).
+    (ENTITY_KEY_KOSTAL_MIN_SOC, "", False),
+    (ENTITY_KEY_KOSTAL_USAGE_MODE, "", False),
+    (ENTITY_KEY_KOSTAL_RELAY_1, "", False),
+    (ENTITY_KEY_KOSTAL_RELAY_2, "", False),
+    (ENTITY_KEY_KOSTAL_RELAY_3, "", False),
+    (ENTITY_KEY_KOSTAL_RELAY_4, "", False),
     # Savings tracking (data/savings_data.py) -- entirely optional, see
     # const.py's own docstring above these keys. ENTITY_KEY_SPOT_
     # ELECTRICITY_PRICE above doubles as the "reel" price here too.
@@ -221,6 +236,18 @@ _SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
         ],
     ),
     (
+        "kostal_control",
+        True,  # collapsed by default -- only used with "Inverter control"
+        [
+            ENTITY_KEY_KOSTAL_MIN_SOC,
+            ENTITY_KEY_KOSTAL_USAGE_MODE,
+            ENTITY_KEY_KOSTAL_RELAY_1,
+            ENTITY_KEY_KOSTAL_RELAY_2,
+            ENTITY_KEY_KOSTAL_RELAY_3,
+            ENTITY_KEY_KOSTAL_RELAY_4,
+        ],
+    ),
+    (
         "savings_data",
         True,  # collapsed by default -- entirely optional feature
         [
@@ -244,6 +271,22 @@ _SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
         ],
     ),
 ]
+
+# Groups only shown for one inverter type (group_key -> inverter type).
+# A hidden group's fields keep whatever they had -- switching inverter
+# type and back doesn't lose the picks.
+_GROUP_SHOWN_FOR: dict[str, str] = {"kostal_control": INVERTER_TYPE_KOSTAL}
+
+# Fields that pick an entity of a given domain rather than a sensor with a
+# unit (issue #125). Relays: any on/off entity -- usually a Shelly switch.
+_DOMAIN_PICKER_FIELDS: dict[str, list[str]] = {
+    ENTITY_KEY_KOSTAL_MIN_SOC: ["number"],
+    ENTITY_KEY_KOSTAL_USAGE_MODE: ["select"],
+    ENTITY_KEY_KOSTAL_RELAY_1: ["switch", "input_boolean"],
+    ENTITY_KEY_KOSTAL_RELAY_2: ["switch", "input_boolean"],
+    ENTITY_KEY_KOSTAL_RELAY_3: ["switch", "input_boolean"],
+    ENTITY_KEY_KOSTAL_RELAY_4: ["switch", "input_boolean"],
+}
 
 # Auto-detected default sources: entity_map key -> (integration domain,
 # translation_key) for a field with one predictable real-world source, so
@@ -289,6 +332,8 @@ _AUTO_DETECT_LABELS: dict[str, str] = {
     ENTITY_KEY_PV_TOTAL_CONSUMPTION: "PV total consumption",
     ENTITY_KEY_GRID_POWER: "Grid power",
     ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL: "Total property consumption",
+    ENTITY_KEY_KOSTAL_MIN_SOC: "Inverter min SoC",
+    ENTITY_KEY_KOSTAL_USAGE_MODE: "Battery charging usage mode",
 }
 
 LOGGER = logging.getLogger(__name__)
@@ -916,6 +961,19 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         # left empty, the calculated value is used.
         derivable_keys = derivable_entity_map_keys(self.hass)
 
+        # Issue #125: groups for another inverter type aren't shown.
+        shown_groups = [
+            (group_key, collapsed, field_keys)
+            for group_key, collapsed, field_keys in _SOLAR_PV_PLANT_GROUPS
+            if _GROUP_SHOWN_FOR.get(group_key, inverter_type) == inverter_type
+        ]
+        hidden_keys = {
+            key
+            for group_key, _collapsed, field_keys in _SOLAR_PV_PLANT_GROUPS
+            if (group_key, _collapsed, field_keys) not in shown_groups
+            for key in field_keys
+        }
+
         if user_input is not None:
             # Flatten each section's nested dict (keyed by group_key) back
             # into one flat dict.
@@ -953,6 +1011,8 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
             else:
                 entity_map = dict(self.config_entry.options.get(CONF_ENTITY_MAP, {}))
                 for key, _unit, _required in _SOLAR_PV_PLANT_FIELDS:
+                    if key in hidden_keys:
+                        continue
                     entity_map[key] = flat_input.get(key) or None
                 self._data[CONF_ENTITY_MAP] = entity_map
                 # Not an entity_map field -- see CONF_ELECTRICITY_PRICE_
@@ -990,12 +1050,16 @@ class PwMngtOptionsFlow(config_entries.OptionsFlow):
         # lost (the live mirror sensors kept reading them fine the whole
         # time), the wizard just couldn't show them back to him.
         suggested_values: dict[str, dict[str, str]] = {}
-        for group_key, collapsed, field_keys in _SOLAR_PV_PLANT_GROUPS:
+        for group_key, collapsed, field_keys in shown_groups:
             group_schema_dict: dict[Any, Any] = {}
             group_suggested: dict[str, str] = {}
             for key in field_keys:
                 if key == ENTITY_KEY_SELL_FORCE_OVERRIDE:
                     group_schema_dict[vol.Optional(key)] = _boolean_entity_picker(self.hass)
+                elif key in _DOMAIN_PICKER_FIELDS:
+                    group_schema_dict[vol.Optional(key)] = selector.EntitySelector(
+                        selector.EntitySelectorConfig(domain=_DOMAIN_PICKER_FIELDS[key])
+                    )
                 elif key == CONF_ELECTRICITY_PRICE_SURCHARGE:
                     # A plain number, not an entity to pick -- see that
                     # constant's own docstring in const.py.

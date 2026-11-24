@@ -168,6 +168,28 @@ ENTITY_KEY_MAIN_FUSE_LOAD_L1 = "main_fuse_load_l1"
 ENTITY_KEY_MAIN_FUSE_LOAD_L2 = "main_fuse_load_l2"
 ENTITY_KEY_MAIN_FUSE_LOAD_L3 = "main_fuse_load_l3"
 
+# Issue #125: what inverter/kostal.py writes to on a Kostal Plenticore while
+# "Inverter control" is on -- all optional, only shown for a Kostal.
+# - The inverter's min SoC number ("Battery min SoC", Battery:MinSoc) and
+#   its "Battery Charging / Usage mode" select (block_charging =
+#   Battery:TimeControl:Enable). Old: number.battery_min_soc_lundekrog /
+#   select.battery_charging_usage_mode_lundekrog in Claus's Node-RED.
+# - The four relays (e.g. Shelly) on the inverter's digital inputs DI1-DI4,
+#   whose combinations the inverter maps to a battery power. Old:
+#   switch.pv_batteri_styring_1..4_switch_0 (subflow "PV Batteri styring").
+ENTITY_KEY_KOSTAL_MIN_SOC = "kostal_min_soc"
+ENTITY_KEY_KOSTAL_USAGE_MODE = "kostal_usage_mode"
+ENTITY_KEY_KOSTAL_RELAY_1 = "kostal_relay_1"
+ENTITY_KEY_KOSTAL_RELAY_2 = "kostal_relay_2"
+ENTITY_KEY_KOSTAL_RELAY_3 = "kostal_relay_3"
+ENTITY_KEY_KOSTAL_RELAY_4 = "kostal_relay_4"
+ENTITY_KEYS_KOSTAL_RELAYS = (
+    ENTITY_KEY_KOSTAL_RELAY_1,
+    ENTITY_KEY_KOSTAL_RELAY_2,
+    ENTITY_KEY_KOSTAL_RELAY_3,
+    ENTITY_KEY_KOSTAL_RELAY_4,
+)
+
 # Optional "force sell" override -- a boolean entity (input_boolean,
 # switch, or a boolean-ish binary_sensor) the user can point at any
 # external automation of their own that wants to force the battery into
@@ -374,6 +396,10 @@ INVERTER_CORE_AUTO_DETECT_NAMES: dict[str, dict[str, dict[str, str]]] = {
             # -- exactly what data/consumption_data.py needs. Confirmed
             # live 2026-09-27 on Kasper's install (sensor.pileaas_sol_home_consumption_total).
             ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL: "Home Consumption Total",
+            # Issue #125, confirmed on Rene's install 2026-11-24 (the
+            # number: min 5, max 100, step 5).
+            ENTITY_KEY_KOSTAL_MIN_SOC: "Battery min SoC",
+            ENTITY_KEY_KOSTAL_USAGE_MODE: "Battery Charging / Usage mode",
         },
     },
     "Growatt": {

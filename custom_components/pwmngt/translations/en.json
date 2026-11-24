@@ -162,6 +162,25 @@
               "seed_battery_grid_charge_sum": "Same idea as above, for the \"battery charged from grid\" running total. \"Battery charging savings\" is then derived automatically from this and the field below, instead of needing its own seed.",
               "seed_battery_grid_discharge_sum": "Same idea as above, for the \"battery discharged from grid\" running total."
             }
+          },
+          "kostal_control": {
+            "name": "Kostal control (optional)",
+            "data": {
+              "kostal_min_soc": "Inverter min SoC",
+              "kostal_usage_mode": "Battery charging usage mode",
+              "kostal_relay_1": "Relay DI1",
+              "kostal_relay_2": "Relay DI2",
+              "kostal_relay_3": "Relay DI3",
+              "kostal_relay_4": "Relay DI4"
+            },
+            "data_description": {
+              "kostal_min_soc": "The Kostal's \"Battery min SoC\" number. PwMngt writes Battery data's min SoC to it while \"Inverter control\" on PwM PV is on.",
+              "kostal_usage_mode": "The Kostal's \"Battery Charging / Usage mode\" select. \"Block charging\" sets it to Battery:TimeControl:Enable, everything else to None.",
+              "kostal_relay_1": "The relay on the inverter's digital input 1. Charge and discharge set the relays in combinations (charge 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, discharge: 3 / 2-3 / 4 / 2) -- the inverter's table for the digital inputs must match. All four must be filled in, or the relays aren't used.",
+              "kostal_relay_2": "The relay on the inverter's digital input 2. Charge and discharge set the relays in combinations (charge 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, discharge: 3 / 2-3 / 4 / 2) -- the inverter's table for the digital inputs must match. All four must be filled in, or the relays aren't used.",
+              "kostal_relay_3": "The relay on the inverter's digital input 3. Charge and discharge set the relays in combinations (charge 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, discharge: 3 / 2-3 / 4 / 2) -- the inverter's table for the digital inputs must match. All four must be filled in, or the relays aren't used.",
+              "kostal_relay_4": "The relay on the inverter's digital input 4. Charge and discharge set the relays in combinations (charge 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, discharge: 3 / 2-3 / 4 / 2) -- the inverter's table for the digital inputs must match. All four must be filled in, or the relays aren't used."
+            }
           }
         },
         "data": {
@@ -199,7 +218,13 @@
           "seed_purchase_price_real": "Seed: purchase price (real)",
           "seed_purchase_price_real_without_pv": "Seed: purchase price without PV (real)",
           "seed_battery_grid_charge_sum": "Seed: battery charged from grid (sum)",
-          "seed_battery_grid_discharge_sum": "Seed: battery discharged from grid (sum)"
+          "seed_battery_grid_discharge_sum": "Seed: battery discharged from grid (sum)",
+          "kostal_min_soc": "Inverter min SoC",
+          "kostal_usage_mode": "Battery charging usage mode",
+          "kostal_relay_1": "Relay DI1",
+          "kostal_relay_2": "Relay DI2",
+          "kostal_relay_3": "Relay DI3",
+          "kostal_relay_4": "Relay DI4"
         },
         "data_description": {
           "battery_soc": "The entity that reports your home battery's state of charge (%), e.g. your inverter's battery SoC sensor. Only \"%\"-unit sensors are listed.",

@@ -42,17 +42,20 @@ from homeassistant.helpers import event
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 
-from ..const import DOMAIN
+from ..const import DOMAIN, INVERTER_TYPE_KOSTAL
 from ..devices import pv_device_info
 from ..helpers.state_helper import read_float_state
 from ..properties import pv_properties
+from .kostal import KostalWriter
 from .writer import InverterWriter
 
 LOGGER = logging.getLogger(__name__)
 
-# Inverter type (select.<pv>_inverter_type's option) -> its writer. Filled
-# in by issue #125 (Kostal Plenticore) and issue #126 (Growatt).
-INVERTER_WRITERS: dict[str, type[InverterWriter]] = {}
+# Inverter type (select.<pv>_inverter_type's option) -> its writer.
+# Growatt follows in issue #126.
+INVERTER_WRITERS: dict[str, type[InverterWriter]] = {
+    INVERTER_TYPE_KOSTAL: KostalWriter,
+}
 
 # Issue #1's limits on min SoC writes (spares the inverter's flash/EEPROM).
 MIN_SOC_WRITE_INTERVAL = timedelta(minutes=10)

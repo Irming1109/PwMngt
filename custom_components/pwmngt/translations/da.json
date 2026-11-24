@@ -162,6 +162,25 @@
               "seed_battery_grid_charge_sum": "Samme idé som ovenfor, for den løbende sum \"batteri ladet fra nettet\". \"Besparelse batteriladning\" udledes så automatisk af dette og feltet nedenfor og behøver ikke sin egen startværdi.",
               "seed_battery_grid_discharge_sum": "Samme idé som ovenfor, for den løbende sum \"batteri afladet fra nettet\"."
             }
+          },
+          "kostal_control": {
+            "name": "Kostal-styring (valgfri)",
+            "data": {
+              "kostal_min_soc": "Inverterens min SoC",
+              "kostal_usage_mode": "Batteriets lade-/brugstilstand",
+              "kostal_relay_1": "Relæ DI1",
+              "kostal_relay_2": "Relæ DI2",
+              "kostal_relay_3": "Relæ DI3",
+              "kostal_relay_4": "Relæ DI4"
+            },
+            "data_description": {
+              "kostal_min_soc": "Kostal'ens number \"Battery min SoC\". PwMngt skriver Battery datas min SoC hertil, når \"Inverter control\" på PwM PV er slået til.",
+              "kostal_usage_mode": "Kostal'ens select \"Battery Charging / Usage mode\". \"Bloker ladning\" sætter den til Battery:TimeControl:Enable, alt andet til None.",
+              "kostal_relay_1": "Relæet på inverterens digitale indgang 1. Ladning og afladning sætter relæerne i kombinationer (lad 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, aflad: 3 / 2-3 / 4 / 2) -- inverterens tabel for de digitale indgange skal passe. Alle fire skal udfyldes, ellers bruges relæerne ikke.",
+              "kostal_relay_2": "Relæet på inverterens digitale indgang 2. Ladning og afladning sætter relæerne i kombinationer (lad 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, aflad: 3 / 2-3 / 4 / 2) -- inverterens tabel for de digitale indgange skal passe. Alle fire skal udfyldes, ellers bruges relæerne ikke.",
+              "kostal_relay_3": "Relæet på inverterens digitale indgang 3. Ladning og afladning sætter relæerne i kombinationer (lad 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, aflad: 3 / 2-3 / 4 / 2) -- inverterens tabel for de digitale indgange skal passe. Alle fire skal udfyldes, ellers bruges relæerne ikke.",
+              "kostal_relay_4": "Relæet på inverterens digitale indgang 4. Ladning og afladning sætter relæerne i kombinationer (lad 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, aflad: 3 / 2-3 / 4 / 2) -- inverterens tabel for de digitale indgange skal passe. Alle fire skal udfyldes, ellers bruges relæerne ikke."
+            }
           }
         },
         "data": {
@@ -199,7 +218,13 @@
           "seed_purchase_price_real": "Startværdi: indkøbspris (reel)",
           "seed_purchase_price_real_without_pv": "Startværdi: indkøbspris uden PV (reel)",
           "seed_battery_grid_charge_sum": "Startværdi: batteri ladet fra nettet (sum)",
-          "seed_battery_grid_discharge_sum": "Startværdi: batteri afladet fra nettet (sum)"
+          "seed_battery_grid_discharge_sum": "Startværdi: batteri afladet fra nettet (sum)",
+          "kostal_min_soc": "Inverterens min SoC",
+          "kostal_usage_mode": "Batteriets lade-/brugstilstand",
+          "kostal_relay_1": "Relæ DI1",
+          "kostal_relay_2": "Relæ DI2",
+          "kostal_relay_3": "Relæ DI3",
+          "kostal_relay_4": "Relæ DI4"
         },
         "data_description": {
           "battery_soc": "Den entity, der viser husbatteriets ladetilstand (%), fx inverterens SoC-sensor for batteriet. Kun sensorer med enheden \"%\" vises.",
