@@ -182,6 +182,16 @@
               "kostal_relay_4": "Relæet på inverterens digitale indgang 4. Ladning og afladning sætter relæerne i kombinationer (lad 25/50/75/100 %: 1-3 / 1-2-3 / 1-4 / 1-2, aflad: 3 / 2-3 / 4 / 2) -- inverterens tabel for de digitale indgange skal passe. Alle fire skal udfyldes, ellers bruges relæerne ikke."
             },
             "description": "Bruges kun, når switchen **Inverter control** på PwM PV er slået til. Den er slået fra som standard, så PwMngt skriver intet til inverteren, før du slår den til. Til **Batteriets lade-/brugstilstand**: sæt først inverterens ugeplan for tidsstyring til \"Battery charge blocked\" i alle tidsrum på alle dage."
+          },
+          "growatt_control": {
+            "name": "Growatt-styring (valgfri)",
+            "description": "Bruges kun, når switchen **Inverter control** på PwM PV er slået til. Den er slået fra som standard, så PwMngt skriver intet til inverteren, før du slår den til. Kræver growatt_modbus med VPP-fjernstyring.",
+            "data": {
+              "growatt_remote_power": "Fjernstyret lade-/afladeeffekt"
+            },
+            "data_description": {
+              "growatt_remote_power": "growatt_modbus' number \"Remote Charge And Discharge Power\" (-100 til 100 %). PwMngt starter ladning, afladning og batterilåsen med growatt_modbus.set_battery_mode på den inverter, number'et hører til, og følger Battery hold power på det, mens låsen eller Bloker ladning kører."
+            }
           }
         },
         "data": {
@@ -225,7 +235,8 @@
           "kostal_relay_1": "Relæ DI1",
           "kostal_relay_2": "Relæ DI2",
           "kostal_relay_3": "Relæ DI3",
-          "kostal_relay_4": "Relæ DI4"
+          "kostal_relay_4": "Relæ DI4",
+          "growatt_remote_power": "Fjernstyret lade-/afladeeffekt"
         },
         "data_description": {
           "battery_soc": "Den entity, der viser husbatteriets ladetilstand (%), fx inverterens SoC-sensor for batteriet. Kun sensorer med enheden \"%\" vises.",
@@ -449,7 +460,7 @@
     },
     "inverter_control_off": {
       "title": "PwMngt: Inverter control er slået fra",
-      "description": "Inverterens felter til PwMngt's egen styring er udfyldt, men switchen **Inverter control** på enheden PwM PV er slået fra. PwMngt skriver så intet til inverteren: hverken min SoC, relæer eller usage mode.\n\nSådan retter du det: Indstillinger -> Enheder og tjenester -> PwMngt -> PwM PV -> slå **Inverter control** til. Skal PwMngt ikke styre inverteren endnu? Så kan du ignorere advarslen."
+      "description": "Inverterens felter til PwMngt's egen styring er udfyldt, men switchen **Inverter control** på enheden PwM PV er slået fra. PwMngt skriver så intet til inverteren.\n\nSådan retter du det: Indstillinger -> Enheder og tjenester -> PwMngt -> PwM PV -> slå **Inverter control** til. Skal PwMngt ikke styre inverteren endnu? Så kan du ignorere advarslen."
     }
   },
   "services": {

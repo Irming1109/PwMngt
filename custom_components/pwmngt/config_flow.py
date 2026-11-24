@@ -50,6 +50,8 @@ from .const import (
     ENTITY_KEY_KOSTAL_RELAY_3,
     ENTITY_KEY_KOSTAL_RELAY_4,
     INVERTER_TYPE_KOSTAL,
+    INVERTER_TYPE_GROWATT,
+    ENTITY_KEY_GROWATT_REMOTE_POWER,
     ENTITY_KEY_ELECTRICITY_TAX_FULL_RATE,
     ENTITY_KEY_HOUSEHOLD_CONSUMPTION_HOURLY,
     ENTITY_KEY_GRID_IMPORT_HOURLY,
@@ -124,6 +126,8 @@ _SOLAR_PV_PLANT_FIELDS = [
     (ENTITY_KEY_KOSTAL_RELAY_2, "", False),
     (ENTITY_KEY_KOSTAL_RELAY_3, "", False),
     (ENTITY_KEY_KOSTAL_RELAY_4, "", False),
+    # Issue #126: Growatt control -- optional, only shown for a Growatt.
+    (ENTITY_KEY_GROWATT_REMOTE_POWER, "", False),
     # Savings tracking (data/savings_data.py) -- entirely optional, see
     # const.py's own docstring above these keys. ENTITY_KEY_SPOT_
     # ELECTRICITY_PRICE above doubles as the "reel" price here too.
@@ -248,6 +252,13 @@ _SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
         ],
     ),
     (
+        "growatt_control",
+        True,  # collapsed by default -- only used with "Inverter control"
+        [
+            ENTITY_KEY_GROWATT_REMOTE_POWER,
+        ],
+    ),
+    (
         "savings_data",
         True,  # collapsed by default -- entirely optional feature
         [
@@ -275,7 +286,10 @@ _SOLAR_PV_PLANT_GROUPS: list[tuple[str, bool, list[str]]] = [
 # Groups only shown for one inverter type (group_key -> inverter type).
 # A hidden group's fields keep whatever they had -- switching inverter
 # type and back doesn't lose the picks.
-_GROUP_SHOWN_FOR: dict[str, str] = {"kostal_control": INVERTER_TYPE_KOSTAL}
+_GROUP_SHOWN_FOR: dict[str, str] = {
+    "kostal_control": INVERTER_TYPE_KOSTAL,
+    "growatt_control": INVERTER_TYPE_GROWATT,
+}
 
 # Fields that pick an entity of a given domain rather than a sensor with a
 # unit (issue #125). Relays: any on/off entity -- usually a Shelly switch.
@@ -286,6 +300,7 @@ _DOMAIN_PICKER_FIELDS: dict[str, list[str]] = {
     ENTITY_KEY_KOSTAL_RELAY_2: ["switch", "input_boolean"],
     ENTITY_KEY_KOSTAL_RELAY_3: ["switch", "input_boolean"],
     ENTITY_KEY_KOSTAL_RELAY_4: ["switch", "input_boolean"],
+    ENTITY_KEY_GROWATT_REMOTE_POWER: ["number"],
 }
 
 # Auto-detected default sources: entity_map key -> (integration domain,
@@ -334,6 +349,7 @@ _AUTO_DETECT_LABELS: dict[str, str] = {
     ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL: "Total property consumption",
     ENTITY_KEY_KOSTAL_MIN_SOC: "Inverter min SoC",
     ENTITY_KEY_KOSTAL_USAGE_MODE: "Battery charging usage mode",
+    ENTITY_KEY_GROWATT_REMOTE_POWER: "Remote charge and discharge power",
 }
 
 LOGGER = logging.getLogger(__name__)

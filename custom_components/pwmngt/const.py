@@ -107,6 +107,8 @@ GROWATT_MODBUS_PLATFORM = "growatt_modbus"
 
 # select.<pv>_inverter_type's option for a Kostal (select.py).
 INVERTER_TYPE_KOSTAL = "Kostal Plenticore"
+# ... and for a Growatt (inverter/growatt.py, issue #126).
+INVERTER_TYPE_GROWATT = "Growatt"
 
 INVERTER_TYPE_INTEGRATION_DOMAINS: dict[str, tuple[str, ...]] = {
     "Kostal Plenticore": ("kostal_plenticore",),
@@ -189,6 +191,14 @@ ENTITY_KEYS_KOSTAL_RELAYS = (
     ENTITY_KEY_KOSTAL_RELAY_3,
     ENTITY_KEY_KOSTAL_RELAY_4,
 )
+
+# Issue #126: what inverter/growatt.py writes to on a Growatt (growatt_modbus)
+# while "Inverter control" is on -- the VPP "Remote Charge And Discharge
+# Power" number (-100..100 %, on the "Growatt Battery" sub-device). The
+# inverter device growatt_modbus.set_battery_mode needs is that device's
+# via_device. Old: number.growatt_battery_remote_charge_and_discharge_power
+# and device_id 6a939f78... in Claus's Node-RED translator.
+ENTITY_KEY_GROWATT_REMOTE_POWER = "growatt_remote_power"
 
 # Optional "force sell" override -- a boolean entity (input_boolean,
 # switch, or a boolean-ish binary_sensor) the user can point at any
@@ -406,6 +416,8 @@ INVERTER_CORE_AUTO_DETECT_NAMES: dict[str, dict[str, dict[str, str]]] = {
         GROWATT_MODBUS_PLATFORM: {
             ENTITY_KEY_BATTERY_SOC: "Battery SOC",
             ENTITY_KEY_BATTERY_PV_DISCHARGED: "Battery Discharge Total",
+            # Issue #126, confirmed on Claus's install 2026-11-24.
+            ENTITY_KEY_GROWATT_REMOTE_POWER: "Remote Charge And Discharge Power",
             # Positive = charging (opposite of Kostal) -- see
             # SIGN_INVERTED_PLATFORMS below.
             ENTITY_KEY_BATTERY_POWER: "Battery Power",

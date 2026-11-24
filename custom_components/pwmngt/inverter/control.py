@@ -8,7 +8,11 @@ and Battery data. Those translators are not run alongside it.
 What it does while the switch is on:
 - battery_command: written through the brand's writer at every change,
   and once at startup (and when the switch is turned on), so a relay or a
-  charge is never left hanging after a restart.
+  charge is never left hanging after a restart. The command last written
+  is kept across a restart, so a writer can skip what the inverter already
+  runs. While the command is unchanged, every sync -- also one the writer
+  asks for, or a change of one of its own trigger entities -- gives the
+  writer a follow-up (InverterWriter.async_follow()).
 - min_soc (the state of Battery data): only when it differs at least
   MIN_SOC_MIN_CHANGE points from what the inverter has, and at most once
   per MIN_SOC_WRITE_INTERVAL -- a later change waits for the interval and
@@ -43,19 +47,20 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.util import dt as dt_util
 
-from ..const import DOMAIN, INVERTER_TYPE_KOSTAL
+from ..const import DOMAIN, INVERTER_TYPE_GROWATT, INVERTER_TYPE_KOSTAL
 from ..devices import pv_device_info
 from ..helpers.state_helper import read_float_state
 from ..properties import pv_properties
+from .growatt import GrowattWriter
 from .kostal import KostalWriter
 from .writer import InverterWriter
 
 LOGGER = logging.getLogger(__name__)
 
 # Inverter type (select.<pv>_inverter_type's option) -> its writer.
-# Growatt follows in issue #126.
 INVERTER_WRITERS: dict[str, type[InverterWriter]] = {
     INVERTER_TYPE_KOSTAL: KostalWriter,
+    INVERTER_TYPE_GROWATT: GrowattWriter,
 }
 
 # Issue #1's limits on min SoC writes (spares the inverter's flash/EEPROM).
@@ -120,9 +125,14 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
         self._attr_is_on = False
         self._entry = entry
         self._status = STATUS_OFF
-        # What was last written to the inverter (None = nothing since the
-        # switch was turned on or Home Assistant started).
+        # The command last written to the inverter -- kept across a restart
+        # (None = nothing since the switch was turned on).
         self._last_command: str | None = None
+        # One writer instance as long as the inverter type stays the same:
+        # it may keep state between syncs (e.g. Growatt's lockout times).
+        self._writer_instance: InverterWriter | None = None
+        self._writer_type: str | None = None
+        self._cancel_writer_triggers = None
         self._last_min_soc: float | None = None
         self._last_min_soc_write: datetime | None = None
         self._cancel_pending_min_soc = None
@@ -148,6 +158,8 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
             # The interval holds across a restart too.
             last_write = last_state.attributes.get(ATTR_LAST_MIN_SOC_WRITE)
             self._last_min_soc_write = dt_util.parse_datetime(last_write) if last_write else None
+            if self._attr_is_on:
+                self._last_command = last_state.attributes.get(ATTR_LAST_COMMAND)
         self._status = STATUS_ACTIVE if self._attr_is_on else STATUS_OFF
 
         trigger_entity_ids = [
@@ -163,6 +175,7 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
                 event.async_track_state_change_event(self.hass, trigger_entity_ids, self._handle_change)
             )
         self.async_on_remove(self._cancel_pending)
+        self.async_on_remove(self._drop_writer)
 
         # The inverter's own entities may not be loaded before Home
         # Assistant has started.
@@ -209,6 +222,7 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
             writer = self._writer()
             if writer is not None:
                 await self._async_write(writer.async_release(self._last_command))
+                writer.cancel_scheduled_sync()
             self._attr_is_on = False
             self._status = STATUS_OFF
             self._last_command = None
@@ -226,6 +240,16 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
         self._handle_change()
 
     @callback
+    def _drop_writer(self) -> None:
+        if self._cancel_writer_triggers is not None:
+            self._cancel_writer_triggers()
+            self._cancel_writer_triggers = None
+        if self._writer_instance is not None:
+            self._writer_instance.cancel_scheduled_sync()
+            self._writer_instance = None
+        self._writer_type = None
+
+    @callback
     def _cancel_pending(self) -> None:
         if self._cancel_pending_min_soc is not None:
             self._cancel_pending_min_soc()
@@ -234,7 +258,20 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
     def _writer(self) -> InverterWriter | None:
         """The writer for the wizard's inverter type, or None (and the
         status saying why) when there is none or it isn't set up."""
-        writer = inverter_writer(self.hass, self._entry)
+        inverter_type = pv_properties.inverter_type(self.hass, self._entry) or ""
+        if inverter_type != self._writer_type:
+            self._drop_writer()
+            writer = inverter_writer(self.hass, self._entry)
+            if writer is not None:
+                writer.request_sync = self._handle_change
+                trigger_entity_ids = writer.trigger_entity_ids()
+                if trigger_entity_ids:
+                    self._cancel_writer_triggers = event.async_track_state_change_event(
+                        self.hass, trigger_entity_ids, self._handle_change
+                    )
+            self._writer_instance = writer
+            self._writer_type = inverter_type
+        writer = self._writer_instance
         if writer is None:
             self._status = STATUS_NO_WRITER
             return None
@@ -259,16 +296,18 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
         entity_id = pv_properties.battery_command_entity_id(self.hass, self._entry)
         state = self.hass.states.get(entity_id) if entity_id else None
         command = state.state if state is not None else ""
-        if command in _INVALID_STATES or (not startup and command == self._last_command):
+        if command in _INVALID_STATES:
             return
-        previous = None if startup else self._last_command
-        if await self._async_write(writer.async_write_command(command, previous, startup)):
+        if not startup and command == self._last_command:
+            await self._async_write(writer.async_follow(command))
+            return
+        if await self._async_write(writer.async_write_command(command, self._last_command, startup)):
             self._last_command = command
 
     async def _async_sync_min_soc(self, writer: InverterWriter) -> None:
         entity_id = pv_properties.battery_data_entity_id(self.hass, self._entry)
         min_soc = read_float_state(self.hass.states.get(entity_id) if entity_id else None)
-        if min_soc is None:
+        if min_soc is None or not writer.supports_min_soc():
             return
         if not should_write_min_soc(min_soc, writer.read_min_soc(), self._last_min_soc):
             self._last_min_soc = min_soc

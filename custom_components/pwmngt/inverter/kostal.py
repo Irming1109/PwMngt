@@ -185,6 +185,9 @@ class KostalWriter(InverterWriter):
             blocking=True,
         )
 
+    def supports_min_soc(self) -> bool:
+        return bool(self._min_soc_entity_id)
+
     def read_min_soc(self) -> float | None:
         if not self._min_soc_entity_id:
             return None
