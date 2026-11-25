@@ -401,7 +401,8 @@
               "active": "Aktiv",
               "no_writer": "Ikke understøttet for denne inverter endnu",
               "not_configured": "Inverterens felter mangler i guiden",
-              "write_failed": "Sidste skrivning til inverteren fejlede"
+              "write_failed": "Sidste skrivning til inverteren fejlede",
+              "off_grid": "Pauset: inverteren er off-grid (strømafbrydelse)"
             }
           },
           "last_command": {

@@ -37,6 +37,19 @@ def find_entity_by_name(hass: HomeAssistant, platform: str, name: str) -> str | 
     return matches[0] if len(matches) == 1 else None
 
 
+def find_entity_by_translation_key(
+    hass: HomeAssistant, platform: str, translation_key: str
+) -> str | None:
+    """The single entity_id from `platform` with this translation_key, or
+    None unless exactly one exists (see find_entity_by_name() for why)."""
+    matches = [
+        entry.entity_id
+        for entry in er.async_get(hass).entities.values()
+        if entry.platform == platform and entry.translation_key == translation_key
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def entity_platform(hass: HomeAssistant, entity_id: str | None) -> str | None:
     """The integration (platform) an entity belongs to, or None if it isn't
     in the entity registry (e.g. a YAML template sensor without unique_id)."""

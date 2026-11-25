@@ -105,6 +105,16 @@ CHARGER_POWER_TRANSLATION_KEYS: dict[str, str] = {
 
 GROWATT_MODBUS_PLATFORM = "growatt_modbus"
 
+# Issue #128: the inverter integrations' grid connection sensor, found by
+# (platform, translation_key) -- and the state that means "on the grid".
+# Any other valid state (Growatt: "Off-grid") pauses Inverter control;
+# unknown/unavailable doesn't (Modbus drops out without a power cut, seen
+# on Claus's install 2026-11-24).
+GRID_CONNECTION_STATUS_KEYS: dict[str, str] = {
+    GROWATT_MODBUS_PLATFORM: "grid_connection_status",
+}
+GRID_CONNECTION_ON_GRID = "On-grid"
+
 # select.<pv>_inverter_type's option for a Kostal (select.py).
 INVERTER_TYPE_KOSTAL = "Kostal Plenticore"
 # ... and for a Growatt (inverter/growatt.py, issue #126).

@@ -25,6 +25,16 @@ What it does while the switch is on:
 Turned off, the writer leaves the inverter in normal operation once
 (InverterWriter.async_release()) and nothing more is written.
 
+Off the grid (issue #128, Claus 2026-11-25): while the inverter reports a
+power cut (pv_properties.is_off_grid() -- Growatt's Grid Connection Status
+"Off-grid"), the writer releases the inverter once and nothing more is
+written, so a remote hold or charge can't keep the house dark while the
+inverter's own off-grid discharge limit would still give power. The
+battery logic keeps calculating; it just doesn't reach the inverter. Once
+the grid has been back for ON_GRID_STABLE (a flickering grid doesn't
+count), the command running then is written as any other change. Claus's
+Node-RED translator isn't covered -- it has to check off-grid itself.
+
 Which writer is used follows the wizard's inverter type (INVERTER_WRITERS);
 a brand without one -- or whose fields aren't filled in -- writes nothing,
 and the switch's "status" attribute says why.
@@ -53,7 +63,7 @@ from ..helpers.state_helper import read_float_state
 from ..properties import pv_properties
 from .growatt import GrowattWriter
 from .kostal import KostalWriter
-from .writer import InverterWriter
+from .writer import COMMAND_INTERNAL, InverterWriter
 
 LOGGER = logging.getLogger(__name__)
 
@@ -67,6 +77,9 @@ INVERTER_WRITERS: dict[str, type[InverterWriter]] = {
 MIN_SOC_WRITE_INTERVAL = timedelta(minutes=10)
 MIN_SOC_MIN_CHANGE = 1.0
 
+# Issue #128: how long the grid must be back before control resumes.
+ON_GRID_STABLE = timedelta(minutes=2)
+
 # The switch's "status" attribute (translated in strings.json under
 # entity.switch.inverter_control.state_attributes.status).
 STATUS_OFF = "off"
@@ -74,6 +87,7 @@ STATUS_ACTIVE = "active"
 STATUS_NO_WRITER = "no_writer"
 STATUS_NOT_CONFIGURED = "not_configured"
 STATUS_WRITE_FAILED = "write_failed"
+STATUS_OFF_GRID = "off_grid"  # Issue #128.
 
 # Issue #125: Repair (config_check.py) while the inverter's fields are
 # filled in but the switch is off.
@@ -136,6 +150,11 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
         self._last_min_soc: float | None = None
         self._last_min_soc_write: datetime | None = None
         self._cancel_pending_min_soc = None
+        # Issue #128: paused for a power cut, and since when the grid has
+        # been back (None while it isn't).
+        self._off_grid = False
+        self._on_grid_since: datetime | None = None
+        self._cancel_on_grid_check = None
         # Writes are service calls; one sync at a time keeps them in order.
         self._lock = asyncio.Lock()
 
@@ -227,6 +246,8 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
             self._status = STATUS_OFF
             self._last_command = None
             self._last_min_soc = None
+            self._off_grid = False
+            self._on_grid_since = None
             self.async_write_ha_state()
 
     @callback
@@ -254,6 +275,14 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
         if self._cancel_pending_min_soc is not None:
             self._cancel_pending_min_soc()
             self._cancel_pending_min_soc = None
+        if self._cancel_on_grid_check is not None:
+            self._cancel_on_grid_check()
+            self._cancel_on_grid_check = None
+
+    @callback
+    def _handle_on_grid_check(self, _now) -> None:
+        self._cancel_on_grid_check = None
+        self._handle_change()
 
     def _writer(self) -> InverterWriter | None:
         """The writer for the wizard's inverter type, or None (and the
@@ -264,7 +293,13 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
             writer = inverter_writer(self.hass, self._entry)
             if writer is not None:
                 writer.request_sync = self._handle_change
-                trigger_entity_ids = writer.trigger_entity_ids()
+                # Issue #128: the grid connection sensor too -- looked up
+                # here rather than at setup, when the inverter integration
+                # may not have registered it yet.
+                grid_status = pv_properties.grid_connection_status_entity_id(self.hass)
+                trigger_entity_ids = writer.trigger_entity_ids() + (
+                    [grid_status] if grid_status else []
+                )
                 if trigger_entity_ids:
                     self._cancel_writer_triggers = event.async_track_state_change_event(
                         self.hass, trigger_entity_ids, self._handle_change
@@ -286,11 +321,42 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
             if not self._attr_is_on:
                 return
             writer = self._writer()
-            if writer is not None:
+            if writer is not None and await self._async_paused_off_grid(writer):
+                self._status = STATUS_OFF_GRID
+            elif writer is not None:
                 self._status = STATUS_ACTIVE
                 await self._async_sync_command(writer, startup)
                 await self._async_sync_min_soc(writer)
             self.async_write_ha_state()
+
+    async def _async_paused_off_grid(self, writer: InverterWriter) -> bool:
+        """Issue #128: True while control is paused for a power cut -- see
+        the module docstring. Releases the inverter when the cut starts."""
+        if pv_properties.is_off_grid(self.hass):
+            self._on_grid_since = None
+            if not self._off_grid:
+                self._off_grid = True
+                self._cancel_pending()
+                writer.cancel_scheduled_sync()
+                self._log("Off-grid: control paused")
+                if await self._async_write(writer.async_release(self._last_command)):
+                    self._last_command = COMMAND_INTERNAL
+            return True
+        if not self._off_grid:
+            return False
+        now = dt_util.utcnow()
+        if self._on_grid_since is None:
+            self._on_grid_since = now
+        if now - self._on_grid_since < ON_GRID_STABLE:
+            if self._cancel_on_grid_check is None:
+                self._cancel_on_grid_check = event.async_track_point_in_utc_time(
+                    self.hass, self._handle_on_grid_check, self._on_grid_since + ON_GRID_STABLE
+                )
+            return True
+        self._off_grid = False
+        self._on_grid_since = None
+        self._log("Back on the grid: control resumed")
+        return False
 
     async def _async_sync_command(self, writer: InverterWriter, startup: bool) -> None:
         entity_id = pv_properties.battery_command_entity_id(self.hass, self._entry)
@@ -334,7 +400,11 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
             self._status = STATUS_WRITE_FAILED
             return False
         if description:
-            LOGGER.info("%s: %s", self.entity_id, description)
-            name = self.name if isinstance(self.name, str) else self.entity_id
-            async_log_entry(self.hass, name, description, domain=DOMAIN, entity_id=self.entity_id)
+            self._log(description)
         return True
+
+    def _log(self, description: str) -> None:
+        """One line in the log and Home Assistant's logbook."""
+        LOGGER.info("%s: %s", self.entity_id, description)
+        name = self.name if isinstance(self.name, str) else self.entity_id
+        async_log_entry(self.hass, name, description, domain=DOMAIN, entity_id=self.entity_id)

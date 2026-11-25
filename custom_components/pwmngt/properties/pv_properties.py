@@ -4,7 +4,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
-from ..const import DEFAULT_BATTERY_MIN_SOC, DOMAIN, POWER_SIGN_OPTIONS
+from ..const import (
+    DEFAULT_BATTERY_MIN_SOC,
+    DOMAIN,
+    GRID_CONNECTION_ON_GRID,
+    GRID_CONNECTION_STATUS_KEYS,
+    POWER_SIGN_OPTIONS,
+)
+from ..helpers.entity_registry_helper import find_entity_by_translation_key
 
 _DEFAULT_HISTORY_PERIOD_DAYS = 7
 
@@ -107,6 +114,27 @@ def inverter_type(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
     entity_id = _pv_entity_id(hass, entry, "select", "inverter_type")
     state = hass.states.get(entity_id) if entity_id else None
     return state.state if state is not None else None
+
+
+def grid_connection_status_entity_id(hass: HomeAssistant) -> str | None:
+    """Issue #128: the inverter integration's grid connection sensor (see
+    GRID_CONNECTION_STATUS_KEYS), or None when none is installed."""
+    for platform, translation_key in GRID_CONNECTION_STATUS_KEYS.items():
+        entity_id = find_entity_by_translation_key(hass, platform, translation_key)
+        if entity_id:
+            return entity_id
+    return None
+
+
+def is_off_grid(hass: HomeAssistant) -> bool:
+    """Issue #128: True while the inverter reports it is off the grid (a
+    power cut). False without the sensor, and while it is unknown or
+    unavailable -- Modbus can drop out without a power cut."""
+    entity_id = grid_connection_status_entity_id(hass)
+    state = hass.states.get(entity_id) if entity_id else None
+    if state is None or state.state in ("unknown", "unavailable", ""):
+        return False
+    return state.state != GRID_CONNECTION_ON_GRID
 
 
 def battery_hold_power_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:

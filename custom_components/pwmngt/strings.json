@@ -475,7 +475,8 @@
               "active": "Active",
               "no_writer": "Not supported for this inverter yet",
               "not_configured": "Inverter fields missing in the wizard",
-              "write_failed": "Last write to the inverter failed"
+              "write_failed": "Last write to the inverter failed",
+              "off_grid": "Paused: the inverter is off the grid"
             }
           },
           "last_command": {
