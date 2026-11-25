@@ -107,6 +107,7 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     CONF_ENTITY_MAP,
+    DEFAULT_BATTERY_FACTOR,
     DOMAIN,
     ENTITY_KEY_PV_FORECAST_TODAY,
     ENTITY_KEY_PV_FORECAST_TOMORROW,
@@ -192,7 +193,6 @@ _LEGACY_UNIQUE_ID_SUFFIXES: list[str] = [
 # Node-RED fallbacks / limits.
 _DEFAULT_NIGHT_CONSUMPTION = 5.0   # "|| 5" when the average is missing or 0
 _MIN_NIGHT_CONSUMPTION = 2.0       # used when the average is negative
-TARGET_MARGIN = 1.07
 _TARGET_CEILING = 95
 
 # Triggers.
@@ -279,6 +279,8 @@ class SolarInputs:
     battery_min_soc: float           # % the battery is discharged to
     today_hourly: list[dict[str, Any]]
     tomorrow_hourly: list[dict[str, Any]]
+    # Issue #129: pv_properties.battery_factor() (was TARGET_MARGIN).
+    battery_factor: float = DEFAULT_BATTERY_FACTOR
 
 
 def calculate_solar_data(inputs: SolarInputs) -> dict[str, float | None]:
@@ -306,7 +308,7 @@ def calculate_solar_data(inputs: SolarInputs) -> dict[str, float | None]:
 
     # Unrounded, as in Node-RED.
     pv_17_21_today = sum_pv_forecast(inputs.today_hourly, 17, 21)
-    target_kwh = (night - pv_17_21_today) * TARGET_MARGIN
+    target_kwh = (night - pv_17_21_today) * inputs.battery_factor
     if target_kwh <= 0:
         target_kwh = 0.0
     # Node-RED's own second term ("+ night - tomorrow's forecast, only if
@@ -475,6 +477,7 @@ class PwMngtSolarDataCoordinator(DataUpdateCoordinator[dict[str, float | None]])
             battery_min_soc=pv_properties.battery_min_soc(self.hass, self._entry),
             today_hourly=today_hourly,
             tomorrow_hourly=tomorrow_hourly,
+            battery_factor=pv_properties.battery_factor(self.hass, self._entry),
         )
 
     @callback

@@ -174,3 +174,57 @@ def counter_values(
             )
         previous_gap = gap
     return values
+
+
+async def fetch_hourly_means(
+    hass: HomeAssistant,
+    statistic_ids: list[str],
+    start_time: datetime,
+    end_time: datetime,
+) -> dict[str, dict[int, float]]:
+    """Issue #129: each statistic_id's hourly "mean" (a measurement sensor
+    such as a power in W), keyed by the UTC epoch second the hour ENDS --
+    the same keys as fetch_hourly_sums(). {} if Recorder isn't loaded or
+    the query fails."""
+    if not statistic_ids or "recorder" not in hass.config.components:
+        return {}
+    try:
+        from homeassistant.components.recorder import get_instance
+        from homeassistant.components.recorder.statistics import (
+            statistics_during_period,
+        )
+    except ImportError:
+        return {}
+    try:
+        job = functools.partial(
+            statistics_during_period,
+            hass,
+            start_time,
+            end_time,
+            statistic_ids=set(statistic_ids),
+            period="hour",
+            units=None,
+            types={"mean"},
+        )
+        result = await get_instance(hass).async_add_executor_job(job)
+    except Exception:  # noqa: BLE001 -- same reasoning as history_helper.py
+        LOGGER.warning(
+            "PwMngt: could not read long-term statistics for %s",
+            statistic_ids,
+            exc_info=True,
+        )
+        return {}
+    means_by_id: dict[str, dict[int, float]] = {}
+    for statistic_id, rows in (result or {}).items():
+        means: dict[int, float] = {}
+        for row in rows:
+            value = row.get("mean")
+            start = row.get("start")
+            if value is None or start is None:
+                continue
+            if isinstance(start, datetime):
+                start = start.timestamp()
+            means[int(start) + 3600] = float(value)
+        if means:
+            means_by_id[statistic_id] = means
+    return means_by_id

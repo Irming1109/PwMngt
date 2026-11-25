@@ -57,15 +57,24 @@ Deliberate differences from Node-RED (Claus, 2026-11-03):
 - day_hourly_average_adjusted (issue #59, Claus 2026-11-09): each hour
   06-17 on its own, without the chargers -- the night charge can then
   cover the expensive daytime hours too (data/battery_charge_decision.py).
-- The inverter's own use (issue #111, Claus 2026-11-21): where the
-  property counter leaves it out (CONSUMPTION_EXCLUDES_INVERTER_PLATFORMS
-  -- Growatt), the evening/night figures (17-24 + 00-06) get it added
-  back, so Battery nightly target and the night charge plan for what the
-  battery really delivers: on Claus's Growatt ~288 W on top of the
-  house's ~2.2 kW while discharging (~13 %, against TARGET_MARGIN's 7 %).
+- The inverter's own use (issue #111, Claus 2026-11-21; issue #129,
+  2026-11-25 for every brand and the single daytime hours): the house
+  counter doesn't count what the inverter itself uses -- neither
+  Growatt's "Load Energy Total" nor Kostal's "Home Consumption Total"
+  (Rene: exactly "Home Power"). So the evening/night figures (17-24 +
+  00-06) and each hour of day_hourly_average_adjusted get it added, and
+  the plans use what the battery really delivers: on Claus's Growatt
+  ~12 % on top of the house while discharging, on Rene's Kostal ~6 %.
   Hours with a grid charge are left out -- that loss is paid by the grid,
-  not the battery. The daytime figures stay as measured: they are set
-  against Solcast's forecast, which already is the inverter's output.
+  not the battery. The daytime totals (08-16) stay as measured: they are
+  set against Solcast's forecast for the PV surplus.
+- battery_factor (issue #129): kWh of SoC the battery loses per kWh of
+  the above (house + own use - grid) in the hours only the battery
+  covered the house, over the last _FACTOR_DAYS days -- the measured
+  replacement of the fixed 7 % (TARGET_MARGIN), see
+  pv_properties.battery_factor(). Measured against the same counters the
+  plans use, so a house counter that does count the inverter after all
+  comes out below 1 instead of being counted twice.
 """
 
 import asyncio
@@ -85,18 +94,18 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.util import dt as dt_util
 
 from ..const import (
+    BATTERY_FACTOR_MAX,
+    BATTERY_FACTOR_MIN,
     CONF_ENTITY_MAP,
-    CONSUMPTION_EXCLUDES_INVERTER_PLATFORMS,
     DOMAIN,
     ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY,
     ENTITY_KEY_BATTERY_GRID_CHARGED_DAY,
     ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL,
 )
 from ..devices import CHARGERS, pv_device_info
-from ..helpers.entity_registry_helper import entity_platform
 from ..helpers.history_helper import fetch_state_changes_since
 from ..helpers.state_helper import read_float_state
-from ..helpers.statistics_helper import fetch_hourly_sums
+from ..helpers.statistics_helper import fetch_hourly_means, fetch_hourly_sums
 from ..properties import charger_properties, pv_properties
 from . import DATA_SENSOR_STATE
 
@@ -158,8 +167,13 @@ PwM_CONSUMPTION_DATA_ATTRIBUTES: list[str] = [
     "heat_pump_consumption",
     # Issue #111: the inverter's own use (kWh) in the night hours 17-24 +
     # 00-06 without grid-charge hours -- already part of the evening/night
-    # averages above. None where the property counter counts it itself.
+    # averages above. None without an own-use sensor.
     "inverter_own_use_night_average",
+    # Issue #129: kWh of SoC per kWh the house takes from the battery
+    # (see the module docstring), None until enough is measured, and the
+    # number of hours it is measured over.
+    "battery_factor",
+    "battery_factor_hours",
     # Diagnostics, not averages: how many days the histories hold, and
     # the newest one (ISO date).
     "history_days",
@@ -196,8 +210,9 @@ _MAX_PLAUSIBLE_FULL_DAY_KWH = 250
 # Part of the source signature, so a change in what each history entry
 # holds rebuilds the histories from Recorder once. v2: nighttime_adjusted,
 # v3: late_evening (issue #58), v4: the day's single hours (issue #59),
-# v5: the inverter's own use in the evening/night figures (issue #111).
-_HISTORY_FORMAT = "v5"
+# v5: the inverter's own use in the evening/night figures (issue #111),
+# v6: ... for every brand and in the single daytime hours (issue #129).
+_HISTORY_FORMAT = "v6"
 
 # Trimmed averages (see _average()): drop this share of the days at each
 # end -- one day at 7 days of history, two at 14, three at 21-30 -- but
@@ -510,6 +525,94 @@ _INVERTER_NIGHT_HOURS: tuple[int, ...] = (
 # An hour whose grid charge reaches this (kWh) is a charge hour.
 _GRID_CHARGE_HOUR_KWH = 0.1
 
+# Issue #129: battery_factor is measured over this many days back (the
+# SoC's state history reaches Recorder's purge_keep_days, 10 by default),
+# in hours the battery discharged at least _FACTOR_MIN_BATTERY_KW while
+# PV gave at most _FACTOR_MAX_PV_KW and the battery wasn't grid charged.
+# It needs at least _FACTOR_MIN_HOURS of them, holding a battery's full
+# size or more in all -- a few hours of a whole-percent SoC are too
+# coarse.
+_FACTOR_DAYS = 10
+_FACTOR_MIN_BATTERY_KW = 0.3
+_FACTOR_MAX_PV_KW = 0.05
+_FACTOR_MIN_HOURS = 12
+
+
+@dataclass
+class FactorHour:
+    """Issue #129: one hour for calculate_battery_factor() -- energies in
+    kWh, powers as the hour's mean in kW."""
+
+    soc_drop: float  # SoC points at the hour's start minus its end
+    consumption: float  # the house counter's change
+    own_use: float  # the inverter's own use
+    grid: float  # bought from the grid
+    battery_kw: float  # positive = discharging
+    pv_kw: float
+    grid_charge: float  # the battery's grid-charge counter's change
+
+
+def calculate_battery_factor(
+    hours: list[FactorHour], battery_size: float
+) -> tuple[float, int] | None:
+    """Issue #129: (battery_factor, hours measured) -- the SoC energy the
+    battery lost over what the house took from it (house counter + own
+    use - grid) in the hours only the battery covered the house. None
+    while too little is measured or the result is outside
+    BATTERY_FACTOR_MIN/MAX (a measuring error rather than the battery)."""
+    if battery_size <= 0:
+        return None
+    used = [
+        hour
+        for hour in hours
+        if hour.battery_kw >= _FACTOR_MIN_BATTERY_KW
+        and hour.pv_kw <= _FACTOR_MAX_PV_KW
+        and hour.grid_charge < _GRID_CHARGE_HOUR_KWH
+    ]
+    soc_kwh = sum(hour.soc_drop for hour in used) / 100 * battery_size
+    house_kwh = sum(hour.consumption + hour.own_use - max(hour.grid, 0.0) for hour in used)
+    if len(used) < _FACTOR_MIN_HOURS or house_kwh < battery_size or soc_kwh <= 0:
+        return None
+    factor = round(soc_kwh / house_kwh, 3)
+    if not BATTERY_FACTOR_MIN <= factor <= BATTERY_FACTOR_MAX:
+        LOGGER.warning(
+            "PwMngt: measured battery_factor %s is outside %s-%s -- not used",
+            factor,
+            BATTERY_FACTOR_MIN,
+            BATTERY_FACTOR_MAX,
+        )
+        return None
+    return factor, len(used)
+
+
+def soc_at_hours(changes: list[State], hour_ends: list[int]) -> dict[int, float]:
+    """Issue #129: the SoC (%) as of each timestamp -- the last valid
+    reading before it, like an hourly statistics row ending there."""
+    result: dict[int, float] = {}
+    points = sorted(set(hour_ends) | {hour_end - 3600 for hour_end in hour_ends})
+    index = 0
+    last: float | None = None
+    for state in changes:
+        changed_at = state.last_changed.timestamp()
+        while index < len(points) and points[index] <= changed_at:
+            if last is not None:
+                result[points[index]] = last
+            index += 1
+        value = read_float_state(state)
+        if value is not None:
+            last = value
+    if last is not None:
+        for point in points[index:]:
+            result[point] = last
+    return result
+
+
+def _difference(series: dict[int, float] | None, start: int, end: int) -> float | None:
+    """A cumulative series' change from start to end, or None."""
+    if not series or start not in series or end not in series:
+        return None
+    return series[end] - series[start]
+
 
 def inverter_own_use(
     day: date,
@@ -565,9 +668,9 @@ def build_day(
     left out of those two averages only (see _average()). The same goes
     for nighttime_adjusted with the chargers' 17-24 and 00-06 values.
 
-    own_entity_id (issue #111): the inverter's own use, added to evening,
-    late_evening and nighttime (see inverter_own_use()) -- None where the
-    property counter counts it itself."""
+    own_entity_id (issues #111/#129): the inverter's own use, added to
+    evening, late_evening, nighttime and each daytime hour (see
+    inverter_own_use()) -- None without an own-use sensor."""
     timestamps = {
         hour: int(moment.timestamp()) for hour, moment in day_boundaries(day).items()
     }
@@ -623,13 +726,21 @@ def build_day(
         if car_charger_late_evening is not None
         else None
     )
-    # Issue #59: each daytime hour without the chargers.
+    # Issue #59: each daytime hour without the chargers -- issue #129:
+    # with the inverter's own use.
     for hour in CONSUMPTION_DAY_HOURS:
         chargers = _charger_consumption(
             series, charger_entity_ids, timestamps, ((hour, hour + 1),)
         )
+        own_use = (
+            inverter_own_use(day, series, own_entity_id, grid_charge_entity_id, (hour,))
+            if own_entity_id
+            else None
+        )
         values[f"hour_{hour}_adjusted"] = (
-            round(max(values_at[hour + 1] - values_at[hour] - chargers, 0.0), 2)
+            round(
+                max(values_at[hour + 1] - values_at[hour] - chargers, 0.0) + (own_use or 0.0), 2
+            )
             if chargers is not None
             else None
         )
@@ -655,6 +766,10 @@ class PwMngtConsumptionDataStoredData(restore_state.ExtraStoredData):
     evening_history: list[dict[str, Any]]
     full_day_history: list[dict[str, Any]]
     source_signature: str | None
+    # Issue #129: the last measured battery_factor and its hours, so the
+    # plans keep it while the first measurement after a restart runs.
+    battery_factor: float | None = None
+    battery_factor_hours: int | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -662,6 +777,8 @@ class PwMngtConsumptionDataStoredData(restore_state.ExtraStoredData):
             "evening_history": self.evening_history,
             "full_day_history": self.full_day_history,
             "source_signature": self.source_signature,
+            "battery_factor": self.battery_factor,
+            "battery_factor_hours": self.battery_factor_hours,
         }
 
     @classmethod
@@ -671,6 +788,8 @@ class PwMngtConsumptionDataStoredData(restore_state.ExtraStoredData):
             evening_history=list(restored.get("evening_history") or []),
             full_day_history=list(restored.get("full_day_history") or []),
             source_signature=restored.get("source_signature"),
+            battery_factor=restored.get("battery_factor"),
+            battery_factor_hours=restored.get("battery_factor_hours"),
         )
 
 
@@ -711,6 +830,8 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
             evening_history=self._evening_history,
             full_day_history=self._full_day_history,
             source_signature=self._source_signature,
+            battery_factor=self._attr_extra_state_attributes.get("battery_factor"),
+            battery_factor_hours=self._attr_extra_state_attributes.get("battery_factor_hours"),
         )
 
     async def async_added_to_hass(self) -> None:
@@ -726,6 +847,8 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
             self._evening_history = data.evening_history
             self._full_day_history = data.full_day_history
             self._source_signature = data.source_signature
+            self._attr_extra_state_attributes["battery_factor"] = data.battery_factor
+            self._attr_extra_state_attributes["battery_factor_hours"] = data.battery_factor_hours
 
         self.async_on_remove(
             event.async_track_time_change(
@@ -790,12 +913,9 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
             ENTITY_KEY_BATTERY_GRID_CHARGED_DAY
         ) or None
 
-    def _inverter_own_use_entity_id(self, property_entity_id: str) -> str | None:
-        """Issue #111: the inverter's own use today, when the property
-        counter leaves it out (CONSUMPTION_EXCLUDES_INVERTER_PLATFORMS)."""
-        platform = entity_platform(self.hass, property_entity_id)
-        if platform not in CONSUMPTION_EXCLUDES_INVERTER_PLATFORMS:
-            return None
+    def _inverter_own_use_entity_id(self) -> str | None:
+        """Issues #111/#129: the inverter's own use today -- for every
+        brand, see the module docstring."""
         return pv_properties.inverter_own_consumption_today_entity_id(self.hass, self._entry)
 
     def _charger_entity_ids(self) -> list[str]:
@@ -817,7 +937,7 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
                 )
                 return
             charger_entity_ids = self._charger_entity_ids()
-            own_entity_id = self._inverter_own_use_entity_id(property_entity_id)
+            own_entity_id = self._inverter_own_use_entity_id()
             grid_charge_entity_id = self._grid_charge_entity_id() if own_entity_id else None
             own_sources = [
                 entity_id for entity_id in (own_entity_id, grid_charge_entity_id) if entity_id
@@ -878,8 +998,87 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
 
             self._trim_histories(oldest)
             self._recompute()
+            await self._async_measure_battery_factor(
+                property_entity_id, own_entity_id, grid_charge_entity_id
+            )
             self.async_write_ha_state()
             await self._async_check_battery_in_consumption(property_entity_id)
+
+    async def _async_measure_battery_factor(
+        self,
+        property_entity_id: str,
+        own_entity_id: str | None,
+        grid_charge_entity_id: str | None,
+    ) -> None:
+        """Issue #129: measure battery_factor (see the module docstring).
+        Keeps the last value when this run can't measure one."""
+        soc_id = pv_properties.battery_soc_entity_id(self.hass, self._entry)
+        battery_id = pv_properties.battery_power_entity_id(self.hass, self._entry)
+        pv_id = pv_properties.pv_total_entity_id(self.hass, self._entry)
+        grid_id = pv_properties.grid_power_entity_id(self.hass, self._entry)
+        size_id = pv_properties.battery_size_entity_id(self.hass, self._entry)
+        battery_size = read_float_state(self.hass.states.get(size_id) if size_id else None)
+        if not (soc_id and battery_id and pv_id and grid_id and battery_size):
+            return
+        end = dt_util.now().replace(minute=0, second=0, microsecond=0)
+        start = end - timedelta(days=_FACTOR_DAYS)
+        counters = [
+            entity_id
+            for entity_id in (property_entity_id, own_entity_id, grid_charge_entity_id)
+            if entity_id
+        ]
+        sums = await fetch_hourly_sums(
+            self.hass, counters, start, end, frozenset({property_entity_id})
+        )
+        means = await fetch_hourly_means(self.hass, [battery_id, pv_id, grid_id], start, end)
+        soc_changes = await fetch_state_changes_since(
+            self.hass, soc_id, dt_util.as_utc(start), dt_util.as_utc(end)
+        )
+        consumption = sums.get(property_entity_id)
+        if not soc_changes or not consumption:
+            return
+        soc = soc_at_hours(soc_changes, list(consumption))
+        samples: list[FactorHour] = []
+        for hour_end in consumption:
+            hour_start = hour_end - 3600
+            used = _difference(consumption, hour_start, hour_end)
+            own = _difference(sums.get(own_entity_id), hour_start, hour_end) if own_entity_id else 0.0
+            charged = (
+                _difference(sums.get(grid_charge_entity_id), hour_start, hour_end)
+                if grid_charge_entity_id
+                else 0.0
+            )
+            battery_w = means.get(battery_id, {}).get(hour_end)
+            pv_w = means.get(pv_id, {}).get(hour_end)
+            grid_w = means.get(grid_id, {}).get(hour_end)
+            soc_start, soc_end = soc.get(hour_start), soc.get(hour_end)
+            if None in (used, own, charged, battery_w, pv_w, grid_w, soc_start, soc_end):
+                continue
+            samples.append(
+                FactorHour(
+                    soc_drop=soc_start - soc_end,
+                    consumption=used,
+                    own_use=own,
+                    grid=grid_w / 1000,
+                    battery_kw=battery_w / 1000,
+                    pv_kw=pv_w / 1000,
+                    grid_charge=charged,
+                )
+            )
+        result = calculate_battery_factor(samples, battery_size)
+        if result is None:
+            return
+        factor, hours = result
+        attributes = self._attr_extra_state_attributes
+        if attributes.get("battery_factor") != factor:
+            LOGGER.info(
+                "PwMngt: battery_factor %s measured over %d hours (was %s)",
+                factor,
+                hours,
+                attributes.get("battery_factor"),
+            )
+        attributes["battery_factor"] = factor
+        attributes["battery_factor_hours"] = hours
 
     async def _async_check_battery_in_consumption(self, property_entity_id: str) -> None:
         """Issue #94: a Repair while the property counter looks like it

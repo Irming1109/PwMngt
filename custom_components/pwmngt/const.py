@@ -516,14 +516,6 @@ INVERTER_HOUSE_POWER_NAMES: dict[str, str] = {
     GROWATT_MODBUS_PLATFORM: GROWATT_MODBUS_HOUSE_CONSUMPTION,
 }
 
-# Issue #111: inverter integrations whose house consumption counter (the
-# one auto-detect picks for ENTITY_KEY_PROPERTY_CONSUMPTION_TOTAL) leaves
-# the inverter's own use out -- data/consumption_data.py then adds it back
-# for the hours the battery covers. Growatt's "Load Energy Total" is the
-# load output only (Claus 2026-11-21: 4-6 kWh a day below the energy
-# balance). Not Kostal: its "Home Consumption Total" already carries most
-# of the inverter's loss (issue #56).
-CONSUMPTION_EXCLUDES_INVERTER_PLATFORMS: frozenset[str] = frozenset({GROWATT_MODBUS_PLATFORM})
 
 # ---------------------------------------------------------------------------
 # Segments: optional areas of PwMngt a given installation may not need.
@@ -556,3 +548,15 @@ RESTORE_MAX_AGE = timedelta(minutes=30)
 # select.<pv>_battery_min_soc has a value. 5 is what Node-RED hardcodes
 # everywhere -- see pv_properties.battery_min_soc().
 DEFAULT_BATTERY_MIN_SOC = 5.0
+
+# Issue #129: kWh of SoC the battery loses per kWh the house (with the
+# inverter's own use) takes from it -- measured per installation by
+# data/consumption_data.py ("battery_factor") and read through
+# pv_properties.battery_factor(). This is the old fixed TARGET_MARGIN,
+# used until enough has been measured (an assumption from before there
+# were real values: Claus's Growatt measured 1.00, Rene's Kostal 1.07 on
+# 2026-11-25, once the own use was counted). A measured value outside
+# the limits is taken as a measuring error and not used.
+DEFAULT_BATTERY_FACTOR = 1.07
+BATTERY_FACTOR_MIN = 0.9
+BATTERY_FACTOR_MAX = 1.25

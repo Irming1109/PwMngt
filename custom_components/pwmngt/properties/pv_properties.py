@@ -5,6 +5,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 
 from ..const import (
+    BATTERY_FACTOR_MAX,
+    BATTERY_FACTOR_MIN,
+    DEFAULT_BATTERY_FACTOR,
     DEFAULT_BATTERY_MIN_SOC,
     DOMAIN,
     GRID_CONNECTION_ON_GRID,
@@ -49,6 +52,23 @@ def inverter_own_consumption_today_entity_id(
     """Entity id of the inverter's own consumption today (kWh, issue #77
     -- PwM_PV_DAILY_INTEGRAL_SENSORS in sensor.py)."""
     return _pv_entity_id(hass, entry, "sensor", "inverter_own_consumption_today")
+
+
+def battery_soc_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+    """Entity id of sensor.<pv>_battery_soc (sensor.py)."""
+    return _pv_entity_id(hass, entry, "sensor", "battery_soc")
+
+
+def battery_power_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+    """Entity id of sensor.<pv>_battery_power (sensor.py, W, positive =
+    discharging -- power_sign() applied)."""
+    return _pv_entity_id(hass, entry, "sensor", "battery_power")
+
+
+def grid_power_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+    """Entity id of sensor.<pv>_grid_power (sensor.py, W, positive =
+    buying -- power_sign() applied)."""
+    return _pv_entity_id(hass, entry, "sensor", "grid_power")
 
 
 def solar_data_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
@@ -224,6 +244,21 @@ def battery_min_soc(hass: HomeAssistant, entry: ConfigEntry) -> float:
         return float(state.state) if state is not None else DEFAULT_BATTERY_MIN_SOC
     except ValueError:
         return DEFAULT_BATTERY_MIN_SOC
+
+
+def battery_factor(hass: HomeAssistant, entry: ConfigEntry) -> float:
+    """Issue #129: kWh of SoC per kWh the house takes from the battery --
+    consumption_data's measured "battery_factor", or DEFAULT_BATTERY_FACTOR
+    while it has none (or one outside BATTERY_FACTOR_MIN/MAX)."""
+    entity_id = consumption_data_entity_id(hass, entry)
+    state = hass.states.get(entity_id) if entity_id else None
+    try:
+        value = float(state.attributes.get("battery_factor")) if state is not None else None
+    except (TypeError, ValueError):
+        value = None
+    if value is None or not BATTERY_FACTOR_MIN <= value <= BATTERY_FACTOR_MAX:
+        return DEFAULT_BATTERY_FACTOR
+    return value
 
 
 def history_period_days_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:

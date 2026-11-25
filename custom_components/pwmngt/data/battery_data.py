@@ -178,6 +178,7 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     CONF_ENTITY_MAP,
+    DEFAULT_BATTERY_FACTOR,
     DEFAULT_BATTERY_MIN_SOC,
     DOMAIN,
     ENTITY_KEY_BATTERY_GRID_CHARGED_DAY,
@@ -195,7 +196,6 @@ from .battery_charge_decision import (
     evening_hourly_need,
     worth_charging,
 )
-from .solar_data import TARGET_MARGIN
 
 LOGGER = logging.getLogger(__name__)
 
@@ -808,6 +808,7 @@ def fallback_day_plan(
     battery_size: float,
     battery_target: float,
     battery_min_soc: float,
+    battery_factor: float = DEFAULT_BATTERY_FACTOR,
 ) -> tuple[list[int], float] | None:
     """Issue #61: (today's daytime hours, evening reserve SoC %) worked out
     from today, for a battery holding grid energy without a plan from the
@@ -831,7 +832,7 @@ def fallback_day_plan(
         covered_kwh = sum(evening_need[hour] for hour in _DAY_PLAN_EVENING_HOURS)
     reserve = min(
         battery_target,
-        battery_min_soc + math.ceil(covered_kwh * TARGET_MARGIN / battery_size * 100),
+        battery_min_soc + math.ceil(covered_kwh * battery_factor / battery_size * 100),
     )
     return day_hours, float(reserve)
 
@@ -852,6 +853,8 @@ class PvReleaseInputs:
     # The house's average kWh per daytime hour (06-16).
     day_need: dict[int, float]
     battery_size: float
+    # Issue #129: pv_properties.battery_factor().
+    battery_factor: float = DEFAULT_BATTERY_FACTOR
 
 
 @dataclass
@@ -877,10 +880,13 @@ class PvReleasePlan:
 
 
 def evening_reserve_soc(
-    evening_need: dict[int, float], battery_min_soc: float, battery_size: float
+    evening_need: dict[int, float],
+    battery_min_soc: float,
+    battery_size: float,
+    battery_factor: float = DEFAULT_BATTERY_FACTOR,
 ) -> float | None:
     """Issues #71/#73: the SoC (%) the battery keeps for the evening 17-21
-    -- the floor plus the evening's need with TARGET_MARGIN, at most
+    -- the floor plus the evening's need times battery_factor, at most
     _MIN_SOC_CEILING. One formula for #71's plan and battery_hold's winter
     limit, so the hold never lets go of the reserve over a rounding
     difference. None when the battery size or the evening need is
@@ -890,7 +896,7 @@ def evening_reserve_soc(
     evening_kwh = sum(evening_need.get(h, 0.0) for h in _DAY_PLAN_EVENING_HOURS)
     return min(
         float(_MIN_SOC_CEILING),
-        battery_min_soc + math.ceil(evening_kwh * TARGET_MARGIN / battery_size * 100),
+        battery_min_soc + math.ceil(evening_kwh * battery_factor / battery_size * 100),
     )
 
 
@@ -916,7 +922,7 @@ def plan_pv_release(
     the plan pick fewer, dearer hours); the floor keeps the reserve either
     way. None when something needed is missing."""
     size = data.battery_size
-    reserve = evening_reserve_soc(data.evening_need, battery_min_soc, size)
+    reserve = evening_reserve_soc(data.evening_need, battery_min_soc, size, data.battery_factor)
     if reserve is None:
         return None
     above_kwh = max(soc - reserve, 0.0) / 100 * size
@@ -1999,7 +2005,10 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         # Issue #73: battery_hold's winter limit in daytime.
         evening_reserve = (
             evening_reserve_soc(
-                pv_release_inputs.evening_need, battery_min_soc, pv_release_inputs.battery_size
+                pv_release_inputs.evening_need,
+                battery_min_soc,
+                pv_release_inputs.battery_size,
+                pv_release_inputs.battery_factor,
             )
             if pv_release_inputs is not None
             else None
@@ -2306,6 +2315,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         battery_target = self._read_float_pv(
             pv_properties.battery_nightly_target_entity_id, battery_min_soc
         )
+        battery_factor = pv_properties.battery_factor(self.hass, self._entry)
         consumption = self._attributes_of(pv_properties.consumption_data_entity_id)
         solar = self._attributes_of(pv_properties.solar_data_entity_id)
         evening_need = evening_hourly_need(
@@ -2321,6 +2331,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             battery_target=battery_target,
             battery_min_soc=battery_min_soc,
             battery_size=battery_size,
+            battery_factor=battery_factor,
         )
         plan = fallback_day_plan(
             hub_properties.electricity_prices_today(
@@ -2334,6 +2345,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             battery_size,
             battery_target,
             battery_min_soc,
+            battery_factor,
         )
         if plan is None:
             return {}
@@ -2355,6 +2367,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
         if self._tomorrow_prices_entity_id is None:
             self._tomorrow_prices_entity_id = auto_detect_tomorrow_prices_entity_id(self.hass)
         battery_min_soc = pv_properties.battery_min_soc(self.hass, self._entry)
+        battery_factor = pv_properties.battery_factor(self.hass, self._entry)
         consumption = self._attributes_of(pv_properties.consumption_data_entity_id)
         solar = self._attributes_of(pv_properties.solar_data_entity_id)
         night = _float_or_none(consumption.get("nighttime_average_adjusted")) or _float_or_none(
@@ -2373,6 +2386,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             ),
             battery_min_soc=battery_min_soc,
             battery_size=battery_size,
+            battery_factor=battery_factor,
         )
         # consumption_data's nighttime average covers 17-24 and 00-06: what
         # 17-23 doesn't use is the night after midnight.
@@ -2397,6 +2411,7 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             night_need_per_hour=night_per_hour,
             day_need=day_need,
             battery_size=battery_size,
+            battery_factor=battery_factor,
         )
 
     def _attributes_of(self, lookup) -> dict[str, Any]:

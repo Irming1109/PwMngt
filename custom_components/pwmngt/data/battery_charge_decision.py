@@ -221,6 +221,7 @@ from homeassistant.util import dt as dt_util
 
 from ..const import (
     CONF_ENTITY_MAP,
+    DEFAULT_BATTERY_FACTOR,
     DEPENDENCY_STROMLIGNING,
     DOMAIN,
     ENTITY_KEY_PV_FORECAST_TOMORROW,
@@ -229,7 +230,6 @@ from ..devices import pv_device_info
 from ..helpers.state_helper import read_float_state
 from ..properties import hub_properties, pv_properties
 from ..select import signal_set_battery_command
-from .solar_data import TARGET_MARGIN
 
 LOGGER = logging.getLogger(__name__)
 
@@ -571,6 +571,9 @@ class BatteryChargeInputs:
     # Issue #105: the user's own charge target (%) for this night, or None
     # for the automation's own.
     manual_target: float | None = None
+    # Issue #129: kWh of SoC per kWh the house takes from the battery
+    # (pv_properties.battery_factor(), was the fixed TARGET_MARGIN).
+    battery_factor: float = DEFAULT_BATTERY_FACTOR
 
 
 def _average(values: list[float]) -> float:
@@ -613,6 +616,7 @@ def evening_hour_consumption(inputs: BatteryChargeInputs) -> dict[int, float]:
         battery_target=inputs.battery_target,
         battery_min_soc=inputs.battery_min_soc,
         battery_size=inputs.battery_size,
+        battery_factor=inputs.battery_factor,
     )
 
 
@@ -625,6 +629,7 @@ def evening_hourly_need(
     battery_target: float,
     battery_min_soc: float,
     battery_size: float,
+    battery_factor: float,
 ) -> dict[int, float]:
     """Issue #50: the energy (kWh) the battery is expected to cover in each
     hour 17-23 tomorrow. 17-21 is the evening average (scaled like the night
@@ -639,7 +644,7 @@ def evening_hourly_need(
     more before midnight than after."""
     night = night_consumption
     if night is None or night <= 0:
-        night = max(battery_target - battery_min_soc, 0.0) / 100 * battery_size / TARGET_MARGIN
+        night = max(battery_target - battery_min_soc, 0.0) / 100 * battery_size / battery_factor
         evening = night * len(_EVENING_HOURS) / _NIGHT_HOURS
         pv = 0.0
     else:
@@ -788,6 +793,7 @@ def sale_floors(
     battery_min_soc: float,
     battery_size: float,
     sold: dict[int, float] | None = None,
+    battery_factor: float = DEFAULT_BATTERY_FACTOR,
 ) -> list[int]:
     """Issue #64: the SoC (%) each sale hour stops at -- what the house
     still needs from the battery in the planned hours after it (the
@@ -801,7 +807,7 @@ def sale_floors(
         floors.append(
             min(
                 _DAY_CHARGE_CEILING,
-                int(battery_min_soc + math.ceil(later * TARGET_MARGIN / battery_size * 100)),
+                int(battery_min_soc + math.ceil(later * battery_factor / battery_size * 100)),
             )
         )
     return floors
@@ -997,13 +1003,13 @@ def calculate_battery_charge_decision(
     # then #43 takes tomorrow's expected PV surplus off.
     evening_reserve = min(
         inputs.battery_target,
-        inputs.battery_min_soc + math.ceil(covered_kwh * TARGET_MARGIN / inputs.battery_size * 100),
+        inputs.battery_min_soc + math.ceil(covered_kwh * inputs.battery_factor / inputs.battery_size * 100),
     )
     # Issue #104: only what fits above the evening reserve, in the dearest
     # daytime hours -- see the module docstring.
     if day_hours:
         day_room_kwh = (
-            max(ceiling - evening_reserve, 0.0) / 100 * inputs.battery_size / TARGET_MARGIN
+            max(ceiling - evening_reserve, 0.0) / 100 * inputs.battery_size / inputs.battery_factor
         )
         day_hours, day_kwh = fit_day_hours(
             day_hours,
@@ -1011,7 +1017,7 @@ def calculate_battery_charge_decision(
             day_hour_needs(inputs.day_hourly_consumption, inputs.pv_hourly_tomorrow),
             day_room_kwh,
         )
-    day_pct = math.ceil(day_kwh * TARGET_MARGIN / inputs.battery_size * 100) if day_kwh > 0 else 0
+    day_pct = math.ceil(day_kwh * inputs.battery_factor / inputs.battery_size * 100) if day_kwh > 0 else 0
     worth_target = min(max(ceiling, evening_reserve), evening_reserve + day_pct)
     charge_target = partial_charge_target(
         worth_target, inputs.battery_size, expected_surplus, inputs.battery_min_soc
@@ -1040,8 +1046,8 @@ def calculate_battery_charge_decision(
         # The extra charge hours after the house's own, cheapest first --
         # each charges what hours_needed() counts on per hour.
         extra = [price for _hour, price in prices_sorted_day[base_hours:]]
-        kwh_per_charge_hour = battery_max_charge / 1000 / _CHARGETIME_SAFETY_MARGIN / TARGET_MARGIN
-        room_kwh = max(ceiling - house_target, 0.0) / 100 * inputs.battery_size / TARGET_MARGIN
+        kwh_per_charge_hour = battery_max_charge / 1000 / _CHARGETIME_SAFETY_MARGIN / inputs.battery_factor
+        room_kwh = max(ceiling - house_target, 0.0) / 100 * inputs.battery_size / inputs.battery_factor
         max_power_kw = (
             inputs.battery_max_charge_raw
             if inputs.battery_max_charge_raw is not None
@@ -1070,7 +1076,7 @@ def calculate_battery_charge_decision(
 
         for _attempt in range(3):
             sale_hours, sale_kwh, sale_profit, sold = best_sale(candidates)
-            sale_pct = math.ceil(sale_kwh * TARGET_MARGIN / inputs.battery_size * 100) if sale_kwh > 0 else 0
+            sale_pct = math.ceil(sale_kwh * inputs.battery_factor / inputs.battery_size * 100) if sale_kwh > 0 else 0
             charge_target = min(ceiling, house_target + sale_pct)
             charge_hours = [hour for hour, _price in prices_sorted_day[: max(hours_needed(charge_target), 1)]]
             last_charge_hour = max(charge_hours)
@@ -1081,7 +1087,13 @@ def calculate_battery_charge_decision(
             sale_hours, sale_kwh, sale_profit, sold = [], 0.0, 0.0, {}
             charge_target = house_target
         floors = sale_floors(
-            sale_hours, house_kwh, covered_later, inputs.battery_min_soc, inputs.battery_size, sold
+            sale_hours,
+            house_kwh,
+            covered_later,
+            inputs.battery_min_soc,
+            inputs.battery_size,
+            sold,
+            inputs.battery_factor,
         )
 
     # Issue #105: the user's own target for this night -- and no sale, which
@@ -1145,7 +1157,7 @@ def calculate_battery_charge_decision(
         # no daytime hour either -- issue #64: and no sale.
         status = "no_price"
     elif not sale_hours and expected_surplus is not None and expected_surplus >= min(
-        battery_kwh, (covered_kwh + day_kwh) * TARGET_MARGIN
+        battery_kwh, (covered_kwh + day_kwh) * inputs.battery_factor
     ):
         # Issue #43: the cautious surplus (Node-RED: the normal forecast)
         # -- issue #50: enough when it covers the hours worth charging for.
@@ -1920,6 +1932,7 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             ) or 0.0,
             prices_today_remaining=self._read_prices_today_remaining(),
             today=dt_util.now().strftime("%Y-%m-%d"),
+            battery_factor=pv_properties.battery_factor(self.hass, self._entry),
         )
 
         status, attributes = calculate_battery_charge_decision(inputs)
