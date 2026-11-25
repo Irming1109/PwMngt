@@ -16,7 +16,9 @@ logic and the 00:01/00:02 ordering dependency; it also makes the day's
 last reading exactly 24:00 instead of the old 23:58 ("kl_23_59").
 
 Where the values come from (see helpers/statistics_helper.py):
-Recorder's hourly long-term statistics ("sum"), kept indefinitely, so all
+Recorder's hourly long-term statistics ("sum" -- for the property
+counter its end-of-hour "state" where "sum" took an outage for a meter
+reset, issue #130), kept indefinitely, so all
 _MAX_HISTORY_DAYS days are available immediately -- plus days missed
 while Home Assistant was down get filled in afterwards. A source without
 statistics (no state_class) falls back to plain state history
@@ -847,8 +849,12 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
             ]
 
             if missing:
+                # Issue #130: the property counter is a lifetime total --
+                # a brief drop to 0 must not count as a reset.
                 series = await self._async_fetch_series(
-                    [property_entity_id, *charger_entity_ids, *own_sources], missing
+                    [property_entity_id, *charger_entity_ids, *own_sources],
+                    missing,
+                    frozenset({property_entity_id}),
                 )
                 added = 0
                 for day in missing:
@@ -917,14 +923,18 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
             ir.async_delete_issue(self.hass, DOMAIN, ISSUE_CONSUMPTION_COUNTS_BATTERY)
 
     async def _async_fetch_series(
-        self, entity_ids: list[str], days: list[date]
+        self,
+        entity_ids: list[str],
+        days: list[date],
+        lifetime_ids: frozenset[str] = frozenset(),
     ) -> dict[str, dict[int, float]]:
         """Cumulative values at every boundary of every day in days, per
         entity: long-term statistics first, state history for any entity
-        that has no statistics in the range (see module docstring)."""
+        that has no statistics in the range (see module docstring).
+        lifetime_ids: see fetch_hourly_sums() (issue #130)."""
         start = day_boundaries(days[0])[0] - timedelta(hours=1)
         end = day_boundaries(days[-1])[24]
-        series = await fetch_hourly_sums(self.hass, entity_ids, start, end)
+        series = await fetch_hourly_sums(self.hass, entity_ids, start, end, lifetime_ids)
 
         boundary_timestamps = [
             int(moment.timestamp())
