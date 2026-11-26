@@ -349,6 +349,14 @@
     "inverter_control_off": {
       "title": "PwMngt: Inverter control is off",
       "description": "The inverter's fields for PwMngt's own control are filled in, but the switch **Inverter control** on the device PwM PV is off. PwMngt then writes nothing to the inverter.\n\nTo fix: Settings -> Devices & services -> PwMngt -> PwM PV -> turn on **Inverter control**. Not ready for PwMngt to control the inverter yet? Then you can ignore this warning."
+    },
+    "kostal_relays_not_following": {
+      "title": "The Kostal relays don't follow the battery command",
+      "description": "The battery command is \"{command}\", but the relays or the usage mode still aren't in the matching position -- also after PwMngt put them right 3 times.\n\nCheck the relays and the inverter's usage mode ({entities}): whether they can be switched from Home Assistant, and whether something else (an automation, Node-RED, the Shelly app) switches them back. This warning clears itself when they are right again."
+    },
+    "kostal_relay_unavailable": {
+      "title": "A Kostal relay is unavailable",
+      "description": "These relays for the battery control have been unavailable for 3 minutes: {entities}.\n\nWhile a relay is unavailable PwMngt can't switch it, so the inverter may run the wrong battery command. Check the device (power, Wi-Fi). This warning clears itself when the relay is back."
     }
   },
   "entity": {

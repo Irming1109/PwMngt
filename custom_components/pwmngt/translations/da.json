@@ -462,6 +462,14 @@
     "inverter_control_off": {
       "title": "PwMngt: Inverter control er slået fra",
       "description": "Inverterens felter til PwMngt's egen styring er udfyldt, men switchen **Inverter control** på enheden PwM PV er slået fra. PwMngt skriver så intet til inverteren.\n\nSådan retter du det: Indstillinger -> Enheder og tjenester -> PwMngt -> PwM PV -> slå **Inverter control** til. Skal PwMngt ikke styre inverteren endnu? Så kan du ignorere advarslen."
+    },
+    "kostal_relays_not_following": {
+      "title": "Kostal-relæerne følger ikke batterikommandoen",
+      "description": "Batterikommandoen er \"{command}\", men relæerne eller usage mode står stadig ikke, som de skal -- heller ikke efter, at PwMngt har rettet dem 3 gange.\n\nTjek relæerne og inverterens usage mode ({entities}): om de kan skiftes fra Home Assistant, og om noget andet (en automation, Node-RED, Shelly-appen) skifter dem tilbage. Advarslen forsvinder af sig selv, når de står rigtigt igen."
+    },
+    "kostal_relay_unavailable": {
+      "title": "Et Kostal-relæ er utilgængeligt",
+      "description": "Disse relæer til batteristyringen har været utilgængelige i 3 minutter: {entities}.\n\nSå længe et relæ er utilgængeligt, kan PwMngt ikke skifte det, og inverteren kan køre den forkerte batterikommando. Tjek enheden (strøm, wifi). Advarslen forsvinder af sig selv, når relæet er tilbage."
     }
   },
   "services": {

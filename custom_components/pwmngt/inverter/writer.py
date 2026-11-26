@@ -109,6 +109,13 @@ class InverterWriter:
         self._cancel_scheduled_sync = async_call_later(self.hass, seconds, _sync)
 
     @callback
+    def stop(self) -> None:
+        """The writer is done -- "Inverter control" turned off or the
+        writer replaced. A writer clears what it keeps going (timers, its
+        own Repairs)."""
+        self.cancel_scheduled_sync()
+
+    @callback
     def cancel_scheduled_sync(self) -> None:
         if self._cancel_scheduled_sync is not None:
             self._cancel_scheduled_sync()

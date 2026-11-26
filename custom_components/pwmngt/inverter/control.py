@@ -241,7 +241,7 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
             writer = self._writer()
             if writer is not None:
                 await self._async_write(writer.async_release(self._last_command))
-                writer.cancel_scheduled_sync()
+                writer.stop()
             self._attr_is_on = False
             self._status = STATUS_OFF
             self._last_command = None
@@ -266,7 +266,7 @@ class PwMngtInverterControlSwitch(SwitchEntity, RestoreEntity):
             self._cancel_writer_triggers()
             self._cancel_writer_triggers = None
         if self._writer_instance is not None:
-            self._writer_instance.cancel_scheduled_sync()
+            self._writer_instance.stop()
             self._writer_instance = None
         self._writer_type = None
 
