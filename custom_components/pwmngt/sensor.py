@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime
 from typing import Callable
 
 from homeassistant.components.sensor import (
@@ -969,6 +970,16 @@ _MIRROR_SKIP_ATTRIBUTES = {
 }
 
 
+# Issue #131: for this long after the source comes back from
+# unknown/unavailable, a counter mirror doesn't take a drop that looks like
+# the source's restart rather than a reading (see _is_restart_glitch()).
+# Rene's Kostal reported 0.0 for a minute after each restart, and for up
+# to 15 minutes while it was switched off for a battery replacement.
+_RESTART_GLITCH_SECONDS = 1800
+# The same line as Home Assistant's meter reset: a drop of more than 10 %.
+_RESTART_DROP_FACTOR = 0.9
+
+
 class _PwMngtMirrorSensor(SensorEntity):
     """Shared base for PwMngt sensors that live-mirror another entity's
     state 1:1 -- including its extra attributes (e.g. an inverter's own
@@ -995,6 +1006,13 @@ class _PwMngtMirrorSensor(SensorEntity):
     _attr_should_poll = False
     _value_factor: float = 1.0
     _value_offset: float = 0.0
+    # Issue #131: a 0 right after the source's restart is ignored (the
+    # battery's SoC, which battery_data would take for an empty battery).
+    # TOTAL_INCREASING mirrors always ignore a drop then.
+    _ignore_zero_after_restart: bool = False
+    _last_value: float | None = None
+    _back_since: datetime | None = None
+    _source_was_down: bool = False
 
     async def async_added_to_hass(self) -> None:
         """Start mirroring the source entity's state, if one is configured."""
@@ -1019,16 +1037,29 @@ class _PwMngtMirrorSensor(SensorEntity):
         """Copy the source entity's state and extra attributes onto this
         entity."""
         if source_state is None or source_state.state in ("unknown", "unavailable"):
-            self._attr_native_value = None
-            self._attr_available = source_state is not None
-            self._attr_extra_state_attributes = {}
+            self._source_was_down = True
+            self._back_since = None
+            self._show_unknown(source_state is not None)
         else:
             try:
-                self._attr_native_value = (
-                    float(source_state.state) * self._value_factor + self._value_offset
-                )
+                value = float(source_state.state) * self._value_factor + self._value_offset
             except ValueError:
-                self._attr_native_value = source_state.state
+                value = source_state.state
+            if self._is_restart_glitch(value):
+                LOGGER.debug(
+                    "PwMngt: %s ignores %s from %s right after it was unavailable",
+                    self.entity_id,
+                    value,
+                    self._source_entity_id,
+                )
+                self._show_unknown(True)
+                self.async_write_ha_state()
+                return
+            self._source_was_down = False
+            self._back_since = None
+            if isinstance(value, float):
+                self._last_value = value
+            self._attr_native_value = value
             self._attr_available = True
             self._attr_extra_state_attributes = {
                 key: value
@@ -1036,6 +1067,37 @@ class _PwMngtMirrorSensor(SensorEntity):
                 if key not in _MIRROR_SKIP_ATTRIBUTES
             }
         self.async_write_ha_state()
+
+    def _show_unknown(self, available: bool) -> None:
+        self._attr_native_value = None
+        self._attr_available = available
+        self._attr_extra_state_attributes = {}
+
+    def _is_restart_glitch(self, value) -> bool:
+        """Issue #131: whether value is the source's restart rather than a
+        reading, after the source was unknown/unavailable:
+        - where _ignore_zero_after_restart (the SoC), a 0 until the source
+          reports something else -- an empty battery right after an outage
+          is far less likely than a restarting inverter;
+        - a TOTAL_INCREASING counter dropping more than 10 % within
+          _RESTART_GLITCH_SECONDS (Home Assistant would take it as a meter
+          reset and add the whole value to the statistics again). A drop
+          that stays longer is taken: then it is real, e.g. a daily
+          counter's reset while the source was down."""
+        if not self._source_was_down or self._last_value is None or not isinstance(value, float):
+            return False
+        if self._ignore_zero_after_restart:
+            return value == 0 and self._last_value > 0
+        description = getattr(self, "entity_description", None)
+        if description is None or description.state_class != SensorStateClass.TOTAL_INCREASING:
+            return False
+        now = dt_util.utcnow()
+        if self._back_since is None:
+            self._back_since = now
+        return (
+            (now - self._back_since).total_seconds() <= _RESTART_GLITCH_SECONDS
+            and value < self._last_value * _RESTART_DROP_FACTOR
+        )
 
 
 class PwMngtPvMirrorSensor(_PwMngtMirrorSensor):
@@ -1066,6 +1128,7 @@ class PwMngtPvMirrorSensor(_PwMngtMirrorSensor):
         entity_map = entry.options.get(CONF_ENTITY_MAP, {})
         self._source_entity_id = entity_map.get(entity_map_key) or None
         self._value_factor = pv_properties.power_sign(entry, entity_map_key)
+        self._ignore_zero_after_restart = entity_map_key == ENTITY_KEY_BATTERY_SOC
         if self._source_entity_id is None:
             if zero_if_unconfigured:
                 # Not installed -- 0 W is the correct reading, not

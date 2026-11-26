@@ -213,8 +213,11 @@ _MAX_PLAUSIBLE_FULL_DAY_KWH = 250
 # holds rebuilds the histories from Recorder once. v2: nighttime_adjusted,
 # v3: late_evening (issue #58), v4: the day's single hours (issue #59),
 # v5: the inverter's own use in the evening/night figures (issue #111),
-# v6: ... for every brand and in the single daytime hours (issue #129).
-_HISTORY_FORMAT = "v6"
+# v6: ... for every brand and in the single daytime hours (issue #129),
+# v7: the grid-charge and own-use counters from their end-of-hour state,
+# so an inverter restart's dip to 0 no longer adds their whole value
+# (issue #131).
+_HISTORY_FORMAT = "v7"
 
 # Trimmed averages (see _average()): drop this share of the days at each
 # end -- one day at 7 days of history, two at 14, three at 21-30 -- but
@@ -932,6 +935,34 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
             ENTITY_KEY_BATTERY_GRID_CHARGED_DAY
         ) or None
 
+    def _lifetime_ids(self, property_entity_id: str | None = None) -> frozenset[str]:
+        """Issues #130/#131: the counters that never reset -- the property
+        counter and the "total" grid-charge counter -- see
+        statistics_helper.counter_values()."""
+        entity_map = self._entry.options.get(CONF_ENTITY_MAP, {})
+        return frozenset(
+            entity_id
+            for entity_id in (
+                property_entity_id,
+                entity_map.get(ENTITY_KEY_BATTERY_GRID_CHARGE_HOURLY),
+            )
+            if entity_id
+        )
+
+    def _daily_ids(self) -> frozenset[str]:
+        """Issue #131: the counters that reset once a day -- the daily
+        grid-charge counter and the inverter's own use today -- see
+        statistics_helper.daily_counter_values()."""
+        entity_map = self._entry.options.get(CONF_ENTITY_MAP, {})
+        return frozenset(
+            entity_id
+            for entity_id in (
+                entity_map.get(ENTITY_KEY_BATTERY_GRID_CHARGED_DAY),
+                self._inverter_own_use_entity_id(),
+            )
+            if entity_id
+        )
+
     def _inverter_own_use_entity_id(self) -> str | None:
         """Issues #111/#129: the inverter's own use today -- for every
         brand, see the module docstring."""
@@ -1063,7 +1094,12 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
             if entity_id
         ]
         sums = await fetch_hourly_sums(
-            self.hass, counters, start, end, frozenset({property_entity_id})
+            self.hass,
+            counters,
+            start,
+            end,
+            self._lifetime_ids(property_entity_id),
+            self._daily_ids(),
         )
         means = await fetch_hourly_means(self.hass, [battery_id, pv_id, grid_id], start, end)
         soc_changes = await fetch_state_changes_since(
@@ -1185,10 +1221,18 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
         """Cumulative values at every boundary of every day in days, per
         entity: long-term statistics first, state history for any entity
         that has no statistics in the range (see module docstring).
-        lifetime_ids: see fetch_hourly_sums() (issue #130)."""
+        lifetime_ids: see fetch_hourly_sums() (issue #130); the grid-charge
+        counters and the own use are added here (issue #131)."""
         start = day_boundaries(days[0])[0] - timedelta(hours=1)
         end = day_boundaries(days[-1])[24]
-        series = await fetch_hourly_sums(self.hass, entity_ids, start, end, lifetime_ids)
+        series = await fetch_hourly_sums(
+            self.hass,
+            entity_ids,
+            start,
+            end,
+            lifetime_ids | self._lifetime_ids(),
+            self._daily_ids(),
+        )
 
         boundary_timestamps = [
             int(moment.timestamp())

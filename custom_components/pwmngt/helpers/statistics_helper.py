@@ -31,6 +31,7 @@ async def fetch_hourly_sums(
     start_time: datetime,
     end_time: datetime,
     lifetime_ids: frozenset[str] = frozenset(),
+    daily_ids: frozenset[str] = frozenset(),
 ) -> dict[str, dict[int, float]]:
     """Each statistic_id's hourly "sum" between start_time and end_time,
     keyed by the UTC epoch second at which each hour ENDS -- i.e.
@@ -49,6 +50,9 @@ async def fetch_hourly_sums(
     session_energy) needs. lifetime_ids (issue #130): counters that are
     meant never to reset, like the property's lifetime total -- for them
     a brief drop to 0 is an outage, not a reset, see counter_values().
+    daily_ids (issue #131): counters that reset once a day -- the battery's
+    daily grid-charge counter, the inverter's own use today -- see
+    daily_counter_values().
 
     Only entities with a state_class get statistics at all. An entity
     without any rows in the range is simply absent from the result --
@@ -107,6 +111,8 @@ async def fetch_hourly_sums(
             continue
         if statistic_id in lifetime_ids:
             sums_by_id[statistic_id] = counter_values(statistic_id, rows_by_end)
+        elif statistic_id in daily_ids:
+            sums_by_id[statistic_id] = daily_counter_values(statistic_id, rows_by_end)
         else:
             sums_by_id[statistic_id] = {end: total for end, total, _state in rows_by_end}
     return sums_by_id
@@ -173,6 +179,58 @@ def counter_values(
                 dt_util.as_local(dt_util.utc_from_timestamp(end)).isoformat(),
             )
         previous_gap = gap
+    return values
+
+
+def daily_counter_values(
+    statistic_id: str, rows: list[tuple[int, float, float | None]]
+) -> dict[int, float]:
+    """Issue #131: the cumulative value at each hour's end of a counter
+    that resets once a day, from (hour end, "sum", "state") rows.
+
+    The same trouble as counter_values(): an inverter restarted (Rene's
+    Kostal 2026-11-25/26, seven times in a night) reports 0 for a minute,
+    Home Assistant takes it as a reset and adds the whole value to "sum"
+    again when it comes back -- +24 kWh of grid charge in an hour. The
+    end-of-hour "state" doesn't see such a dip, so the counter is followed
+    by it instead: a drop is the daily reset (counting from 0) -- unless
+    the next hour is back at or above the earlier value, then it was a dip
+    at the hour's end and adds nothing. Not tied to midnight, so a counter
+    that resets on UTC midnight works too. A row without "state" falls
+    back to "sum" for the whole series.
+    """
+    rows = sorted(rows)
+    sums = {end: total for end, total, _state in rows}
+    states = [state for _end, _total, state in rows]
+    if not rows or any(state is None for state in states):
+        return sums
+
+    total = rows[0][1]
+    previous = states[0]
+    values: dict[int, float] = {rows[0][0]: round(total, 3)}
+    for index in range(1, len(rows)):
+        state = states[index]
+        if state < previous:
+            following = states[index + 1] if index + 1 < len(states) else None
+            dip = following is not None and following >= previous
+            start_value = previous if dip else 0.0
+            state = previous if dip else state
+        else:
+            start_value = previous
+        total += state - start_value
+        previous = state
+        values[rows[index][0]] = round(total, 3)
+
+    gap = (sums[rows[-1][0]] - sums[rows[0][0]]) - (total - rows[0][1])
+    if abs(gap) > 0.5:
+        LOGGER.info(
+            "PwMngt: %s statistics sum is %.1f above the counter's own values "
+            "from %s to %s -- using the counter's own values",
+            statistic_id,
+            gap,
+            dt_util.as_local(dt_util.utc_from_timestamp(rows[0][0])).isoformat(),
+            dt_util.as_local(dt_util.utc_from_timestamp(rows[-1][0])).isoformat(),
+        )
     return values
 
 
