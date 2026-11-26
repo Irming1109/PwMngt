@@ -1880,7 +1880,8 @@ class PwMBatteryCard extends HTMLElement {
     }
     this._chargeEditor = {
       open: true,
-      power: manualPct !== null ? manualPct : 100,
+      // Claus 2026-11-26: 75 % by default, not 100 %.
+      power: manualPct !== null ? manualPct : 75,
       soc: manualPct !== null ? this._manualChargeTarget() : 100,
     };
     this._signature = undefined;
