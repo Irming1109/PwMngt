@@ -470,6 +470,10 @@
     "kostal_relay_unavailable": {
       "title": "Et Kostal-relæ er utilgængeligt",
       "description": "Disse relæer til batteristyringen har været utilgængelige i 3 minutter: {entities}.\n\nSå længe et relæ er utilgængeligt, kan PwMngt ikke skifte det, og inverteren kan køre den forkerte batterikommando. Tjek enheden (strøm, wifi). Advarslen forsvinder af sig selv, når relæet er tilbage."
+    },
+    "growatt_vpp_not_following": {
+      "title": "Growatt-inverteren følger ikke batterikommandoen",
+      "description": "Batterikommandoen er \"{command}\", men inverterens VPP Control State er stadig \"{state}\" -- også efter, at PwMngt har sendt kommandoen igen 2 gange.\n\nTjek inverteren og growatt_modbus (forbindelse, inverterens egen hændelseslog), og om noget andet (Node-RED, Growatt-appen, en anden automation) styrer inverterens fjernstyring. Advarslen forsvinder af sig selv, når inverteren følger kommandoen igen."
     }
   },
   "services": {

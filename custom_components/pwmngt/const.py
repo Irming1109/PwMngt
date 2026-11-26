@@ -114,6 +114,9 @@ GRID_CONNECTION_STATUS_KEYS: dict[str, str] = {
     GROWATT_MODBUS_PLATFORM: "grid_connection_status",
 }
 GRID_CONNECTION_ON_GRID = "On-grid"
+# Issue #135: growatt_modbus' "VPP Control State" sensor, which shows
+# whether the inverter runs under remote control (inverter/growatt.py).
+GROWATT_VPP_CONTROL_STATE_KEY = "vpp_control_state"
 
 # select.<pv>_inverter_type's option for a Kostal (select.py).
 INVERTER_TYPE_KOSTAL = "Kostal Plenticore"

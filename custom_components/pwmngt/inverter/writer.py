@@ -17,6 +17,7 @@ later (schedule_sync()) rather than writing on its own.
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 
 from homeassistant.config_entries import ConfigEntry
@@ -42,6 +43,7 @@ class InverterWriter:
         # Set by inverter/control.py: runs a new sync (follow-up included).
         self.request_sync: Callable[[], None] | None = None
         self._cancel_scheduled_sync: Callable[[], None] | None = None
+        self._scheduled_due = 0.0  # time.monotonic() of the scheduled sync
 
     def is_configured(self) -> bool:
         """True when the wizard has the fields this writer needs. While
@@ -107,6 +109,15 @@ class InverterWriter:
                 self.request_sync()
 
         self._cancel_scheduled_sync = async_call_later(self.hass, seconds, _sync)
+        self._scheduled_due = time.monotonic() + seconds
+
+    @callback
+    def schedule_check(self, seconds: float) -> None:
+        """Like schedule_sync(), but keeps a sync already scheduled sooner
+        -- for a check that only needs to happen at the latest then."""
+        if self._cancel_scheduled_sync is not None and self._scheduled_due <= time.monotonic() + seconds:
+            return
+        self.schedule_sync(seconds)
 
     @callback
     def stop(self) -> None:

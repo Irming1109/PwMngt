@@ -12,6 +12,8 @@ from ..const import (
     DOMAIN,
     GRID_CONNECTION_ON_GRID,
     GRID_CONNECTION_STATUS_KEYS,
+    GROWATT_MODBUS_PLATFORM,
+    GROWATT_VPP_CONTROL_STATE_KEY,
     POWER_SIGN_OPTIONS,
 )
 from ..helpers.entity_registry_helper import find_entity_by_translation_key
@@ -144,6 +146,12 @@ def grid_connection_status_entity_id(hass: HomeAssistant) -> str | None:
         if entity_id:
             return entity_id
     return None
+
+
+def growatt_vpp_control_state_entity_id(hass: HomeAssistant) -> str | None:
+    """Issue #135: growatt_modbus' "VPP Control State" sensor, or None
+    when growatt_modbus doesn't have it."""
+    return find_entity_by_translation_key(hass, GROWATT_MODBUS_PLATFORM, GROWATT_VPP_CONTROL_STATE_KEY)
 
 
 def is_off_grid(hass: HomeAssistant) -> bool:

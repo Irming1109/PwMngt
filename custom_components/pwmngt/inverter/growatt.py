@@ -26,6 +26,22 @@ register is kept, and a start or power change that comes too early waits
 (schedule_sync()) and is sent then with the newest values -- a newer
 command replaces a waiting one. Release is always sent at once.
 
+Issue #135 (new in PwMngt -- Node-RED doesn't check it): growatt_modbus'
+"VPP Control State" shows whether the inverter really runs what was
+written. Under charge/discharge/hold it is charge, discharge or
+armed_idle (under hold it follows the power's sign -- seen on Claus's
+Growatt 17.-26.11.2026), after a release "released". So only that split
+is checked: under a remote command "released" is wrong, after PwMngt's
+own release charge/discharge/armed_idle is (other states, unknown and
+unavailable don't count). Wrong for VPP_MISMATCH_SECONDS (and at least
+that long after the last mode write) -> the command is sent again, at
+most MAX_RESENDS times per command since each costs an EEPROM write;
+then a warning and a Repair, cleared when the state is right again.
+Under hold, the remote power number itself is also compared with the
+power PwMngt wrote, and put right when it differs (no EEPROM write; at
+most MAX_POWER_CORRECTIONS in a row, so a number that rounds or clamps
+the value isn't written every 31 s).
+
 DIFF: Node-RED uses a fixed 150 W per Growatt-% (15 kW / 100); PwMngt
 takes 1 % of "Solar inverter max AC output", as data/battery_hold.py does
 (issue #54) -- the same 150 W on Claus's 15 kW inverter.
@@ -47,10 +63,12 @@ import logging
 import math
 import time
 
+from homeassistant.core import callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import issue_registry as ir
 
-from ..const import CONF_ENTITY_MAP, ENTITY_KEY_GROWATT_REMOTE_POWER
+from ..const import CONF_ENTITY_MAP, DOMAIN, ENTITY_KEY_GROWATT_REMOTE_POWER
 from ..helpers.state_helper import read_float_state
 from ..properties import pv_properties
 from .writer import InverterWriter
@@ -69,6 +87,14 @@ DEFAULT_STEP_W = 150.0
 DEFAULT_MAX_CHARGE_W = 3000.0
 
 COMMANDS_HELD = frozenset({"hold_min_soc", "block_charging"})
+
+# Issue #135 -- see the module docstring.
+VPP_REMOTE_STATES = frozenset({"charge", "discharge", "armed_idle"})
+VPP_RELEASED = "released"
+VPP_MISMATCH_SECONDS = 3 * 60.0
+MAX_RESENDS = 2
+MAX_POWER_CORRECTIONS = 3
+ISSUE_VPP_NOT_FOLLOWING = "growatt_vpp_not_following"
 
 
 def js_round(value: float) -> int:
@@ -109,6 +135,15 @@ def growatt_percent(watts: float, step_w: float) -> int:
     return min(100, max(1, js_round(watts / step_w)))
 
 
+def vpp_mismatch(remote_expected: bool, vpp_state: str | None) -> bool:
+    """Issue #135: True when "VPP Control State" clearly contradicts what
+    PwMngt wrote (remote_expected: a charge/discharge/hold was written,
+    False: a release was)."""
+    if remote_expected:
+        return vpp_state == VPP_RELEASED
+    return vpp_state in VPP_REMOTE_STATES
+
+
 def hold_percent(hold_power_w: float, step_w: float) -> int:
     """The remote power number's value for "Battery hold power" (Node-RED
     holdPct(): negative = the inverter delivers)."""
@@ -138,6 +173,14 @@ class GrowattWriter(InverterWriter):
         # A start (charge/discharge/hold) waiting for the lockout: (command,
         # previous).
         self._pending: tuple[str, str | None] | None = None
+        # Issue #135: what the inverter should show -- True: under remote
+        # control, False: released by PwMngt, None: not known (nothing
+        # written yet, or "internal" without a release), not checked.
+        self._remote_expected: bool | None = None
+        self._mismatch_since: float | None = None
+        self._resends = 0
+        self._vpp_issue_raised = False
+        self._power_corrections = 0
 
     def _inverter_device_id(self) -> str | None:
         """The growatt_modbus inverter device: the remote power number sits
@@ -156,8 +199,13 @@ class GrowattWriter(InverterWriter):
         return bool(self._power_entity_id and self._device_id)
 
     def trigger_entity_ids(self) -> list[str]:
-        entity_id = pv_properties.battery_hold_power_entity_id(self.hass, self.entry)
-        return [entity_id] if entity_id else []
+        # Issue #135: the remote power number and VPP Control State too.
+        entity_ids = [
+            pv_properties.battery_hold_power_entity_id(self.hass, self.entry),
+            self._power_entity_id,
+            pv_properties.growatt_vpp_control_state_entity_id(self.hass),
+        ]
+        return [entity_id for entity_id in entity_ids if entity_id]
 
     # -- Reading -----------------------------------------------------------
 
@@ -199,9 +247,15 @@ class GrowattWriter(InverterWriter):
     async def async_write_command(
         self, command: str, previous: str | None, startup: bool
     ) -> str | None:
+        # Issue #135: a new command gets its own resends.
+        self._resends = 0
+        self._mismatch_since = None
+        self._power_corrections = 0
+
         if startup and command == previous:
             # The inverter already runs it (Node-RED's state survived a
             # restart the same way) -- only the hold power may need writing.
+            self._remote_expected = True if is_remote(command) else None
             await self._async_follow_hold_power(command)
             return None
 
@@ -222,8 +276,7 @@ class GrowattWriter(InverterWriter):
             self._pending = None
             self._last_hold_percent = None
             self.cancel_scheduled_sync()
-            await self._async_set_mode("release")
-            self._stamp(REGISTER_ENABLE)
+            await self._async_release()
             return f"{previous or '-'} -> {command}: release [EEPROM]"
         return None
 
@@ -233,7 +286,89 @@ class GrowattWriter(InverterWriter):
                 return await self._async_start_if_allowed()
             self._pending = None
         await self._async_follow_hold_power(command)
+        return await self._async_check_vpp(command)
+
+    @callback
+    def stop(self) -> None:
+        super().stop()
+        self._clear_vpp_issue()
+
+    async def _async_release(self) -> None:
+        await self._async_set_mode("release")
+        self._stamp(REGISTER_ENABLE)
+        self._remote_expected = False
+
+    # -- Issue #135: checking VPP Control State ------------------------------
+
+    def _vpp_state(self) -> str | None:
+        entity_id = pv_properties.growatt_vpp_control_state_entity_id(self.hass)
+        state = self.hass.states.get(entity_id) if entity_id else None
+        return state.state if state is not None else None
+
+    async def _async_check_vpp(self, command: str) -> str | None:
+        """Send the command again when VPP Control State has contradicted
+        it for a while -- see the module docstring."""
+        if self._remote_expected is None:
+            return None
+        vpp_state = self._vpp_state()
+        if not vpp_mismatch(self._remote_expected, vpp_state):
+            self._mismatch_since = None
+            if vpp_state in VPP_REMOTE_STATES or vpp_state == VPP_RELEASED:
+                if self._resends or self._vpp_issue_raised:
+                    LOGGER.info("Growatt: VPP Control State follows %s again (%s)", command, vpp_state)
+                self._resends = 0
+                self._clear_vpp_issue()
+            return None
+
+        now = time.monotonic()
+        if self._mismatch_since is None:
+            self._mismatch_since = now
+        wait = max(
+            self._mismatch_since + VPP_MISMATCH_SECONDS - now,
+            self._written.get(REGISTER_ENABLE, -math.inf) + VPP_MISMATCH_SECONDS - now,
+        )
+        if wait > 0:
+            self.schedule_check(wait)
+            return None
+
+        if self._resends < MAX_RESENDS:
+            self._resends += 1
+            self._mismatch_since = None
+            attempt = f"({self._resends}/{MAX_RESENDS})"
+            LOGGER.warning(
+                "Growatt: VPP Control State is %s under %s -- sending it again %s", vpp_state, command, attempt
+            )
+            if not self._remote_expected:
+                await self._async_release()
+                return f"{command}: VPP {vpp_state}, release sent again {attempt} [EEPROM]"
+            self._pending = (command, command)
+            description = await self._async_start_if_allowed()
+            return f"VPP {vpp_state}, sent again {attempt} -- {description}" if description else None
+
+        if not self._vpp_issue_raised:
+            self._vpp_issue_raised = True
+            LOGGER.warning(
+                "Growatt: VPP Control State is still %s under %s after %d resends -- Repair raised",
+                vpp_state,
+                command,
+                MAX_RESENDS,
+            )
+            ir.async_create_issue(
+                self.hass,
+                DOMAIN,
+                ISSUE_VPP_NOT_FOLLOWING,
+                is_fixable=False,
+                severity=ir.IssueSeverity.WARNING,
+                translation_key=ISSUE_VPP_NOT_FOLLOWING,
+                translation_placeholders={"command": command, "state": str(vpp_state)},
+            )
+            return f"{command}: VPP {vpp_state} doesn't follow -- Repair raised"
         return None
+
+    def _clear_vpp_issue(self) -> None:
+        if self._vpp_issue_raised:
+            self._vpp_issue_raised = False
+            ir.async_delete_issue(self.hass, DOMAIN, ISSUE_VPP_NOT_FOLLOWING)
 
     async def _async_start_if_allowed(self) -> str | None:
         """Send the waiting start now, or ask for a sync once the lockout
@@ -268,6 +403,7 @@ class GrowattWriter(InverterWriter):
             self._last_hold_percent = None
             await self._async_set_mode(mode, power_percent)
             self._stamp(REGISTER_ENABLE, REGISTER_POWER)
+            self._remote_expected = True
             return f"{source}: {mode} {round(watts)} W (Growatt {power_percent} %) [EEPROM]"
 
         # hold_min_soc / block_charging: start with PwMngt's current power.
@@ -275,22 +411,34 @@ class GrowattWriter(InverterWriter):
         self._last_hold_percent = -start_percent
         await self._async_set_mode("discharge", start_percent)
         self._stamp(REGISTER_ENABLE, REGISTER_POWER)
+        self._remote_expected = True
         return f"{source}: discharge {start_percent} % (hold) [EEPROM]"
 
     async def _async_follow_hold_power(self, command: str) -> None:
         """Under hold/block charging: write a changed "Battery hold power" to
-        the remote power number (no EEPROM write, not logged)."""
+        the remote power number (no EEPROM write, not logged) -- and, issue
+        #135, put the number right when it no longer shows what was
+        written."""
         if not is_held(command):
             return
         hold_power_w = self._hold_power_w()
         if hold_power_w is None:
             return  # "unknown" right after a start
         percent = hold_percent(hold_power_w, self._step_w())
+        correcting = False
         if percent == self._last_hold_percent:
-            return
+            actual = self._read(self._power_entity_id)
+            if actual is None or js_round(actual) == percent:
+                self._power_corrections = 0
+                return
+            if self._power_corrections >= MAX_POWER_CORRECTIONS:
+                return
+            correcting = True
+        # The lockout also gives a fresh write time to show in the number
+        # before it is compared again.
         wait = self._wait(REGISTER_POWER)
         if wait > 0:
-            self.schedule_sync(wait)
+            self.schedule_check(wait)
             return
         await self.hass.services.async_call(
             "number",
@@ -300,4 +448,14 @@ class GrowattWriter(InverterWriter):
         )
         self._stamp(REGISTER_POWER)
         self._last_hold_percent = percent
-        LOGGER.debug("Growatt: hold power %.0f W -> %s %%", hold_power_w, percent)
+        if correcting:
+            self._power_corrections += 1
+            LOGGER.info(
+                "Growatt: remote power showed something else than %s %% -- written again (%d/%d)",
+                percent,
+                self._power_corrections,
+                MAX_POWER_CORRECTIONS,
+            )
+        else:
+            self._power_corrections = 0
+            LOGGER.debug("Growatt: hold power %.0f W -> %s %%", hold_power_w, percent)

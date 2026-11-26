@@ -357,6 +357,10 @@
     "kostal_relay_unavailable": {
       "title": "A Kostal relay is unavailable",
       "description": "These relays for the battery control have been unavailable for 3 minutes: {entities}.\n\nWhile a relay is unavailable PwMngt can't switch it, so the inverter may run the wrong battery command. Check the device (power, Wi-Fi). This warning clears itself when the relay is back."
+    },
+    "growatt_vpp_not_following": {
+      "title": "The Growatt doesn't follow the battery command",
+      "description": "The battery command is \"{command}\", but the inverter's VPP Control State is still \"{state}\" -- also after PwMngt sent the command again 2 times.\n\nCheck the inverter and growatt_modbus (connection, the inverter's own event log), and whether something else (Node-RED, the Growatt app, another automation) controls the inverter's remote control. This warning clears itself when the inverter follows the command again."
     }
   },
   "entity": {
