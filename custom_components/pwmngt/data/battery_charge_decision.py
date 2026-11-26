@@ -193,6 +193,9 @@ Deliberate differences from Node-RED (each marked "DIFF" below):
   tomorrow's PV forecast 08-16 is at most a fifth of the average daytime
   consumption 08-16 (night_charge_ceiling(), attribute charge_ceiling):
   on such a dark day the PV won't fill the last 5 % anyway.
+- DIFF (Claus 2026-11-26 -- no Node-RED counterpart): a planned target at
+  most 2 points below the ceiling (_ROUND_UP_TO_CEILING_POINTS) is planned
+  to the ceiling itself (99 -> 100, 93 -> 95). Not for a manual target.
 Node-RED inputs not carried over because PwMngt doesn't have an
 abstracted equivalent yet, or because they're honestly unused:
 (none -- every input this function's result actually depends on now has
@@ -393,6 +396,10 @@ _LOW_PV_RATIO = 0.2
 _LOW_PV_CHARGE_CEILING = 100
 # Issue #105 (Claus 2026-11-20): a manual night target may always be 100 %.
 _MANUAL_CHARGE_CEILING = 100
+# DIFF (Claus 2026-11-26): a planned target at most this many points below
+# the ceiling is rounded up to it -- the last 1-2 % costs next to nothing,
+# and 99 % instead of 100 % only looks like a mistake.
+_ROUND_UP_TO_CEILING_POINTS = 2
 
 # Issue #64: the hours the battery may sell in (not 23, so a sale never
 # runs over midnight into the next day's books), the charge loss the sale
@@ -1095,6 +1102,11 @@ def calculate_battery_charge_decision(
             sold,
             inputs.battery_factor,
         )
+
+    # Rounded up after day_floor and the sale floors are set, so the extra
+    # 1-2 % is only kept in the battery, never planned to be used.
+    if ceiling - _ROUND_UP_TO_CEILING_POINTS <= charge_target < ceiling:
+        charge_target = ceiling
 
     # Issue #105: the user's own target for this night -- and no sale, which
     # would sell what the user chose to keep (see the module docstring).
