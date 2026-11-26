@@ -1621,9 +1621,13 @@ class PwMBatteryCard extends HTMLElement {
 
     let relock = null;
     if (this._isUnlocked()) {
+      // A button that locks again also closes the "Charge now" sliders --
+      // the card doesn't redraw while they are open, so the lock would
+      // otherwise not show until "Close".
       const guarded = (text, action) =>
         this._button(text, () => {
           action();
+          this._chargeEditor = { open: false };
           this._lockManual();
         });
       // Issue #112: one "Charge now" -- it opens the power and target SoC
@@ -1637,7 +1641,7 @@ class PwMBatteryCard extends HTMLElement {
       if (isAuto) {
         buttons.appendChild(guarded(t.disableAuto, () => this._setMode("manual")));
       }
-      relock = this._button(isAuto ? t.relockToAuto : t.relock, () => this._lockManual());
+      relock = guarded(isAuto ? t.relockToAuto : t.relock, () => {});
       relock.className = "pwm-wide";
     } else {
       buttons.appendChild(this._holdButton(t.unlockHold, t.holdHint, () => this._unlockManual()));
