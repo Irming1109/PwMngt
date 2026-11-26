@@ -74,7 +74,9 @@ Deliberate differences from Node-RED (Claus, 2026-11-03):
   replacement of the fixed 7 % (TARGET_MARGIN), see
   pv_properties.battery_factor(). Measured against the same counters the
   plans use, so a house counter that does count the inverter after all
-  comes out below 1 instead of being counted twice.
+  comes out below 1 instead of being counted twice. Only the hours after
+  the last change of the battery size are measured (a replaced or
+  extended battery), and the old factor is dropped until they are enough.
 """
 
 import asyncio
@@ -607,6 +609,23 @@ def soc_at_hours(changes: list[State], hour_ends: list[int]) -> dict[int, float]
     return result
 
 
+def last_value_change(changes: list[State] | None) -> datetime | None:
+    """Issue #129: when a numeric state last changed to a new value, or
+    None if it kept one value. unknown/unavailable (a restart, a reload)
+    are skipped, so only a real change counts -- e.g. a new battery size
+    after the battery was replaced or extended."""
+    changed_at: datetime | None = None
+    previous: float | None = None
+    for state in changes or []:
+        value = read_float_state(state)
+        if value is None:
+            continue
+        if previous is not None and value != previous:
+            changed_at = state.last_changed
+        previous = value
+    return changed_at
+
+
 def _difference(series: dict[int, float] | None, start: int, end: int) -> float | None:
     """A cumulative series' change from start to end, or None."""
     if not series or start not in series or end not in series:
@@ -1022,6 +1041,22 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
             return
         end = dt_util.now().replace(minute=0, second=0, microsecond=0)
         start = end - timedelta(days=_FACTOR_DAYS)
+        # A new battery size (the battery replaced or extended) makes the
+        # hours before it count each SoC point with the wrong kWh -- only
+        # the hours after it are measured, and until they are enough the
+        # plans fall back to DEFAULT_BATTERY_FACTOR instead of keeping a
+        # factor measured on the old battery.
+        size_changed = last_value_change(
+            await fetch_state_changes_since(
+                self.hass, size_id, dt_util.as_utc(start), dt_util.as_utc(end)
+            )
+        )
+        if size_changed is not None:
+            start = max(
+                start,
+                dt_util.as_local(size_changed).replace(minute=0, second=0, microsecond=0)
+                + timedelta(hours=1),
+            )
         counters = [
             entity_id
             for entity_id in (property_entity_id, own_entity_id, grid_charge_entity_id)
@@ -1036,6 +1071,8 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
         )
         consumption = sums.get(property_entity_id)
         if not soc_changes or not consumption:
+            if size_changed is not None:
+                self._drop_battery_factor(size_changed)
             return
         soc = soc_at_hours(soc_changes, list(consumption))
         samples: list[FactorHour] = []
@@ -1067,6 +1104,8 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
             )
         result = calculate_battery_factor(samples, battery_size)
         if result is None:
+            if size_changed is not None:
+                self._drop_battery_factor(size_changed)
             return
         factor, hours = result
         attributes = self._attr_extra_state_attributes
@@ -1079,6 +1118,22 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
             )
         attributes["battery_factor"] = factor
         attributes["battery_factor_hours"] = hours
+
+    def _drop_battery_factor(self, size_changed: datetime) -> None:
+        """Issue #129: forget a battery_factor measured before the battery
+        size changed, while the hours after it are too few to measure a
+        new one -- the plans use DEFAULT_BATTERY_FACTOR meanwhile."""
+        attributes = self._attr_extra_state_attributes
+        if attributes.get("battery_factor") is None:
+            return
+        LOGGER.info(
+            "PwMngt: battery_factor %s dropped -- the battery size changed %s, "
+            "too few hours measured since",
+            attributes.get("battery_factor"),
+            dt_util.as_local(size_changed).isoformat(timespec="minutes"),
+        )
+        attributes["battery_factor"] = None
+        attributes["battery_factor_hours"] = None
 
     async def _async_check_battery_in_consumption(self, property_entity_id: str) -> None:
         """Issue #94: a Repair while the property counter looks like it
