@@ -2395,6 +2395,46 @@ const PWM_RING_TEXTS = {
       car_charging_pv_to_car: "PV to the house and car, battery idle",
       car_charging_pv_to_battery: "PV to the battery, the car from the grid",
     },
+    tips: {
+      target: {
+        title: "Target – tonight's goal",
+        desc: "What the battery should hold at 17:00 to cover the evening and the night until 06:00 without buying power.",
+        night: "Average use 17–06",
+        pv: "Solar forecast 17–21 today",
+        factor: "Battery factor (losses)",
+        needed: "Needed from the battery",
+        minimum: "Battery minimum SoC",
+        result: "Target",
+        ceiling: (pct) => `Capped at ${pct} %.`,
+      },
+      min: {
+        title: "Min SoC – the lowest right now",
+        desc: (pct) => `Right now the battery may discharge to ${pct} % at most. The limit moves hour by hour with the rule that wins.`,
+        rule: "Rule now",
+        held: (points, price) => `${points} % of the battery is grid power bought at ${price}.`,
+      },
+      pv: { title: "Charged from solar", desc: "The share of the battery (yellow in the ring) charged with solar power. Grey is what is below the counted share and has no known source." },
+      grid: { title: "Charged from the grid", desc: "The share of the battery (blue in the ring) charged with bought grid power." },
+      kwh: {
+        title: "Usable energy",
+        desc: (pct, size) => `What is in the battery above its minimum SoC of ${pct} % (battery ${size} kWh).`,
+      },
+      toFull: { title: "Time to full", desc: "When the battery is full at the current charging power." },
+      toMin: { title: "Time to min SoC", desc: "When the battery reaches the min SoC at the current discharging power." },
+      status: {
+        title: "What PwMngt does",
+        desc: "The command PwMngt gives the inverter right now (Battery command).",
+        commands: {
+          internal: "The inverter runs the battery itself – PwMngt does not step in.",
+          block_charging: "Charging is blocked, e.g. while the battery sells to the grid.",
+          hold_min_soc: "The battery is held at the min SoC and does not discharge further.",
+          charge_now: "The battery charges from the grid at this % of its max charging power.",
+          discharge_now: "The battery discharges to the grid at this % of its max power.",
+        },
+        hold: "After the dot: what the battery hold (Growatt) does, and its power in W.",
+      },
+      kr: (value) => `${value} kr.`,
+    },
     missing: "PwMngt battery entities not found - is the Solar PV Plant set up?",
   },
   da: {
@@ -2433,6 +2473,46 @@ const PWM_RING_TEXTS = {
       car_charging_pv_to_car: "PV til hus og bil, batteriet hviler",
       car_charging_pv_to_battery: "PV til batteriet, bilen fra nettet",
     },
+    tips: {
+      target: {
+        title: "Target – nattens mål",
+        desc: "Det, batteriet skal have kl. 17 for at dække aftenen og natten til kl. 06 uden at købe strøm.",
+        night: "Gennemsnitsforbrug 17–06",
+        pv: "Solprognose 17–21 i dag",
+        factor: "Batterifaktor (tab)",
+        needed: "Skal komme fra batteriet",
+        minimum: "Batteriets minimum-SoC",
+        result: "Target",
+        ceiling: (pct) => `Begrænset til ${pct} %.`,
+      },
+      min: {
+        title: "Min-SoC – det laveste lige nu",
+        desc: (pct) => `Batteriet må lige nu højst aflade til ${pct} %. Grænsen flytter sig time for time efter den regel, der vinder.`,
+        rule: "Regel nu",
+        held: (points, price) => `${points} % af batteriet er netstrøm købt til ${price}.`,
+      },
+      pv: { title: "Ladet fra solceller", desc: "Den del af batteriet (gul i ringen), der er ladet med solstrøm. Gråt er den del under de talte andele, som der ikke kendes en kilde til." },
+      grid: { title: "Ladet fra nettet", desc: "Den del af batteriet (blå i ringen), der er ladet med købt netstrøm." },
+      kwh: {
+        title: "Brugbar energi",
+        desc: (pct, size) => `Det, der er i batteriet over dets minimum-SoC på ${pct} % (batteri på ${size} kWh).`,
+      },
+      toFull: { title: "Tid til fuldt", desc: "Hvornår batteriet er fuldt ved den nuværende ladeeffekt." },
+      toMin: { title: "Tid til min-SoC", desc: "Hvornår batteriet når min-SoC ved den nuværende afladeeffekt." },
+      status: {
+        title: "Hvad PwMngt gør",
+        desc: "Den kommando, PwMngt giver inverteren lige nu (Battery command).",
+        commands: {
+          internal: "Inverteren styrer selv batteriet – PwMngt griber ikke ind.",
+          block_charging: "Ladning er blokeret, fx mens batteriet sælger til nettet.",
+          hold_min_soc: "Batteriet holdes på min-SoC og aflader ikke længere ned.",
+          charge_now: "Batteriet lades fra nettet med den % af sin max ladeeffekt.",
+          discharge_now: "Batteriet aflader til nettet med den % af sin max effekt.",
+        },
+        hold: "Efter prikken: hvad batterilåsen (Growatt) gør, og dens effekt i W.",
+      },
+      kr: (value) => `${value} kr.`,
+    },
     missing: "PwMngt's batteri-entities blev ikke fundet - er Solar PV Plant sat op?",
   },
 };
@@ -2446,8 +2526,11 @@ const PWM_RING_CARD_STYLE = `
       var(--ha-card-background, var(--card-background-color));
   }
   svg { width: 100%; max-width: 260px; display: block; margin: auto; }
-  .live { animation: pwm-pulse 2.4s ease-in-out infinite; }
-  @keyframes pwm-pulse { 0%, 100% { opacity: 0.75; } 50% { opacity: 1; } }
+  .live { animation: pwm-pulse 1.8s ease-in-out infinite; }
+  @keyframes pwm-pulse {
+    0%, 100% { opacity: 0.35; filter: none; }
+    50% { opacity: 1; filter: drop-shadow(0 0 4px currentColor) brightness(1.15); }
+  }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin-top: 4px; }
   .chip { padding: 4px 10px; border-radius: 999px; font-size: 12px; white-space: nowrap;
     color: var(--primary-text-color); background: var(--secondary-background-color); }
@@ -2457,6 +2540,18 @@ const PWM_RING_CARD_STYLE = `
   .chip.target { background: rgba(102, 187, 106, 0.18); }
   .status { margin-top: 8px; text-align: center; font-size: 12px; color: var(--secondary-text-color); }
   .pwm-warning { color: var(--error-color); font-size: 13px; }
+  ha-card { position: relative; }
+  .tip-target { cursor: help; }
+  .tip { position: absolute; z-index: 5; box-sizing: border-box; width: max-content; max-width: min(280px, 92%);
+    padding: 8px 10px; border-radius: 10px; font-size: 12px; line-height: 1.4; pointer-events: none;
+    color: var(--primary-text-color); background: var(--card-background-color, #fff);
+    border: 1px solid var(--divider-color); box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25); }
+  .tip-title { font-weight: 600; margin-bottom: 2px; }
+  .tip-desc { color: var(--secondary-text-color); margin-top: 2px; }
+  .tip-rule { margin-top: 6px; }
+  .tip table { border-collapse: collapse; margin-top: 6px; width: 100%; }
+  .tip td { padding: 1px 0; }
+  .tip td:last-child { text-align: right; padding-left: 12px; white-space: nowrap; }
 `;
 
 // The ring is 270 degrees, open at the bottom.
@@ -2485,6 +2580,7 @@ class PwMBatteryRingCard extends HTMLElement {
     this._hass = hass;
     if (!this.shadowRoot) {
       this.attachShadow({ mode: "open" });
+      this._listenForTips();
     }
     this._resolveEntityIds();
     const signature = this._stateSignature();
@@ -2497,9 +2593,183 @@ class PwMBatteryRingCard extends HTMLElement {
     return 5;
   }
 
-  _texts() {
+  disconnectedCallback() {
+    this._hideTip();
+  }
+
+  _language() {
     const language = (this._hass.locale && this._hass.locale.language) || this._hass.language || "en";
-    return PWM_RING_TEXTS[String(language).split("-")[0]] || PWM_RING_TEXTS.en;
+    return String(language).split("-")[0];
+  }
+
+  _texts() {
+    return PWM_RING_TEXTS[this._language()] || PWM_RING_TEXTS.en;
+  }
+
+  /**
+   * Issue #136: an explanation of what is hovered (mouse) or tapped
+   * (finger). Hover shows it while the pointer is there; a tap or click
+   * pins it until the next tap, also outside the card.
+   */
+  _listenForTips() {
+    const root = this.shadowRoot;
+    const targetOf = (event) => event.target.closest && event.target.closest("[data-tip]");
+    root.addEventListener("pointerover", (event) => {
+      if (event.pointerType !== "mouse" || this._tipPinned) return;
+      const target = targetOf(event);
+      if (target) this._showTipFor(target, false);
+    });
+    root.addEventListener("pointerout", (event) => {
+      if (event.pointerType !== "mouse" || this._tipPinned) return;
+      const target = targetOf(event);
+      if (target && !target.contains(event.relatedTarget)) this._hideTip();
+    });
+    root.addEventListener("click", (event) => {
+      const target = targetOf(event);
+      if (!target) {
+        this._hideTip();
+        return;
+      }
+      if (this._tipPinned && this._tipKey === target.dataset.tip) this._hideTip();
+      else this._showTipFor(target, true);
+    });
+    this._outsideClick = (event) => {
+      if (!event.composedPath().includes(this)) this._hideTip();
+    };
+  }
+
+  /** The target's own place: the min and target marks have a chip too. */
+  _showTipFor(target, pinned) {
+    const key = target.dataset.tip;
+    const index = [...this.shadowRoot.querySelectorAll(`[data-tip="${key}"]`)].indexOf(target);
+    this._showTip(key, pinned, Math.max(index, 0));
+  }
+
+  _showTip(key, pinned, index = 0) {
+    const card = this._card;
+    const anchor = card && this.shadowRoot.querySelectorAll(`[data-tip="${key}"]`)[index];
+    const html = anchor && this._tipHtml(key);
+    if (!html) {
+      this._hideTip();
+      return;
+    }
+    this._tipKey = key;
+    this._tipIndex = index;
+    this._tipPinned = pinned;
+    if (pinned) window.addEventListener("click", this._outsideClick, true);
+    let tip = card.querySelector(".tip");
+    if (!tip) {
+      tip = document.createElement("div");
+      tip.className = "tip";
+      card.appendChild(tip);
+    }
+    tip.innerHTML = html;
+    // Below the hovered element, kept inside the card's width; above it
+    // when there is no room below.
+    const cardRect = card.getBoundingClientRect();
+    const rect = anchor.getBoundingClientRect();
+    const width = tip.offsetWidth;
+    const height = tip.offsetHeight;
+    const left = rect.left + rect.width / 2 - cardRect.left - width / 2;
+    tip.style.left = `${Math.max(4, Math.min(left, cardRect.width - width - 4))}px`;
+    let top = rect.bottom - cardRect.top + 6;
+    if (top + height > cardRect.height && rect.top - cardRect.top - height - 6 >= 0) {
+      top = rect.top - cardRect.top - height - 6;
+    }
+    tip.style.top = `${top}px`;
+  }
+
+  _hideTip() {
+    this._tipKey = undefined;
+    this._tipPinned = false;
+    if (this._outsideClick) window.removeEventListener("click", this._outsideClick, true);
+    const tip = this._card && this._card.querySelector(".tip");
+    if (tip) tip.remove();
+  }
+
+  /** The explanation's HTML -- only numbers and the card's own texts go in. */
+  _tipHtml(key) {
+    const t = this._texts().tips;
+    const v = this._values || {};
+    const head = (title, desc) => `<div class="tip-title">${title}</div><div class="tip-desc">${desc}</div>`;
+    const row = (label, value) => `<tr><td>${label}</td><td>${value}</td></tr>`;
+    const pct = (value) => `${Math.round(value)} %`;
+    const kwh = (value) => `${pwmFormatDecimal(Number(value))} kWh`;
+    switch (key) {
+      case "target": {
+        const basis = (this._state("target") || {}).attributes || {};
+        let html = head(t.target.title, t.target.desc);
+        if (Number.isFinite(Number(basis.night_consumption)) && Number(basis.battery_size) > 0) {
+          const share = (Number(basis.target_kwh) / Number(basis.battery_size)) * 100;
+          html +=
+            `<table>` +
+            row(t.target.night, kwh(basis.night_consumption)) +
+            row(t.target.pv, `− ${kwh(basis.pv_17_21_today)}`) +
+            row(t.target.factor, `× ${Number(basis.battery_factor).toFixed(2).replace(".", ",")}`) +
+            row(t.target.needed, `${kwh(basis.target_kwh)} = ${pct(share)}`) +
+            row(t.target.minimum, `+ ${pct(basis.battery_min_soc)}`) +
+            row(`<b>${t.target.result}</b>`, `<b>${Number.isFinite(v.target) ? pct(v.target) : "–"}</b>`) +
+            `</table>`;
+          if (Number.isFinite(v.target) && v.target >= basis.target_ceiling) {
+            html += `<div class="tip-desc">${t.target.ceiling(basis.target_ceiling)}</div>`;
+          }
+        }
+        return html;
+      }
+      case "min": {
+        if (!Number.isFinite(v.minSoc)) return "";
+        let html = head(t.min.title, t.min.desc(Math.round(v.minSoc)));
+        const entry = this._currentPlanEntry();
+        if (entry) {
+          const rules = (PWM_PLAN_TEXTS[this._language()] || PWM_PLAN_TEXTS.en).rules;
+          const [name, desc] = rules[entry.rule] || [entry.rule, ""];
+          html += `<div class="tip-rule">${t.min.rule}: <b>${name}</b></div><div class="tip-desc">${desc}</div>`;
+          if (entry.rule === "night_protection" && entry.held_points !== undefined) {
+            html += `<div class="tip-desc">${t.min.held(entry.held_points, this._kr(entry.cell_price_min))}</div>`;
+          }
+        }
+        return html;
+      }
+      case "pv":
+        return head(t.pv.title, t.pv.desc);
+      case "grid":
+        return head(t.grid.title, t.grid.desc);
+      case "kwh":
+        return Number.isFinite(v.size) ? head(t.kwh.title, t.kwh.desc(Math.round(v.empty), pwmFormatDecimal(v.size))) : "";
+      case "toFull":
+        return head(t.toFull.title, t.toFull.desc);
+      case "toMin":
+        return head(t.toMin.title, t.toMin.desc);
+      case "status": {
+        const command = this._state("command");
+        if (!command) return "";
+        const state = command.state.replace(/_\d+$/, "");
+        let html = head(t.status.title, t.status.desc);
+        const meaning = t.status.commands[state];
+        if (meaning) html += `<div class="tip-desc">${meaning}</div>`;
+        if (this._state("hold")) html += `<div class="tip-desc">${t.status.hold}</div>`;
+        return html;
+      }
+      default:
+        return "";
+    }
+  }
+
+  /** The hour of Battery data's min_soc_plan (issue #122) that is now. */
+  _currentPlanEntry() {
+    const data = this._state("data");
+    const plan = data && data.attributes.min_soc_plan;
+    if (!Array.isArray(plan)) return null;
+    const now = Date.now();
+    return plan.find((entry) => {
+      const start = new Date(entry.start).getTime();
+      return start <= now && now < start + 3600000;
+    }) || null;
+  }
+
+  _kr(value) {
+    const text = Number(value).toLocaleString(this._language(), { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return this._texts().tips.kr(text);
   }
 
   /** Same registry-change caching as PwMngtBaseCard._resolveEntityIds(). */
@@ -2584,10 +2854,15 @@ class PwMBatteryRingCard extends HTMLElement {
     const status = this._statusText(t);
     if (status) {
       const line = document.createElement("div");
-      line.className = "status";
+      line.className = "status tip-target";
+      line.dataset.tip = "status";
       line.textContent = status;
       card.appendChild(line);
     }
+    this._card = card;
+    this._values = { soc, minSoc, target, size, empty };
+    // A rebuild (new states) keeps an open explanation open.
+    if (this._tipKey) this._showTip(this._tipKey, this._tipPinned, this._tipIndex);
   }
 
   _ring(t, soc, pv, grid, minSoc, target, size, power, empty) {
@@ -2597,7 +2872,12 @@ class PwMBatteryRingCard extends HTMLElement {
     const gridShare = Number.isFinite(grid) ? grid : 0;
     // battery_data's floor below its counted cells has no source.
     const reserve = Math.max(0, soc - pvShare - gridShare);
-    const live = charging || discharging ? "live" : "";
+    // Only charging pulses, and only the part being filled: grid power
+    // while PwMngt's command is a grid charge (charge_now_X), else solar.
+    const command = this._state("command");
+    const gridCharging = charging && command && /^charge_now_/.test(command.state);
+    const gridLive = gridCharging ? "live" : "";
+    const pvLive = charging && !gridCharging ? "live" : "";
     const kw = pwmFormatKw(Math.abs(power));
     const powerColor = charging ? "#43a047" : discharging ? "#fb8c00" : "var(--secondary-text-color)";
     const powerText = charging ? t.charging(kw) : discharging ? t.discharging(kw) : t.idle;
@@ -2609,13 +2889,14 @@ class PwMBatteryRingCard extends HTMLElement {
       <svg viewBox="0 0 200 175">
         ${pwmRingSegment(0, 100, "var(--divider-color)", "", "round")}
         ${pwmRingSegment(0, reserve, "#78909c")}
-        ${pwmRingSegment(reserve, reserve + gridShare, "#1e88e5", live)}
-        ${pwmRingSegment(reserve + gridShare, soc, "#ffb300", live)}
-        ${pwmRingTick(minSoc, "#e53935", false)}
-        ${pwmRingTick(target, "#66bb6a", true)}
+        ${pwmRingSegment(reserve, reserve + gridShare, "#1e88e5", gridLive)}
+        ${pwmRingSegment(reserve + gridShare, soc, "#ffb300", pvLive)}
+        ${pwmRingTick(minSoc, "#e53935", false, "min")}
+        ${pwmRingTick(target, "#66bb6a", true, "target")}
         <text x="100" y="92" text-anchor="middle" font-size="40" font-weight="600"
           fill="var(--primary-text-color)">${Math.round(soc)}<tspan font-size="20">%</tspan></text>
-        <text x="100" y="114" text-anchor="middle" font-size="12" fill="var(--secondary-text-color)">${kwh}</text>
+        <text x="100" y="114" text-anchor="middle" font-size="12" fill="var(--secondary-text-color)"
+          class="tip-target" data-tip="kwh">${kwh}</text>
         <text x="100" y="138" text-anchor="middle" font-size="14" font-weight="500" fill="${powerColor}">${powerText}</text>
         <text x="100" y="170" text-anchor="middle" font-size="13" fill="var(--secondary-text-color)">${this._config.name || t.title}</text>
       </svg>`;
@@ -2625,23 +2906,24 @@ class PwMBatteryRingCard extends HTMLElement {
   _chips(t, soc, pv, grid, minSoc, target, size, power) {
     const chips = document.createElement("div");
     chips.className = "chips";
-    const add = (cls, text) => {
+    const add = (cls, text, tip) => {
       const chip = document.createElement("span");
-      chip.className = `chip ${cls}`;
+      chip.className = `chip tip-target ${cls}`;
+      chip.dataset.tip = tip;
       chip.textContent = text;
       chips.appendChild(chip);
     };
-    if (Number.isFinite(pv)) add("pv", t.pv(pv));
-    if (Number.isFinite(grid)) add("grid", t.grid(grid));
-    if (Number.isFinite(minSoc)) add("min", t.min(minSoc));
-    if (Number.isFinite(target)) add("target", t.target(target));
+    if (Number.isFinite(pv)) add("pv", t.pv(pv), "pv");
+    if (Number.isFinite(grid)) add("grid", t.grid(grid), "grid");
+    if (Number.isFinite(minSoc)) add("min", t.min(minSoc), "min");
+    if (Number.isFinite(target)) add("target", t.target(target), "target");
     if (Number.isFinite(size) && size > 0) {
       if (power < -PWM_RING_IDLE_W) {
         const time = pwmFormatHours((((100 - soc) / 100) * size * 1000) / -power);
-        if (time) add("", t.toFull(time));
+        if (time) add("", t.toFull(time), "toFull");
       } else if (power > PWM_RING_IDLE_W && Number.isFinite(minSoc)) {
         const time = pwmFormatHours((((soc - minSoc) / 100) * size * 1000) / power);
-        if (time) add("", t.toMin(time));
+        if (time) add("", t.toMin(time), "toMin");
       }
     }
     return chips;
@@ -2681,20 +2963,24 @@ function pwmRingSegment(from, to, color, cls, linecap = "butt", width = 14) {
   const length = (PWM_RING_ARC * (to - from)) / 100;
   const start = (PWM_RING_ARC * from) / 100;
   return `<circle cx="100" cy="100" r="${PWM_RING_RADIUS}" fill="none" stroke="${color}"
-    stroke-width="${width}" stroke-linecap="${linecap}" class="${cls || ""}"
+    stroke-width="${width}" stroke-linecap="${linecap}" class="${cls || ""}" style="color: ${color}"
     stroke-dasharray="${length} ${PWM_RING_CIRCUMFERENCE}" stroke-dashoffset="${-start}"
     transform="rotate(135 100 100)"/>`;
 }
 
-/** A mark across the ring at value % (min SoC, target). */
-function pwmRingTick(value, color, dashed) {
+/** A mark across the ring at value % (min SoC, target). With `tip`, a wider
+ * invisible line on top makes it easy to hit with a finger (issue #136). */
+function pwmRingTick(value, color, dashed, tip) {
   if (!Number.isFinite(value)) return "";
   const angle = ((135 + (270 * Math.min(Math.max(value, 0), 100)) / 100) * Math.PI) / 180;
   const point = (radius) => [100 + radius * Math.cos(angle), 100 + radius * Math.sin(angle)];
   const [x1, y1] = point(66);
   const [x2, y2] = point(94);
-  return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}"
+  const mark = `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${color}"
     stroke-width="3" stroke-linecap="round"${dashed ? ' stroke-dasharray="3 3"' : ""}/>`;
+  if (!tip) return mark;
+  return `${mark}<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="transparent"
+    stroke-width="16" pointer-events="stroke" class="tip-target" data-tip="${tip}"/>`;
 }
 
 /** 1 decimal with a decimal comma, as the rest of the cards' Danish texts. */

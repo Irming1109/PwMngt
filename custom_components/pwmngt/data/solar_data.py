@@ -121,6 +121,9 @@ from .pv_shift_data import PvShiftState, step_pv_shift_detection
 LOGGER = logging.getLogger(__name__)
 
 KEY_BATTERY_NIGHTLY_TARGET = "battery_nightly_target"
+# Issue #136: the numbers behind the target, shown as attributes on Battery
+# nightly target so the battery ring card can explain it.
+KEY_BATTERY_NIGHTLY_TARGET_BASIS = "battery_nightly_target_basis"
 # Issue #59: tomorrow's forecast (kWh, Solcast's normal estimate) for each
 # hour 06, 07 ... 16 -- a list, read by data/battery_charge_decision.py.
 KEY_PV_FORECAST_HOURLY_6_17_TOMORROW = "pv_forecast_hourly_6_17_tomorrow"
@@ -322,6 +325,15 @@ def calculate_solar_data(inputs: SolarInputs) -> dict[str, float | None]:
         battery = min(max(battery, inputs.battery_min_soc), _TARGET_CEILING)
         target = _js_round(battery)
     values[KEY_BATTERY_NIGHTLY_TARGET] = target
+    values[KEY_BATTERY_NIGHTLY_TARGET_BASIS] = {
+        "night_consumption": round(night, 2),
+        "pv_17_21_today": round(pv_17_21_today, 2),
+        "battery_factor": round(inputs.battery_factor, 3),
+        "target_kwh": round(target_kwh, 2),
+        "battery_min_soc": inputs.battery_min_soc,
+        "battery_size": inputs.battery_size_kwh,
+        "target_ceiling": _TARGET_CEILING,
+    }
     return values
 
 
@@ -617,3 +629,7 @@ class PwMngtBatteryNightlyTargetSensor(_PwMngtSolarEntity):
     @property
     def native_value(self) -> float | None:
         return (self.coordinator.data or {}).get(KEY_BATTERY_NIGHTLY_TARGET)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return dict((self.coordinator.data or {}).get(KEY_BATTERY_NIGHTLY_TARGET_BASIS) or {})
