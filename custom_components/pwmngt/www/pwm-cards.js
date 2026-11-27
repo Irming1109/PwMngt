@@ -750,7 +750,7 @@ const PWM_BATTERY_TEXTS = {
       `Tonight's charge finished at ${time}${target !== null ? ` - target ${target}% reached` : ""}`,
     lastChargeStopped: (time) => `Tonight's charge stopped at ${time} - the target wasn't reached`,
     planEnded: (time, target, soc) =>
-      `The charge plan ended at ${time} - the target of ${target}% wasn't reached${soc !== null ? ` (SoC ${soc}%)` : ""}`,
+      `The charge plan ended at ${time}${soc !== null ? ` at ${soc}%` : ""} - the target of ${target}% wasn't reached`,
     kwh: (value) => `${value.toFixed(1)} kWh`,
     partialCharge: (pct, target, kwh) =>
       `Charges to ${pct}% from the grid - tomorrow's PV (${kwh} surplus expected) fills it up to the target of ${target}%`,
@@ -863,7 +863,7 @@ const PWM_BATTERY_TEXTS = {
       `Nattens ladning færdig kl. ${time}${target !== null ? ` - target ${target} % nået` : ""}`,
     lastChargeStopped: (time) => `Nattens ladning stoppet kl. ${time} - target blev ikke nået`,
     planEnded: (time, target, soc) =>
-      `Ladeplanen sluttede kl. ${time} - target ${target} % blev ikke nået${soc !== null ? ` (SoC ${soc} %)` : ""}`,
+      `Ladeplanen sluttede kl. ${time}${soc !== null ? ` ved ${soc} %` : ""} - target ${target} % blev ikke nået`,
     kwh: (value) => `${value.toFixed(1).replace(".", ",")} kWh`,
     partialCharge: (pct, target, kwh) =>
       `Lades til ${pct} % fra nettet - solen i morgen (forventet ${kwh} overskud) fylder op til target ${target} %`,
@@ -1445,8 +1445,10 @@ class PwMBatteryCard extends HTMLElement {
       // still uses it for the day), so say it has ended.
       const end = this._planEnded(status);
       const target = Math.round(Number(status.attributes.charge_target));
-      const socState = this._state("soc");
-      const soc = socState && Number.isFinite(Number(socState.state)) ? Math.round(Number(socState.state)) : null;
+      // Issue #139: the SoC when the plan ended (Battery charge status keeps
+      // it on the hour) -- not now's, after the day plan has used of it.
+      const endSoc = status.attributes.plan_end_soc;
+      const soc = Number.isFinite(Number(endSoc)) && endSoc !== null ? Math.round(Number(endSoc)) : null;
       statusGroup.appendChild(
         this._banner("warn", t.planEnded(`${String(end).padStart(2, "0")}:00`, target, soc))
       );

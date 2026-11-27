@@ -1220,6 +1220,8 @@ class PwMngtBatteryChargeDecisionStoredData(restore_state.ExtraStoredData):
     # night ({"night", "status", "attributes"}) -- see the module docstring.
     manual: dict[str, Any] | None = None
     auto_plan: dict[str, Any] | None = None
+    # Issue #139: {"date", "end", "soc"} -- see _record_plan_end().
+    plan_end: dict[str, Any] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -1227,6 +1229,7 @@ class PwMngtBatteryChargeDecisionStoredData(restore_state.ExtraStoredData):
             "attributes": self.attributes,
             "manual": self.manual,
             "auto_plan": self.auto_plan,
+            "plan_end": self.plan_end,
         }
 
     @classmethod
@@ -1236,6 +1239,7 @@ class PwMngtBatteryChargeDecisionStoredData(restore_state.ExtraStoredData):
             attributes=dict(restored.get("attributes") or {}),
             manual=restored.get("manual"),
             auto_plan=restored.get("auto_plan"),
+            plan_end=restored.get("plan_end"),
         )
 
 
@@ -1263,6 +1267,56 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         # Issue #105 -- see PwMngtBatteryChargeDecisionStoredData.
         self._manual: dict[str, Any] | None = None
         self._auto_plan: dict[str, Any] | None = None
+        # Issue #139: {"date", "end", "soc"} -- the SoC when today's charge
+        # plan ended without reaching its target, see _record_plan_end().
+        # Kept outside the plan's attributes, which a new run replaces.
+        self._plan_end: dict[str, Any] | None = None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        attributes = dict(self._attr_extra_state_attributes or {})
+        plan_end = self._plan_end
+        if (
+            self._attr_native_value == _STATUS_YES_TODAY
+            and plan_end is not None
+            and plan_end["date"] == dt_util.now().date().isoformat()
+            and plan_end["end"] == self._plan_end_hour()
+        ):
+            attributes["plan_end_soc"] = plan_end["soc"]
+        return attributes
+
+    def _plan_end_hour(self) -> int | None:
+        """The hour (1-24) the current plan's charge hours end at -- the
+        planned hours plus the ones extended after them (#22). Same rule as
+        the battery card's _planEnded()."""
+        attributes = self._attr_extra_state_attributes or {}
+        hours = [hour for hour in range(24) if attributes.get(f"hour_{hour}") is True]
+        hours += [int(hour) for hour in attributes.get("extended_hours") or []]
+        return max(hours) + 1 if hours else None
+
+    @callback
+    def _record_plan_end(self) -> None:
+        """Issue #139: on the hour, keep the SoC once today's plan is over
+        but still "yes_today" (its target wasn't reached) -- the battery
+        card says what it ended at, not the SoC later in the day, after the
+        day plan (#59) has used of it. A night plan counts as over from 06
+        (it may be extended until then); a plan ending at 14 is kept at
+        14:00. Kept over a restart (extra_restore_state_data)."""
+        if self._attr_native_value != _STATUS_YES_TODAY:
+            return
+        end = self._plan_end_hour()
+        now = dt_util.now()
+        if end is None or now.hour < max(end, _NIGHT_END_HOUR):
+            return
+        today = now.date().isoformat()
+        if self._plan_end is not None and self._plan_end["date"] == today and self._plan_end["end"] == end:
+            return
+        entity_id = pv_properties.battery_soc_entity_id(self.hass, self._entry)
+        soc = read_float_state(self.hass.states.get(entity_id)) if entity_id else None
+        if soc is None:
+            return
+        self._plan_end = {"date": today, "end": end, "soc": round(soc)}
+        self.async_write_ha_state()
 
     @property
     def extra_restore_state_data(self) -> PwMngtBatteryChargeDecisionStoredData:
@@ -1271,6 +1325,7 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             attributes=dict(self._attr_extra_state_attributes),
             manual=self._manual,
             auto_plan=self._auto_plan,
+            plan_end=self._plan_end,
         )
 
     async def async_added_to_hass(self) -> None:
@@ -1287,6 +1342,7 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
                 }
             self._manual = data.manual
             self._auto_plan = data.auto_plan
+            self._plan_end = data.plan_end
             self._prune_manual()
 
         # Issue #105: the battery card's manual night target.
@@ -1743,6 +1799,7 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
         """Hourly nudge -- see module docstring. Node-RED's own fixed
         30 s delay happens before the status read, not before this
         trigger itself."""
+        self._record_plan_end()
         self._pending_hourly_recheck = event.async_call_later(
             self.hass,
             _HOURLY_RECHECK_FIRST_DELAY_SECONDS,
