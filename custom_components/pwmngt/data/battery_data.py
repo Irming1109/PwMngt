@@ -2324,6 +2324,9 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             ) or _float_or_none(consumption.get("nighttime_average")),
             night_consumption_raw=_float_or_none(consumption.get("nighttime_average")),
             evening_consumption=_float_or_none(consumption.get("evening_average")),
+            evening_consumption_adjusted=_float_or_none(
+                consumption.get("evening_average_adjusted")
+            ),
             late_evening_consumption=_float_or_none(
                 consumption.get("late_evening_average_adjusted")
             ) or _float_or_none(consumption.get("late_evening_average")),
@@ -2377,6 +2380,9 @@ class PwMngtBatteryDataSensor(restore_state.RestoreEntity, SensorEntity):
             night_consumption=night,
             night_consumption_raw=_float_or_none(consumption.get("nighttime_average")),
             evening_consumption=_float_or_none(consumption.get("evening_average")),
+            evening_consumption_adjusted=_float_or_none(
+                consumption.get("evening_average_adjusted")
+            ),
             late_evening_consumption=_float_or_none(
                 consumption.get("late_evening_average_adjusted")
             ) or _float_or_none(consumption.get("late_evening_average")),

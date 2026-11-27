@@ -54,6 +54,11 @@ Deliberate differences from Node-RED (Claus, 2026-11-03):
   battery_charge_decision.py) spread the night evenly over 21-06, which
   underestimated 21-24 by ~30 % where the house uses more before
   midnight than after (Kasper: ~0.64 vs ~0.35 kWh an hour).
+- evening_average_adjusted (issue #140, Claus 2026-11-27): 17-21 without
+  the chargers' consumption in 17-21, like late_evening_average_adjusted.
+  The night charge scaled 17-21 by the whole night's share without the
+  chargers, so a car charged 00-06 cut ~27 % off an evening with no car
+  charge in it.
 - day_hourly_average_adjusted (issue #59, Claus 2026-11-09): each hour
   06-17 on its own, without the chargers -- the night charge can then
   cover the expensive daytime hours too (data/battery_charge_decision.py).
@@ -138,6 +143,9 @@ PwM_CONSUMPTION_DATA_ATTRIBUTES: list[str] = [
     "late_morning_average",
     # 17-21. Old: sensor.spidstimer_17_21_snit.
     "evening_average",
+    # 17-21 without the chargers -- issue #140, read by
+    # data/battery_charge_decision.py for tomorrow's hours 17-20.
+    "evening_average_adjusted",
     # 17-24 plus 00-06 of the SAME calendar day -- two pieces, not one
     # continuous night. Kept exactly as Node-RED defined it (Kasper,
     # 2026-09-28). Old: sensor.spidstimer_nat_17_06_snit.
@@ -216,8 +224,8 @@ _MAX_PLAUSIBLE_FULL_DAY_KWH = 250
 # v6: ... for every brand and in the single daytime hours (issue #129),
 # v7: the grid-charge and own-use counters from their end-of-hour state,
 # so an inverter restart's dip to 0 no longer adds their whole value
-# (issue #131).
-_HISTORY_FORMAT = "v7"
+# (issue #131), v8: evening_adjusted (issue #140).
+_HISTORY_FORMAT = "v8"
 
 # Trimmed averages (see _average()): drop this share of the days at each
 # end -- one day at 7 days of history, two at 14, three at 21-30 -- but
@@ -733,6 +741,9 @@ def build_day(
     car_charger_late_evening = _charger_consumption(
         series, charger_entity_ids, timestamps, ((21, 24),)
     )
+    car_charger_evening = _charger_consumption(
+        series, charger_entity_ids, timestamps, ((17, 21),)
+    )
 
     values["car_charger"] = round(car_charger, 2) if car_charger is not None else None
     values["daytime_adjusted"] = (
@@ -746,6 +757,11 @@ def build_day(
     values["late_evening_adjusted"] = (
         round(max(values["late_evening"] - car_charger_late_evening, 0.0), 2)
         if car_charger_late_evening is not None
+        else None
+    )
+    values["evening_adjusted"] = (
+        round(max(values["evening"] - car_charger_evening, 0.0), 2)
+        if car_charger_evening is not None
         else None
     )
     # Issue #59: each daytime hour without the chargers -- issue #129:
@@ -1276,7 +1292,9 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
                 "inverter_night": values["inverter_night"],
             }
         )
-        self._evening_history.append({"date": day, "evening": values["evening"]})
+        self._evening_history.append(
+            {"date": day, "evening": values["evening"], "evening_adjusted": values["evening_adjusted"]}
+        )
         self._full_day_history.append({"date": day, "full_day": values["full_day"]})
 
     def _trim_histories(self, oldest: date) -> None:
@@ -1299,6 +1317,9 @@ class PwMngtConsumptionDataSensor(restore_state.RestoreEntity, SensorEntity):
         )
         attributes["evening_average"] = calculate_evening_average(
             self._evening_history, period_days, newest
+        )
+        attributes["evening_average_adjusted"] = _average(
+            self._evening_history, "evening_adjusted", period_days, newest
         )
         attributes["full_day_average"] = calculate_full_day_average(
             self._full_day_history, period_days, newest

@@ -558,6 +558,9 @@ class BatteryChargeInputs:
     night_consumption: float | None = None
     night_consumption_raw: float | None = None
     evening_consumption: float | None = None
+    # Issue #140: consumption_data's 17-21 average without the chargers
+    # (kWh). None = unknown.
+    evening_consumption_adjusted: float | None = None
     # Issue #58: consumption_data's 21-24 average (without the chargers
     # when known, kWh). None = unknown.
     late_evening_consumption: float | None = None
@@ -618,6 +621,7 @@ def evening_hour_consumption(inputs: BatteryChargeInputs) -> dict[int, float]:
         night_consumption=inputs.night_consumption,
         night_consumption_raw=inputs.night_consumption_raw,
         evening_consumption=inputs.evening_consumption,
+        evening_consumption_adjusted=inputs.evening_consumption_adjusted,
         late_evening_consumption=inputs.late_evening_consumption,
         pv_17_21=inputs.pv_forecast_17_21_tomorrow,
         battery_target=inputs.battery_target,
@@ -637,6 +641,7 @@ def evening_hourly_need(
     battery_min_soc: float,
     battery_size: float,
     battery_factor: float,
+    evening_consumption_adjusted: float | None = None,
 ) -> dict[int, float]:
     """Issue #50: the energy (kWh) the battery is expected to cover in each
     hour 17-23 tomorrow. 17-21 is the evening average (scaled like the night
@@ -648,7 +653,13 @@ def evening_hourly_need(
     DIFF (issue #58, Claus 2026-11-09): 21-24 is its own measured average
     when consumption_data has it (at most the rest of the night) -- the
     even spread underestimated it by ~30 % at Kasper's, whose house uses
-    more before midnight than after."""
+    more before midnight than after.
+
+    DIFF (issue #140, Claus 2026-11-27): 17-21 is its own average without
+    the chargers in 17-21 when consumption_data has it. Scaling 17-21 by
+    the whole night's share without the chargers cut ~27 % off Claus's
+    evening, although his car only charges 00-06 -- the scaling is only
+    the fallback until that average is measured."""
     night = night_consumption
     if night is None or night <= 0:
         night = max(battery_target - battery_min_soc, 0.0) / 100 * battery_size / battery_factor
@@ -656,7 +667,9 @@ def evening_hourly_need(
         pv = 0.0
     else:
         raw = night_consumption_raw
-        if evening_consumption is not None and raw:
+        if evening_consumption_adjusted is not None and evening_consumption_adjusted >= 0:
+            evening = evening_consumption_adjusted
+        elif evening_consumption is not None and raw:
             evening = evening_consumption * night / raw
         else:
             evening = night * len(_EVENING_HOURS) / _NIGHT_HOURS
@@ -1977,6 +1990,7 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             ) or self._read_consumption("nighttime_average"),
             night_consumption_raw=self._read_consumption("nighttime_average"),
             evening_consumption=self._read_consumption("evening_average"),
+            evening_consumption_adjusted=self._read_consumption("evening_average_adjusted"),
             late_evening_consumption=self._read_consumption(
                 "late_evening_average_adjusted"
             ) or self._read_consumption("late_evening_average"),
