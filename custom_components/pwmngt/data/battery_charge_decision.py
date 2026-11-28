@@ -39,9 +39,8 @@ the same Node-RED cron pattern and a fixed 30 s first delay.
 Partial night charge (issue #43, Claus 2026-11-05 -- new, not in
 Node-RED): Node-RED charges all the way to target or not at all ("Nej
 (overskud)" when tomorrow's 08-16 forecast minus the day consumption
-covers the battery). Here tomorrow's forecast is taken cautiously -- the
-middle between Solcast's normal and pessimistic (estimate10) estimate,
-so the margin follows the day's uncertainty -- and only what that
+covers the battery). Here tomorrow's forecast is taken cautiously --
+0.7 x Solcast's normal estimate (_CAUTIOUS_PV_FACTOR) -- and only what that
 expected surplus leaves short is charged: charge_target, the shortfall
 in % of the battery (rounded up, at least the battery's minimum SoC, at
 most target). PV fills the rest up to target during the day. The same
@@ -49,6 +48,14 @@ cautious surplus decides "no_surplus", so a day that only just covered
 the battery with the normal forecast now gets a small charge ("rather a
 little too much than too little"). data/battery_charge_level.py stops the
 charge and plans the night (#22) on charge_target.
+DIFF (issue #107, Claus 2026-11-28): the cautious forecast was the
+middle between Solcast's normal and pessimistic (estimate10) estimate.
+Logged on four installations (61 days, 11-27 Nov 2026), estimate10 pulled
+the wrong way: on days with a very low estimate10 the sun delivered 126 %
+of normal on average, so the night charge took too much grid energy on
+sunny days. 0.7 x normal beat the middle on both sides (kWh charged too
+little 23.4 vs 32.0, too much 50.1 vs 52.6, MAE 1.20 vs 1.39 kWh of
+surplus) and, like Node-RED, uses the normal estimate only.
 
 Value-based night charge (issue #50, Claus 2026-11-07 -- new, not in
 Node-RED): Node-RED compares the cheapest charge hours with the 5 most
@@ -345,6 +352,9 @@ _CHARGE_POWER_UTILIZATION = 0.75
 _PRICE_DIFFERENCE_FALLBACK = 1.2
 _CHARGETIME_SAFETY_MARGIN = 1.10
 _DAY_END_HOUR = 17  # Day window: hours 0-16, evening: 17-23.
+# Issue #107: the share of Solcast's normal 08-16 forecast the night charge
+# counts on (see the module docstring).
+_CAUTIOUS_PV_FACTOR = 0.7
 
 # consumption_data's evening_average covers 17-21; nighttime_average 17-24
 # plus 00-06 -- the rest of it is spread evenly over those 9 hours.
@@ -548,9 +558,7 @@ class BatteryChargeInputs:
     # initial_state, see module docstring). Checked right after billing
     # method, before the surplus/price-difference branches.
     previous_status: str
-    # Issue #43: Solcast's pessimistic (estimate10) 08-16 forecast for
-    # tomorrow, and the battery's minimum SoC (the lowest charge target).
-    expected_solar_tomorrow_8_16_p10: float | None = None
+    # Issue #43: the battery's minimum SoC (the lowest charge target).
     battery_min_soc: float = 0.0
     # Issue #50: consumption_data's night (17-06, without the chargers, and
     # as measured) and evening (17-21) averages (kWh), and tomorrow's PV
@@ -590,16 +598,13 @@ def _average(values: list[float]) -> float:
     return sum(values) / len(values)
 
 
-def cautious_pv_forecast(normal: float | None, pessimistic: float | None) -> float | None:
-    """Issue #43: tomorrow's 08-16 forecast taken cautiously -- the middle
-    between Solcast's normal and pessimistic (estimate10) estimate, so the
-    margin follows how uncertain the day is. The normal one alone while
-    the pessimistic one is missing."""
+def cautious_pv_forecast(normal: float | None) -> float | None:
+    """Issue #43/#107: tomorrow's 08-16 forecast taken cautiously --
+    _CAUTIOUS_PV_FACTOR x Solcast's normal estimate (see the module
+    docstring for why estimate10 is no longer used)."""
     if normal is None:
         return None
-    if pessimistic is None:
-        return normal
-    return (normal + min(pessimistic, normal)) / 2
+    return normal * _CAUTIOUS_PV_FACTOR
 
 
 def partial_charge_target(
@@ -967,9 +972,7 @@ def calculate_battery_charge_decision(
 
     # Issue #43: cautious PV surplus tomorrow, and the part of target it
     # leaves for tonight's grid charge.
-    pv_forecast = cautious_pv_forecast(
-        inputs.expected_solar_tomorrow_8_16, inputs.expected_solar_tomorrow_8_16_p10
-    )
+    pv_forecast = cautious_pv_forecast(inputs.expected_solar_tomorrow_8_16)
     expected_surplus = (
         pv_forecast - inputs.day_consumption
         if pv_forecast is not None and inputs.day_consumption is not None
@@ -1980,9 +1983,6 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
                 hub_properties.billing_method_entity_id, ""
             ),
             expected_solar_tomorrow_8_16=self._read_solar_forecast_tomorrow_8_16(),
-            expected_solar_tomorrow_8_16_p10=self._read_solar_forecast_tomorrow_8_16(
-                "pv_forecast_8_16_tomorrow_p10"
-            ),
             battery_min_soc=pv_properties.battery_min_soc(self.hass, self._entry),
             day_consumption=self._read_consumption_daytime_adjusted(),
             night_consumption=self._read_consumption(
