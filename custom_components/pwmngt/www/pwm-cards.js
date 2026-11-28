@@ -105,12 +105,51 @@ const PWM_CARD_STYLE = `
     color: var(--error-color);
     font-size: 13px;
   }
+  .pwm-settings-link {
+    display: flex;
+    justify-content: flex-end;
+    padding-top: 8px;
+    border-top: 1px solid var(--divider-color);
+  }
+  .pwm-settings-link.pwm-hidden {
+    display: none;
+  }
+  .pwm-settings-link a {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--primary-color);
+    text-decoration: none;
+    font-size: 14px;
+    cursor: pointer;
+  }
 `;
+
+/**
+ * Issue #143: the config cards' own texts, picked by the user's HA language
+ * (English fallback) -- the frontend only loads an integration's entity
+ * translations, so card sentences live here.
+ */
+const PWM_CONFIG_CARD_TEXTS = {
+  en: { allSettings: "All settings" },
+  da: { allSettings: "Alle indstillinger" },
+};
+
+/**
+ * Opens a frontend path inside HA without reloading the page -- the same
+ * history.pushState + "location-changed" event HA's own cards use.
+ */
+function pwmNavigate(path) {
+  history.pushState(null, "", path);
+  window.dispatchEvent(new CustomEvent("location-changed", { detail: { replace: false } }));
+}
 
 /**
  * Shared behaviour for all PwMngt config cards. A subclass sets
  * this.cardTitle and this.fields inside its own setConfig(), then calls
- * super.setConfig(config).
+ * super.setConfig(config). Setting this.settingsDevice ("hub" | "pv" |
+ * "charger1" | ...) adds a link at the bottom to that device's page in HA,
+ * which lists all its settings, also the ones not on the card (#143).
  *
  * Each entry in `fields` looks like:
  *   {
@@ -269,7 +308,35 @@ class PwMngtBaseCard extends HTMLElement {
     }
 
     card.appendChild(content);
+    if (this.settingsDevice) {
+      card.appendChild(this._buildSettingsLink());
+    }
     this.shadowRoot.append(style, card);
+  }
+
+  _buildSettingsLink() {
+    const language = String(
+      (this._hass.locale && this._hass.locale.language) || this._hass.language || "en"
+    ).split("-")[0];
+    const texts = PWM_CONFIG_CARD_TEXTS[language] || PWM_CONFIG_CARD_TEXTS.en;
+
+    // Hidden until _resolveEntityIds() has found the device.
+    this._settingsLinkEl = document.createElement("div");
+    this._settingsLinkEl.className = "pwm-settings-link pwm-hidden";
+    const linkEl = document.createElement("a");
+    const iconEl = document.createElement("ha-icon");
+    iconEl.icon = "mdi:cog";
+    const textEl = document.createElement("span");
+    textEl.textContent = texts.allSettings;
+    linkEl.append(iconEl, textEl);
+    linkEl.addEventListener("click", (event) => {
+      // A plain href would reload the whole frontend.
+      event.preventDefault();
+      const path = linkEl.getAttribute("href");
+      if (path) pwmNavigate(path);
+    });
+    this._settingsLinkEl.appendChild(linkEl);
+    return this._settingsLinkEl;
   }
 
   _buildRow(field) {
@@ -366,6 +433,16 @@ class PwMngtBaseCard extends HTMLElement {
         ? pwmFindEntityId(this._hass, field.hideUnless.device, "select", field.hideUnless.key)
         : undefined;
     });
+    if (this._settingsLinkEl) {
+      const deviceId = pwmFindDeviceId(this._hass, this.settingsDevice);
+      const linkEl = this._settingsLinkEl.firstChild;
+      if (deviceId) {
+        linkEl.setAttribute("href", `/config/devices/device/${deviceId}`);
+      } else {
+        linkEl.removeAttribute("href");
+      }
+      this._settingsLinkEl.classList.toggle("pwm-hidden", !deviceId);
+    }
   }
 
   _update() {
@@ -443,6 +520,7 @@ class PwMChargerCard extends PwMngtBaseCard {
     const charger = config.charger;
     const chargerNumber = charger.replace("charger", "");
     this.cardTitle = config.title || `Charger ${chargerNumber}`;
+    this.settingsDevice = charger;
 
     this.fields = [
       chargerField(
@@ -578,6 +656,7 @@ pwmDefine("pwm-charger-card-editor", PwMChargerCardEditor);
 class PwMHubCard extends PwMngtBaseCard {
   setConfig(config) {
     this.cardTitle = (config && config.title) || "Power Management Configuration";
+    this.settingsDevice = "hub";
     this.fields = [
       { device: "hub", key: "charger1_type", label: "Charger1 type", icon: "mdi:ev-station", type: "select" },
       { device: "hub", key: "charger2_type", label: "Charger2 type", icon: "mdi:ev-station", type: "select" },
@@ -626,6 +705,7 @@ pwmDefine("pwm-hub-card", PwMHubCard);
 class PwMElectricityCard extends PwMngtBaseCard {
   setConfig(config) {
     this.cardTitle = (config && config.title) || "Electricity";
+    this.settingsDevice = "hub";
     this.fields = [
       {
         device: "hub", key: "billing_period",
@@ -666,6 +746,7 @@ pwmDefine("pwm-electricity-card", PwMElectricityCard);
 class PwMPvCard extends PwMngtBaseCard {
   setConfig(config) {
     this.cardTitle = (config && config.title) || "Solar PV Plant";
+    this.settingsDevice = "pv";
     this.fields = [
       {
         device: "pv", key: "battery_size",
