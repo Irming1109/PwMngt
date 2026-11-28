@@ -181,7 +181,7 @@ PwM_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
         name="Chargers max load (Combined)",
         icon="mdi:fuse",
         entity_category=EntityCategory.CONFIG,
-        options=["16", "20", "25", "30"],
+        options=["16", "20", "25", "30", "32"],
         default_option="16",
     ),
     # Old key="ladebokse_pv_styring"
