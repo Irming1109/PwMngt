@@ -233,6 +233,12 @@ def battery_sell_price_difference_entity_id(hass: HomeAssistant, entry: ConfigEn
     return _pv_entity_id(hass, entry, "select", "pv_battery_sell_price_difference")
 
 
+def battery_always_charge_price_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
+    """Entity id of select.<pv>_pv_battery_always_charge_price -- issue
+    #141's price for a full night charge (kr/kWh, 0 = off)."""
+    return _pv_entity_id(hass, entry, "select", "pv_battery_always_charge_price")
+
+
 def battery_min_soc_entity_id(hass: HomeAssistant, entry: ConfigEntry) -> str | None:
     """Entity id of select.<pv>_battery_min_soc (see PwM_PV_CONFIG_SELECTS
     in select.py)."""

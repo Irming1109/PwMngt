@@ -786,6 +786,12 @@ class PwMPvCard extends PwMngtBaseCard {
         type: "select",
       },
       {
+        device: "pv", key: "pv_battery_always_charge_price",
+        label: "Always charge battery below price",
+        icon: "mdi:battery-charging-100",
+        type: "select",
+      },
+      {
         device: "pv", key: "battery_max_charge_effect",
         label: "Battery max charge effect (W)",
         icon: "mdi:lightning-bolt",
@@ -916,6 +922,7 @@ const PWM_BATTERY_TEXTS = {
     editTonight: "Choose tonight's charge",
     // Tomorrow is a dark day: the automation charges up to 100 %.
     darkDay: "Very little sun tomorrow - so up to 100% instead of 95%",
+    fullCharge: (soc, price) => `The charge hours cost ${price} kr/kWh on average - so charged to ${soc}%, with room for tomorrow's sun up to 100%`,
     editorNone: "No grid charge",
     editorAuto: (label) => `Automatic: ${label}`,
     quickNone: "No charge",
@@ -1029,6 +1036,7 @@ const PWM_BATTERY_TEXTS = {
     editTonight: "Vælg nattens ladning",
     // I morgen er en mørk dag: automatikken lader op til 100 %.
     darkDay: "Meget lidt sol i morgen - derfor op til 100 % i stedet for 95 %",
+    fullCharge: (soc, price) => `Ladetimerne koster i snit ${price} kr/kWh - derfor ladet til ${soc} %, med plads til morgendagens sol op til 100 %`,
     editorNone: "Ingen netladning",
     editorAuto: (label) => `Automatik: ${label}`,
     quickNone: "Ingen ladning",
@@ -1582,8 +1590,12 @@ class PwMBatteryCard extends HTMLElement {
           if (editable && planned && index === 0) editAttached = this._attachEditChip(note);
           statusGroup.appendChild(note);
         });
-        // Claus 2026-11-20: before a dark day the plan may charge to 100 %.
-        if (planned && Number(status.attributes.charge_ceiling) === 100 && Number(status.attributes.charge_target) > 95) {
+        // Issue #141: charged full (room left for tomorrow's sun) -- cheap.
+        if (planned && status.attributes.full_charge) {
+          const price = Number(status.attributes.full_charge_price);
+          const soc = Math.round(Number(status.attributes.full_charge_soc));
+          statusGroup.appendChild(this._note(t.fullCharge(soc, price.toFixed(2).replace(".", t.decimal))));
+        } else if (planned && Number(status.attributes.charge_ceiling) === 100 && Number(status.attributes.charge_target) > 95) {
           statusGroup.appendChild(this._note(t.darkDay));
         }
       }

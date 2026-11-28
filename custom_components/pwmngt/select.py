@@ -359,6 +359,19 @@ PwM_PV_CONFIG_SELECTS: list[PwMngtSelectEntityDescription] = [
                  "2.00", "2.50", "3.00"],
         default_option="0.00",
     ),
+    # New (issue #141, Claus 2026-11-28) -- no Node-RED counterpart: the
+    # night charge goes to 100 % less the room tomorrow's expected PV
+    # surplus fills whenever its charge hours cost at most this on average (kr/kWh, the purchase price incl.
+    # everything), also when no hour tomorrow pays for it. "0.00" = off.
+    # See data/battery_charge_decision.py.
+    PwMngtSelectEntityDescription(
+        key="pv_battery_always_charge_price",
+        name="Always charge battery below price",
+        icon="mdi:battery-charging-100",
+        entity_category=EntityCategory.CONFIG,
+        options=[f"{tenths / 10:.2f}" for tenths in range(0, 26)],
+        default_option="0.00",
+    ),
     # New -- no "Old key"/"Old name", this field didn't exist before the
     # Options wizard's own "Inverter" page (config_flow.py's
     # async_step_pv_inverter). Same convenience-mirror pattern as

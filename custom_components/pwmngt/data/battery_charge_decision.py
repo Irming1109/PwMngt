@@ -203,6 +203,18 @@ Deliberate differences from Node-RED (each marked "DIFF" below):
 - DIFF (Claus 2026-11-26 -- no Node-RED counterpart): a planned target at
   most 2 points below the ceiling (_ROUND_UP_TO_CEILING_POINTS) is planned
   to the ceiling itself (99 -> 100, 93 -> 95). Not for a manual target.
+- NEW (issue #141, Claus 2026-11-28 -- no Node-RED counterpart): the
+  night charge goes to 100 % less the room tomorrow's expected PV surplus
+  (the cautious one, #43) fills -- full_charge_soc(), the same sum as
+  partial_charge_target() -- when that is above the planned charge target
+  and the cheapest charge hours for it cost at most
+  select.<pv>_pv_battery_always_charge_price on average (kr/kWh, the same
+  purchase price incl. everything as the rest of the plan; "0.00" = off)
+  -- also when no hour tomorrow pays for the charge (no "no_price"/
+  "no_surplus"/"no_charge_needed"). Nothing while the surplus is unknown.
+  The sale (#64) is planned as usual, within that target. A manual target
+  (#105) still wins. Attributes full_charge (bool), full_charge_soc and
+  full_charge_price (that average).
 Node-RED inputs not carried over because PwMngt doesn't have an
 abstracted equivalent yet, or because they're honestly unused:
 (none -- every input this function's result actually depends on now has
@@ -284,6 +296,13 @@ PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES: list[str] = [
     # DIFF (Claus 2026-11-20): the highest SoC (%) the automation plans
     # tonight's charge to -- 100 before a dark day, else 95.
     "charge_ceiling",
+    # Issue #141: tonight's charge goes to full_charge_soc (100 % less the
+    # room tomorrow's PV surplus fills) because the charge hours cost at
+    # most the user's price (their average,
+    # kr/kWh) -- see module docstring. Carried into "yes_today".
+    "full_charge",
+    "full_charge_soc",
+    "full_charge_price",
     # Issue #50: the price an evening hour must reach to be worth charging
     # for (kr/kWh), those hours 17-23 tomorrow, the hours the charge covers
     # (those plus always 17-21), and the energy (kWh) the battery is
@@ -410,6 +429,8 @@ _MANUAL_CHARGE_CEILING = 100
 # the ceiling is rounded up to it -- the last 1-2 % costs next to nothing,
 # and 99 % instead of 100 % only looks like a mistake.
 _ROUND_UP_TO_CEILING_POINTS = 2
+# Issue #141: the SoC (%) a full night charge fills up to, PV included.
+_FULL_CHARGE_TARGET = 100
 
 # Issue #64: the hours the battery may sell in (not 23, so a sale never
 # runs over midnight into the next day's books), the charge loss the sale
@@ -453,6 +474,9 @@ _CARRIED_TO_TODAY = frozenset(
         "charge_target",
         "expected_pv_surplus",
         "charge_ceiling",
+        "full_charge",
+        "full_charge_soc",
+        "full_charge_price",
         "break_even_price",
         "worth_hours",
         "covered_hours",
@@ -592,6 +616,9 @@ class BatteryChargeInputs:
     # Issue #129: kWh of SoC per kWh the house takes from the battery
     # (pv_properties.battery_factor(), was the fixed TARGET_MARGIN).
     battery_factor: float = DEFAULT_BATTERY_FACTOR
+    # Issue #141: the highest average charge price (kr/kWh, same price
+    # basis as prices_tomorrow) for a full charge before a dark day, 0 = off.
+    always_charge_price: float = 0.0
 
 
 def _average(values: list[float]) -> float:
@@ -867,6 +894,26 @@ def night_charge_ceiling(pv_forecast_8_16: float | None, day_consumption: float 
     return _DAY_CHARGE_CEILING
 
 
+def full_charge_price(always_charge_price: float, sorted_charge_prices: list[float], hours: int) -> float | None:
+    """Issue #141: the average price (kr/kWh) of the cheapest hours a
+    charge to _FULL_CHARGE_TARGET needs, when it is at most the user's
+    price (0 = off). Else None."""
+    if always_charge_price <= 0 or hours <= 0 or not sorted_charge_prices:
+        return None
+    average = round(_average(sorted_charge_prices[:hours]), 2)
+    return average if average <= always_charge_price else None
+
+
+def full_charge_soc(expected_surplus: float | None, battery_size: float, battery_min_soc: float) -> float | None:
+    """Issue #141: the SoC (%) a full night charge goes to -- room left for
+    tomorrow's expected PV surplus (kWh, the cautious one) below
+    _FULL_CHARGE_TARGET, counted as partial_charge_target() does. None
+    while the surplus is unknown, so the rule never charges on a guess."""
+    if expected_surplus is None or battery_size <= 0:
+        return None
+    return partial_charge_target(_FULL_CHARGE_TARGET, battery_size, expected_surplus, battery_min_soc)
+
+
 def effective_max_charge(battery_max_charge_raw: float | None) -> float:
     """The charge power (W) the hour count is based on -- the battery's
     max charge effect, only partly used (Node-RED's own factor)."""
@@ -984,6 +1031,19 @@ def calculate_battery_charge_decision(
     prices_sorted_day = sorted(price_tomorrow_day, key=lambda item: item[1])
     prices_sorted_evening = sorted(price_tomorrow_evening, key=lambda item: item[1], reverse=True)
 
+    # Issue #141: charge full -- with room for tomorrow's PV surplus -- when
+    # it is cheap enough; applied below when it is above the plan's target.
+    full_soc = full_charge_soc(expected_surplus, inputs.battery_size, inputs.battery_min_soc)
+    full_price = (
+        full_charge_price(
+            inputs.always_charge_price,
+            [price for _hour, price in prices_sorted_day],
+            hours_needed(full_soc),
+        )
+        if full_soc is not None and not manual and inputs.billing_method != _BILLING_METHOD_FIXED_PRICE
+        else None
+    )
+
     # The charge hours the full target would need (#43) -- their average is
     # the charge price issue #50's break-even is based on (see module
     # docstring).
@@ -992,7 +1052,9 @@ def calculate_battery_charge_decision(
     )
     full_hours = hours_needed(full_charge_target)
 
-    if full_hours <= 0 and not manual:
+    if full_hours <= 0 and not manual and not (
+        full_price is not None and full_soc is not None and full_soc > inputs.battery_min_soc
+    ):
         attributes: dict[str, Any] = {
             key: None for key in PwM_BATTERY_CHARGE_DECISION_ATTRIBUTES
             if not key.startswith("hour_")
@@ -1124,6 +1186,13 @@ def calculate_battery_charge_decision(
     if ceiling - _ROUND_UP_TO_CEILING_POINTS <= charge_target < ceiling:
         charge_target = ceiling
 
+    # Issue #141: cheap enough, and the room for tomorrow's PV surplus is
+    # above the planned target -- charge to it, on top of whatever the plan
+    # above wanted (the sale stays within it).
+    full_charge = full_price is not None and full_soc is not None and full_soc > charge_target
+    if full_charge:
+        charge_target = float(full_soc)
+
     # Issue #105: the user's own target for this night -- and no sale, which
     # would sell what the user chose to keep (see the module docstring).
     if manual:
@@ -1152,6 +1221,9 @@ def calculate_battery_charge_decision(
         "price_difference": price_difference,
         "charge_target": charge_target,
         "charge_ceiling": ceiling,
+        "full_charge": full_charge,
+        "full_charge_soc": full_soc if full_charge else None,
+        "full_charge_price": full_price if full_charge else None,
         "expected_pv_surplus": None if expected_surplus is None else round(expected_surplus, 2),
         "break_even_price": break_even,
         "worth_hours": worth_hours,
@@ -1180,6 +1252,9 @@ def calculate_battery_charge_decision(
         status = "no_price"
     elif inputs.previous_status == _STATUS_DEFERRED:
         status = _STATUS_DEFERRED
+    elif full_charge:
+        # Issue #141: the user's price wins over "not worth it".
+        status = "yes_tomorrow"
     elif not worth_hours and not day_hours and not sale_hours:
         # Issue #50: no evening hour pays for the charge -- issue #59: and
         # no daytime hour either -- issue #64: and no sale.
@@ -1456,12 +1531,13 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
 
         # Price-difference threshold change (Node-RED: ha-select "PV batteri
         # ladning pris difference", gated 18:00-23:30). Issue #64: the sale
-        # threshold too. DIFF (issue #93): not only 18:00-23:30 -- see
+        # threshold too, issue #141: the full-charge price too. DIFF (issue #93): not only 18:00-23:30 -- see
         # _handle_price_difference_change().
         unconditional_watched = []
         for entity_id in (
             pv_properties.battery_price_difference_entity_id(self.hass, self._entry),
             pv_properties.battery_sell_price_difference_entity_id(self.hass, self._entry),
+            pv_properties.battery_always_charge_price_entity_id(self.hass, self._entry),
         ):
             if entity_id:
                 unconditional_watched.append(entity_id)
@@ -2012,6 +2088,9 @@ class PwMngtBatteryChargeDecisionSensor(restore_state.RestoreEntity, SensorEntit
             sale_prices_tomorrow=self._read_sale_prices_tomorrow(),
             sale_price_difference=self._read_float_pv(
                 pv_properties.battery_sell_price_difference_entity_id, 0.0
+            ) or 0.0,
+            always_charge_price=self._read_float_pv(
+                pv_properties.battery_always_charge_price_entity_id, 0.0
             ) or 0.0,
             prices_today_remaining=self._read_prices_today_remaining(),
             today=dt_util.now().strftime("%Y-%m-%d"),
