@@ -704,6 +704,18 @@ class PwMPvCard extends PwMngtBaseCard {
         icon: "mdi:cash-plus",
         type: "select",
       },
+      {
+        device: "pv", key: "battery_max_charge_effect",
+        label: "Battery max charge effect (W)",
+        icon: "mdi:lightning-bolt",
+        type: "select",
+      },
+      {
+        device: "pv", key: "battery_target_end_time",
+        label: "Battery target end time",
+        icon: "mdi:battery-clock",
+        type: "select",
+      },
     ];
     super.setConfig(config || {});
   }
